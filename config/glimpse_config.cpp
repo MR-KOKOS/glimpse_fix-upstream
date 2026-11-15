@@ -138,6 +138,7 @@ static bool LoadIni()
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
     fclose(f);
+    if (all.compare(0, 3, "\xEF\xBB\xBF") == 0) all.erase(0, 3);  // UTF-8 byte order mark
     s_crlf = all.find("\r\n") != std::string::npos || all.find('\n') == std::string::npos;
     size_t start = 0;
     while (start <= all.size()) {
@@ -209,7 +210,10 @@ static int FindKey(const char* section, const char* key, int* sectionEnd)
 static std::string ValueAt(int line)
 {
     const std::string& l = s_lines[line];
-    return Trim(l.substr(l.find('=') + 1));
+    std::string v = Trim(l.substr(l.find('=') + 1));
+    // surrounding quotes are dropped, as GetPrivateProfileString does
+    if (v.size() >= 2 && (v[0] == '"' || v[0] == '\'') && v.back() == v[0]) v = v.substr(1, v.size() - 2);
+    return v;
 }
 
 // as the DLL reads it: the key's own section first, then where older INIs kept it
@@ -217,7 +221,10 @@ static std::string GetValue(const Option& o)
 {
     int i = FindKey(o.section, o.key, NULL);
     if (i < 0) i = FindKey(!strcmp(o.section, "Debug") ? "Controller" : "Game", o.key, NULL);
-    return i < 0 ? o.def : ValueAt(i);
+    if (i < 0) return o.def;
+    std::string v = ValueAt(i);
+    // an empty number means the default to the DLL as well
+    return v.empty() && o.kind == RANGE ? o.def : v;
 }
 
 static void SetValue(const Option& o, const std::string& v)
@@ -258,6 +265,7 @@ static bool s_loading;
 static bool s_toggle[64];  // BOOL_OPT state by option index
 static int s_choice[64];   // CHOICE: selected item by option index, -1 = a value set by hand
 static std::string s_custom[64];  // that value
+static bool s_dim[64];  // the option is greyed out (its label and value are drawn in kOff)
 static const char kSliderClass[] = "glimpse_slider";  // the own slider control, see SliderProc
 
 static int S(int px) { return MulDiv(px, s_dpi, 96); }
@@ -302,7 +310,24 @@ static int WindowDpi(HWND wnd)
 }
 
 // layout, in 96 dpi pixels
-static const int kWidth = 880, kHeight = 700, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100;
+static const int kWidth = 880, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100;
+
+// the client height: the longest page above the help area, and the sidebar's pages and presets
+static int kHeight = 700;
+static void FitHeight()
+{
+    int rows[kPageCount] = {}, most = 0;
+    for (const Option& o : kOptions) {
+        int page = 0;
+        while (strcmp(kPages[page], PageOf(o))) page++;
+        if (++rows[page] > most) most = rows[page];
+    }
+    int content = kRowTop + most * kRowH + 8 + 130;  // the rows, a gap, help text and buttons
+    int side = 448 + 3 * 40 + 24;                     // the presets end there
+    kHeight = 700;
+    if (content > kHeight) kHeight = content;
+    if (side > kHeight) kHeight = side;
+}
 
 // the outer window size for the client area at the current DPI
 static SIZE WindowSize(DWORD style)
@@ -427,15 +452,24 @@ static void UpdateEnables()
     };
     for (auto& r : rules) {
         Option* o = Find(r.key);
+        // only the control is disabled: Windows draws disabled static text embossed and ignores the
+        // text colour, which looks smeared on the dark background; labels and values are dimmed instead
         EnableWindow(o->ctrl, r.on);
-        EnableWindow(o->label, r.on);
-        if (o->value) EnableWindow(o->value, r.on);
+        s_dim[IndexOf(*o)] = !r.on;
         InvalidateRect(o->label, NULL, TRUE);
         if (o->value) InvalidateRect(o->value, NULL, TRUE);
     }
 }
 
 static void Status(const char* text) { SetWindowTextA(s_status, text); }
+
+// both strings are whole numbers (not just a leading part of them, as atof reads "0B0041BB") and equal
+static bool SameNumber(const std::string& a, const std::string& b)
+{
+    char *ea, *eb;
+    double x = strtod(a.c_str(), &ea), y = strtod(b.c_str(), &eb);
+    return ea != a.c_str() && eb != b.c_str() && !*ea && !*eb && fabs(x - y) < 1e-6;
+}
 
 static void LoadControls()
 {
@@ -448,20 +482,18 @@ static void LoadControls()
         } else if (o.kind == CHOICE) {
             auto items = Choices(o);
             int sel = -1;
-            for (int i = 0; i < (int)items.size(); i++)
-                if (!_stricmp(items[i].first.c_str(), v.c_str()) ||
-                    (isdigit((unsigned char)v[0]) && atof(v.c_str()) == atof(items[i].first.c_str())))
-                    sel = i;
+            for (int i = 0; i < (int)items.size() && sel < 0; i++)
+                if (!_stricmp(items[i].first.c_str(), v.c_str()) || SameNumber(v, items[i].first)) sel = i;
             s_choice[IndexOf(o)] = sel;
             s_custom[IndexOf(o)] = v + " (custom)";
             InvalidateRect(o.ctrl, NULL, TRUE);
         } else {
-            double d = atof(v.c_str());
+            double real = atof(v.c_str()), d = real;
             if (d < o.lo) d = o.lo;
             if (d > o.hi) d = o.hi;
             SendMessageA(o.ctrl, TBM_SETPOS, TRUE, (LPARAM)(int)((d - o.lo) / o.step + 0.5));
             InvalidateRect(o.ctrl, NULL, TRUE);
-            ShowValue(o, d);
+            ShowValue(o, real);  // a value set by hand beyond the slider's range shows as it is
         }
     }
     s_loading = false;
@@ -524,12 +556,13 @@ static void ShowPage(int page)
 
 struct Preset {
     const char* name;
+    const char* help;    // shown while the preset button is pointed at or has the focus
     const char* values;  // "Key=value;..."
 };
 static const Preset kPresets[] = {
-    { "Recommended", "" },  // every option at its default
-    { "Original game", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;StreamPoolMB=0;LodDistanceScale=1.0;PopInFix=0;SeparateTriggers=0;UltrawideFix=0" },
-    { "Chaos", "UnlockAll=1;Boost=1;PowerBarFill=1;AIBoost=1;AIBoostChaos=1" },
+    { "Recommended", "Every option at its default: 60 fps and the fixes on, the extras off.", "" },
+    { "Original game", "The game as it was: 30 fps, linear filtering, the stock streaming pool, draw distances and pop-in, all effects on, the stock icon size, shared triggers and no ultrawide fix. The controller support stays.", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;StreamPoolMB=0;LodDistanceScale=1.0;PopInFix=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Chaos", "Recommended plus everything unlocked, the boost, the power bar fill and the AI boost in chaos mode.", "UnlockAll=1;Boost=1;PowerBarFill=1;AIBoost=1;AIBoostChaos=1" },
 };
 
 // the value a preset gives an option: its own, else the option's default
@@ -592,7 +625,7 @@ static void CreateControls()
                          S(40), ID_NAV0 + i, R_NAV, s_font);
     Child("STATIC", "PRESETS", WS_VISIBLE | SS_LEFT, S(22), S(424), S(160), S(18), 0, R_SIDEDIM, s_fontSmall);
     for (int i = 0; i < 3; i++)
-        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(18), S(448) + i * S(40),
+        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(448) + i * S(40),
                             S(174), S(32), ID_PRESET0 + i, R_PRESET, s_font);
 
     s_title = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(26), S(600), S(36), 0, R_TITLE, s_fontTitle);
@@ -611,9 +644,9 @@ static void CreateControls()
         o.label = Child("STATIC", text, SS_LEFT | SS_CENTERIMAGE | SS_NOTIFY, S(kContentX) + indent, y, S(kLabelW) - indent,
                         S(26), 0, R_LABEL, s_font);
         if (o.kind == BOOL_OPT) {
-            o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW, S(ctrlX), y + S(2), S(46), S(22), id, R_TOGGLE, s_font);
+            o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y + S(2), S(46), S(22), id, R_TOGGLE, s_font);
         } else if (o.kind == CHOICE) {
-            o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW, S(ctrlX), y, S(250), S(28), id, R_SELECT, s_font);
+            o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y, S(250), S(28), id, R_SELECT, s_font);
         } else {
             o.ctrl = Child(kSliderClass, "", WS_TABSTOP, S(ctrlX) - S(6), y, S(200), S(26), id, R_NONE, s_font);
             SendMessageA(o.ctrl, TBM_SETRANGE, TRUE, MAKELPARAM(0, RangeSteps(o)));
@@ -684,12 +717,24 @@ static void RestoreBackup(HWND wnd)
 
 // ---------------------------------------------------------------- drawing
 
+// the keyboard focus: an outline around the control
+static void FocusOutline(HDC dc, RECT r, int radius)
+{
+    HPEN p = CreatePen(PS_SOLID, 1, kText);
+    HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_BRUSH)), op = SelectObject(dc, p);
+    ::RoundRect(dc, r.left, r.top, r.right, r.bottom, radius, radius);
+    SelectObject(dc, ob);
+    SelectObject(dc, op);
+    DeleteObject(p);
+}
+
 static void DrawButton(const DRAWITEMSTRUCT* di)
 {
     HDC dc = di->hDC;
     RECT r = di->rcItem;
     Role role = (Role)GetWindowLongPtrA(di->hwndItem, GWLP_USERDATA);
     bool pressed = (di->itemState & ODS_SELECTED) != 0, disabled = (di->itemState & ODS_DISABLED) != 0;
+    bool focus = (di->itemState & ODS_FOCUS) && !(di->itemState & ODS_NOFOCUSRECT);
     char text[64];
     GetWindowTextA(di->hwndItem, text, sizeof(text));
     SetBkMode(dc, TRANSPARENT);
@@ -706,6 +751,7 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
         RECT knob = { x, track.top + S(3), x + d, track.top + S(3) + d };
         COLORREF k = disabled ? kOff : (on ? RGB(255, 255, 255) : kDim);
         RoundRect(dc, knob, d, k, k);
+        if (focus) FocusOutline(dc, r, S(22));
         return;
     }
     if (role == R_NAV) {
@@ -725,6 +771,10 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
         RECT t = r;
         t.left += S(24);
         DrawTextA(dc, text, -1, &t, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+        if (focus) {
+            RECT f = { r.left + S(8), r.top + S(4), r.right - S(8), r.bottom - S(4) };
+            FocusOutline(dc, f, S(8));
+        }
         return;
     }
     if (role == R_SELECT) {  // a list: the current item and a chevron
@@ -749,6 +799,7 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
         LineTo(dc, cx + S(5), cy - S(2));
         SelectObject(dc, op);
         DeleteObject(pen);
+        if (focus) FocusOutline(dc, r, S(8));
         return;
     }
     // presets and actions: outlined pills, filled while pressed
@@ -761,6 +812,10 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
     SelectObject(dc, s_font);
     SetTextColor(dc, kText);
     DrawTextA(dc, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    if (focus) {
+        RECT f = { r.left + S(3), r.top + S(3), r.right - S(3), r.bottom - S(3) };
+        FocusOutline(dc, f, S(8));
+    }
 }
 
 // The slider: an own control instead of the common trackbar, which only repaints the area of its own
@@ -857,7 +912,10 @@ static LRESULT CALLBACK SliderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (GetCapture() == h) SliderFromMouse(h, (short)LOWORD(lp));
         return 0;
     case WM_LBUTTONUP:
-        if (GetCapture() == h) ReleaseCapture();
+        if (GetCapture() == h) ReleaseCapture();  // ends the drag through WM_CAPTURECHANGED
+        return 0;
+    case WM_CAPTURECHANGED:  // the drag ended, also when the capture was taken away
+        SendMessageA(GetParent(h), WM_HSCROLL, MAKEWPARAM(TB_ENDTRACK, SliderPos(h)), (LPARAM)h);
         return 0;
     case WM_KEYDOWN: {
         int pos = SliderPos(h), max = SliderMax(h), page = max / 10 > 1 ? max / 10 : 1;
@@ -870,7 +928,9 @@ static LRESULT CALLBACK SliderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case VK_END: pos = max; break;
         default: return DefWindowProcA(h, msg, wp, lp);
         }
+        int was = SliderPos(h);
         SliderSet(h, pos, true);
+        if (SliderPos(h) != was) SendMessageA(GetParent(h), WM_HSCROLL, MAKEWPARAM(TB_ENDTRACK, SliderPos(h)), (LPARAM)h);
         return 0;
     }
     case WM_GETDLGCODE:
@@ -900,6 +960,13 @@ static void ShowHelpFor(HWND hwnd)
     static HWND last;
     if (hwnd == last) return;
     last = hwnd;
+    for (int i = 0; i < 3; i++)
+        if (hwnd == s_preset[i]) {
+            s_infoWarn = false;
+            SetWindowTextA(s_info, kPresets[i].help);
+            InvalidateRect(s_info, NULL, TRUE);
+            return;
+        }
     for (Option& o : kOptions)
         if (hwnd == o.ctrl || hwnd == o.label || hwnd == o.value) {
             // a help text starting with '!' is a warning, shown in red
@@ -959,9 +1026,11 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                 }
             }
             if (code == BN_SETFOCUS) ShowHelpFor(o.ctrl);
+        } else if (id >= ID_PRESET0 && id < ID_PRESET0 + 3 && code == BN_SETFOCUS) {
+            ShowHelpFor(s_preset[id - ID_PRESET0]);
         } else if (id >= ID_NAV0 && id < ID_NAV0 + kPageCount) {
             ShowPage(id - ID_NAV0);
-        } else if (id >= ID_PRESET0 && id < ID_PRESET0 + 3) {
+        } else if (id >= ID_PRESET0 && id < ID_PRESET0 + 3 && code == BN_CLICKED) {
             char q[200];
             sprintf(q, "Set every option to \"%s\"?", kPresets[id - ID_PRESET0].name);
             if (MessageBoxA(wnd, q, "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) ApplyPreset(kPresets[id - ID_PRESET0]);
@@ -975,9 +1044,11 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_HSCROLL:
+        // while dragging only the value shown follows; the INI is written once the drag ends
         for (Option& o : kOptions)
             if (o.ctrl == (HWND)lp) {
-                Changed(o);
+                if (LOWORD(wp) == TB_ENDTRACK) Changed(o);
+                else ShowValue(o, o.lo + SendMessageA(o.ctrl, TBM_GETPOS, 0, 0) * o.step);
                 ShowHelpFor(o.ctrl);
             }
         return 0;
@@ -991,8 +1062,12 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         if (role == R_BRAND) col = kAccent;
         else if (c == s_info && s_infoWarn) col = kWarn;
         else if (role == R_DIM || role == R_SIDEDIM) col = kDim;
-        else if (role == R_VALUE) col = IsWindowEnabled(c) ? kAccent : kOff;
-        else if (role == R_LABEL) col = IsWindowEnabled(c) ? kText : kOff;
+        else if (role == R_VALUE || role == R_LABEL) {
+            bool dim = false;
+            for (int i = 0; i < kOptionCount; i++)
+                if (kOptions[i].label == c || kOptions[i].value == c) dim = s_dim[i];
+            col = dim ? kOff : role == R_VALUE ? kAccent : kText;
+        }
         SetTextColor(dc, col);
         return (LRESULT)(side ? s_sideBrush : s_backBrush);
     }
@@ -1051,6 +1126,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show)
     wc.lpszClassName = "glimpse_config";
     RegisterClassExA(&wc);
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    FitHeight();
     SIZE size = WindowSize(style);
     s_wnd = CreateWindowExA(0, wc.lpszClassName, "glimpse_fix settings", style, CW_USEDEFAULT, CW_USEDEFAULT, size.cx,
                             size.cy, NULL, NULL, inst, NULL);
