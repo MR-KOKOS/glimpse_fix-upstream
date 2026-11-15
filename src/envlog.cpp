@@ -115,11 +115,26 @@ static void LogExe()
     GetModuleFileNameA(NULL, path, MAX_PATH);
     DWORD size;
     DWORD crc = FileCrc(path, &size);
-    BYTE* base = (BYTE*)GetModuleHandleA(NULL);
-    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    // The header is read from the file: in memory SecuROM's loader shows it without the LAA flag even
+    // when the file has it.
+    IMAGE_FILE_HEADER fh = {};
+    int laa = -1;
+    HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        BYTE head[0x1000];
+        DWORD got = 0;
+        if (ReadFile(h, head, sizeof(head), &got, NULL) && got >= sizeof(IMAGE_DOS_HEADER)) {
+            LONG pe = ((IMAGE_DOS_HEADER*)head)->e_lfanew;
+            if (pe > 0 && (DWORD)pe + 4 + sizeof(fh) <= got && *(DWORD*)(head + pe) == IMAGE_NT_SIGNATURE) {
+                memcpy(&fh, head + pe + 4, sizeof(fh));
+                laa = (fh.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) != 0;
+            }
+        }
+        CloseHandle(h);
+    }
     const char* file = strrchr(path, '\\');
     Log("exe: %s, %lu bytes, CRC32 %08lX, built %08lX, large address aware %d", file ? file + 1 : path, size, crc,
-        nt->FileHeader.TimeDateStamp, (nt->FileHeader.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) != 0);
+        fh.TimeDateStamp, laa);
     Log("exe: %s", path);
 }
 
