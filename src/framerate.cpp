@@ -17,24 +17,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int* const kMaxTicks = (int*)0x00D199D8;       // tweakable, read once per loop pass
-static float* const kAccumulator = (float*)0x00D747F4;
-static int* const kTickCounter = (int*)0x00D747F0;
+static int* const kMaxTicks = (int*)G(0x00D199D8);       // tweakable, read once per loop pass
+static float* const kAccumulator = (float*)G(0x00D747F4);
+static int* const kTickCounter = (int*)G(0x00D747F0);
 static const float kGamePeriod = 1.0f / 30;          // [0xBA0C14], left as it is
-static void** const kAiUpdateSlot = (void**)0x00BC0BC0;
-static BYTE* const kAiUpdate = (BYTE*)0x0051A8B0;
+static void** const kAiUpdateSlot = (void**)G(0x00BC0BC0);
+static BYTE* const kAiUpdate = (BYTE*)G(0x0051A8B0);
 
 static bool s_active;
 
-static bool Matches(DWORD at, const char* hex)
-{
-    const BYTE* p = (const BYTE*)at;
-    for (; hex[0] && hex[1]; hex += 2, p++) {
-        char b[3] = { hex[0], hex[1], 0 };
-        if (*p != (BYTE)strtoul(b, NULL, 16)) return false;
-    }
-    return true;
-}
+static bool Matches(DWORD at, const char* hex) { return BytesMatch((const void*)at, hex); }
 
 // waits until the performance counter reaches 'until': high resolution waitable timer, then a short spin
 static void WaitUntil(LONGLONG until, LONGLONG freq)
@@ -109,7 +101,7 @@ static bool TrackSectionMissing(void* ai)
 static void MaxSkill(void* ai)
 {
     *(float*)((BYTE*)ai + 0x24) = 1.0f;
-    float* limits = (float*)0x00D17044;  // initial min, -, initial max, -, final min, -, final max (8 bytes apart)
+    float* limits = (float*)G(0x00D17044);  // initial min, -, initial max, -, final min, -, final max (8 bytes apart)
     limits[0] = 0.0f;
     limits[2] = 1.0f;
     limits[4] = 0.0f;
@@ -165,8 +157,8 @@ void PatchFrameRate()
         Log("chaos mode: AI at the highest skill");
     if (g_cfg.frameRate != 60) return;
     // the loop must be the one described above
-    if (!Matches(0x005588A9, "8B2DD899D100") || !Matches(0x005588B4, "F30F10052023D700F30F5805F447D700") ||
-        !Matches(0x005588E1, "A1F047D70083C602") || !Matches(0x00558969, "83F8057C04")) {
+    if (!Matches(G(0x005588A9), "8B2DD899D100") || !Matches(G(0x005588B4), "F30F10052023D700F30F5805F447D700") ||
+        !Matches(G(0x005588E1), "A1F047D70083C602") || !Matches(G(0x00558969), "83F8057C04")) {
         Log("main loop not recognised, frame rate left at 30");
         return;
     }

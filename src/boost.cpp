@@ -15,7 +15,7 @@
 #include <math.h>
 #include <string.h>
 
-static void* const* const kInGameResources = (void* const*)0x00D66B28;
+static void* const* const kInGameResources = (void* const*)G(0x00D66B28);
 
 static bool IsA(void* p, DWORD vtable)
 {
@@ -33,33 +33,33 @@ static BYTE* GameLogic()
     BYTE* res = (BYTE*)*kInGameResources;
     if (!res || IsBadReadPtr(res, 0x100)) return NULL;
     BYTE* logic = Field(res, 0xE4);
-    return IsA(logic, 0x00BA9A74) && *(int*)(logic + 0x18) >= 1 && *(int*)(logic + 0x18) <= 16 ? logic : NULL;
+    return IsA(logic, G(0x00BA9A74)) && *(int*)(logic + 0x18) >= 1 && *(int*)(logic + 0x18) <= 16 ? logic : NULL;
 }
 
 static BYTE* Player(BYTE* logic, int i)
 {
     BYTE* players = Field(logic, 0x1C);
     BYTE* p = players && !IsBadReadPtr(players, (i + 1) * 4) ? Field(players, i * 4) : NULL;
-    return IsA(p, 0x00BA63D4) ? p : NULL;
+    return IsA(p, G(0x00BA63D4)) ? p : NULL;
 }
 
 static float* PowerValue(BYTE* player)
 {
     BYTE* bar = Field(player, 0xE8);
-    if (!IsA(bar, 0x00BA8644)) return NULL;
+    if (!IsA(bar, G(0x00BA8644))) return NULL;
     BYTE* out = Field(bar, 0x2C);
-    return IsA(out, 0x00BA8680) ? (float*)(out + 8) : NULL;
+    return IsA(out, G(0x00BA8680)) ? (float*)(out + 8) : NULL;
 }
 
 // chassis of car i (the vehicle list holds the cars in player order)
 static BYTE* Chassis(BYTE* player, int i)
 {
     BYTE* state = Field(player, 0xAC);
-    if (!IsA(state, 0x00BA7378)) return NULL;
+    if (!IsA(state, G(0x00BA7378))) return NULL;
     BYTE* vehicles = Field(state, 0x40);
     BYTE* vehicle = vehicles ? Field(vehicles, 4 + i * 4) : NULL;
     BYTE* body = vehicle && !IsBadReadPtr(vehicle, 0x600) ? Field(vehicle, 0x584) : NULL;
-    return IsA(body, 0x00BE9C90) && !IsBadWritePtr(body + 0x1A0, 0x20) ? body : NULL;
+    return IsA(body, G(0x00BE9C90)) && !IsBadWritePtr(body + 0x1A0, 0x20) ? body : NULL;
 }
 
 static float Dot(const float* a, const float* b)
@@ -145,7 +145,7 @@ static unsigned Random()
 
 // Chaos mode also gives the AI an endless power bar: the game's own cheat switch
 // "SSAI/Debug Cheats/AI Full Power Bar" (0xD72534), read by every AI player update (0x51AC16).
-static BYTE* const kAiFullPowerBar = (BYTE*)0x00D72534;
+static BYTE* const kAiFullPowerBar = (BYTE*)G(0x00D72534);
 
 static void AiBoost(BYTE* logic, BYTE* player0, BYTE* body0, float dt)
 {

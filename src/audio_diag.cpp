@@ -9,7 +9,7 @@
 typedef int(__stdcall* EventStart_t)(void* evt);
 typedef int(__stdcall* EventGetInfo_t)(void* evt, int* index, char** name, void* info);
 
-static void** const kIatEventStart = (void**)0x00B9B43C;    // ?start@Event@FMOD@@QAG?AW4FMOD_RESULT@@XZ
+static void** const kIatEventStart = (void**)G(0x00B9B43C);    // ?start@Event@FMOD@@QAG?AW4FMOD_RESULT@@XZ
 
 typedef int(__stdcall* GetU32_t)(void* obj, unsigned* out);
 typedef int(__stdcall* GetFloat_t)(void* obj, float* out);

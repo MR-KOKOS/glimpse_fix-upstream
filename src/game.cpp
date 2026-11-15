@@ -6,9 +6,9 @@
 #include <string.h>
 
 // Addresses in the decrypted image. Each one is checked against the expected bytes first.
-static BYTE* const kPadPresets = (BYTE*)0x00CFABF8;          // per-device binding presets, preset 0 = Xbox 360 pad
-static BYTE* const kPromptBarSetButtons = (BYTE*)0x004DADE0;  // cLayer_PromptBar: sets PC key icons + key names
-static void** const kIatXInputSetState = (void**)0x00B9B370;
+static BYTE* const kPadPresets = (BYTE*)G(0x00CFABF8);          // per-device binding presets, preset 0 = Xbox 360 pad
+static BYTE* const kPromptBarSetButtons = (BYTE*)G(0x004DADE0);  // cLayer_PromptBar: sets PC key icons + key names
+static void** const kIatXInputSetState = (void**)G(0x00B9B370);
 
 static const int kPresetEntries = 57;  // 5 dwords each: action, key, source index, source type, pov angle
 enum { SRC_BUTTON = 0, SRC_AXIS = 1, SRC_POV = 2 };
@@ -17,12 +17,33 @@ enum { ACTION_THROTTLE = 0x29, ACTION_BRAKE = 0x2A };
 
 bool BytesMatch(const void* at, const char* hex)
 {
+    BYTE want[64];
+    size_t n = 0;
+    for (; hex[0] && hex[1] && n < sizeof(want); hex += 2) {
+        char b[3] = { hex[0], hex[1], 0 };
+        want[n++] = (BYTE)strtoul(b, NULL, 16);
+    }
+    return CodeMatches(at, want, n);
+}
+
+bool CodeMatches(const void* at, const void* expected, size_t n)
+{
+    BYTE want[64];
+    if (n > sizeof(want)) return false;
+    memcpy(want, expected, n);
+    // addresses inside the expected bytes (operands) are where this build has them
+    for (size_t i = 0; i + 4 <= n; i++) {
+        DWORD v = *(DWORD*)(want + i), mapped;
+        if (v >= 0x00401000 && MapEmbedded(v, &mapped)) {
+            *(DWORD*)(want + i) = mapped;
+            i += 3;
+        }
+    }
+    if (!at) return false;
     const BYTE* p = (const BYTE*)at;
     __try {
-        for (; hex[0] && hex[1]; hex += 2, p++) {
-            char b[3] = { hex[0], hex[1], 0 };
-            if (*p != (BYTE)strtoul(b, NULL, 16)) return false;
-        }
+        for (size_t i = 0; i < n; i++)
+            if (p[i] != want[i]) return false;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -66,8 +87,8 @@ struct InputName {
     DWORD code;
     const char* name;
 };
-static InputName* const kJoyAxisNames = (InputName*)0x00CFA5E0;    // JOY_AXIS_XPOS .. JOY_AXIS_SLIDER1NEG
-static InputName* const kJoyButtonNames = (InputName*)0x00CFA6E0;  // JOY_BUTTON_1 .. JOY_BUTTON_16
+static InputName* const kJoyAxisNames = (InputName*)G(0x00CFA5E0);    // JOY_AXIS_XPOS .. JOY_AXIS_SLIDER1NEG
+static InputName* const kJoyButtonNames = (InputName*)G(0x00CFA6E0);  // JOY_BUTTON_1 .. JOY_BUTTON_16
 
 static bool s_knownBuild;
 
@@ -108,8 +129,8 @@ void PatchPadNames()
 // tweakable's record ([0xD389E4]: vtable 0xBB2498, +4 variable, +8/+0xC range) is pointed at a
 // variable of ours: the level's value lands there, the real one keeps the configured size.
 // More pool needs the 4 GB address space (LAA).
-static int* const kStreamPoolMB = (int*)0x00D389E0;
-static void* const* const kStreamPoolRecord = (void* const*)0x00D389E4;
+static int* const kStreamPoolMB = (int*)G(0x00D389E0);
+static void* const* const kStreamPoolRecord = (void* const*)G(0x00D389E4);
 static int s_streamPoolMB;       // configured size
 static int s_levelStreamPoolMB;  // what the level asked for, for the log
 
@@ -123,7 +144,7 @@ static void RaiseStreamPool()
         return;
     }
     DWORD* record = (DWORD*)*kStreamPoolRecord;
-    if (!record || IsBadWritePtr(record, 16) || record[0] != 0x00BB2498 || record[1] != (DWORD)kStreamPoolMB) {
+    if (!record || IsBadWritePtr(record, 16) || record[0] != G(0x00BB2498) || record[1] != (DWORD)kStreamPoolMB) {
         Log("stream pool tweakable not recognised, left alone");
         return;
     }
@@ -141,12 +162,12 @@ static void RaiseStreamPool()
 // Above 1280 pixels the icons grow twice: 1.5x at 1080p, 3x at 4K. The scales are divided back
 // in the loaded data, once per load. Patching the multiplication in the code instead set off
 // SecuROM's integrity checks (they stop freeing their VM contexts and the game hangs minutes later).
-static void* const* const kHud = (void* const*)0x00D66B24;  // HUD, its parameter block at +0x20
+static void* const* const kHud = (void* const*)G(0x00D66B24);  // HUD, its parameter block at +0x20
 
 // The route change markers (red and blue arrows, two slots drawn by 0x4C7910) pass width * 2.25/1280
 // as their size to the same renderer, so they grow with the width squared. The factor is a constant
 // only this code reads (0xBB8494); it is set to 2.25 / width, which gives the console's 2.25.
-static float* const kRouteMarkerScale = (float*)0x00BB8494;
+static float* const kRouteMarkerScale = (float*)G(0x00BB8494);
 
 static void FixRouteMarkerSize(int width)
 {
@@ -188,21 +209,21 @@ static void FixPowerplayIconSize()
 // once (far buildings flicker). The game streams the more detailed sectors further out, which the
 // bigger streaming pool absorbs.
 static const struct { float* var; float stock; } kLodDistances[] = {
-    { (float*)0x00D38A90, 150.0f },  // EnvironmentSS/LODs/a; High LOD Draw Dist
-    { (float*)0x00D38A98, 300.0f },  // b; Mid LOD Draw Dist
-    { (float*)0x00D38AA8, 30.0f },   // e; High LOD Fade Range
-    { (float*)0x00D38AB8, 60.0f },   // Split Screen High LOD Draw Dist
-    { (float*)0x00D38AC0, 120.0f },  // Split Screen Mid LOD Draw Dist
-    { (float*)0x00D38AD0, 20.0f },   // Split Screen High LOD Fade Range
-    { (float*)0x00D373DC, 150.0f },  // Particles/Min LOD Distance
-    { (float*)0x00D373FC, 200.0f },  // Particles/Further LOD Distance
-    { (float*)0x00D3742C, 100.0f },  // Particles/Split Screen/f; Min LOD Distance
-    { (float*)0x00D193F0, 500.0f },  // Debris/FadeInDist
-    { (float*)0x00D389F0, 400.0f },  // Sectors/Streaming/e; Max Sector Stream Dist
-    { (float*)0x00D9AFD4, 0.0f },    // Sectors/Entities/a; Default Entity Stream Dist (set at run time)
-    { (float*)0x00D5FDDC, 400.0f },  // Sectors/Entities/b; Max Entity Stream Dist
-    { (float*)0x00D40A84, 5.0f },    // powerplays/DrawDists/Auto Size Scale (assets without a set distance:
-    { (float*)0x00D40A8C, 200.0f },  // powerplays/DrawDists/Auto Offset      size * scale + offset, 0x813797)
+    { (float*)G(0x00D38A90), 150.0f },  // EnvironmentSS/LODs/a; High LOD Draw Dist
+    { (float*)G(0x00D38A98), 300.0f },  // b; Mid LOD Draw Dist
+    { (float*)G(0x00D38AA8), 30.0f },   // e; High LOD Fade Range
+    { (float*)G(0x00D38AB8), 60.0f },   // Split Screen High LOD Draw Dist
+    { (float*)G(0x00D38AC0), 120.0f },  // Split Screen Mid LOD Draw Dist
+    { (float*)G(0x00D38AD0), 20.0f },   // Split Screen High LOD Fade Range
+    { (float*)G(0x00D373DC), 150.0f },  // Particles/Min LOD Distance
+    { (float*)G(0x00D373FC), 200.0f },  // Particles/Further LOD Distance
+    { (float*)G(0x00D3742C), 100.0f },  // Particles/Split Screen/f; Min LOD Distance
+    { (float*)G(0x00D193F0), 500.0f },  // Debris/FadeInDist
+    { (float*)G(0x00D389F0), 400.0f },  // Sectors/Streaming/e; Max Sector Stream Dist
+    { (float*)G(0x00D9AFD4), 0.0f },    // Sectors/Entities/a; Default Entity Stream Dist (set at run time)
+    { (float*)G(0x00D5FDDC), 400.0f },  // Sectors/Entities/b; Max Entity Stream Dist
+    { (float*)G(0x00D40A84), 5.0f },    // powerplays/DrawDists/Auto Size Scale (assets without a set distance:
+    { (float*)G(0x00D40A8C), 200.0f },  // powerplays/DrawDists/Auto Offset      size * scale + offset, 0x813797)
 };
 
 static float s_lodWritten[sizeof(kLodDistances) / sizeof(kLodDistances[0])];
@@ -217,14 +238,14 @@ static void ScaleLodDistances()
         if (v == s_lodWritten[i] || v <= 0 || v > 100000.0f) continue;
         s_lodWritten[i] = v * g_cfg.lodDistanceScale;
         // the mid LOD must still switch before the low LOD (0xD38AA0 / split screen 0xD38AC8)
-        if (kLodDistances[i].var == (float*)0x00D38A98 && s_lodWritten[i] > *(float*)0x00D38AA0 * 0.9f)
-            s_lodWritten[i] = *(float*)0x00D38AA0 * 0.9f;
-        if (kLodDistances[i].var == (float*)0x00D38AC0 && s_lodWritten[i] > *(float*)0x00D38AC8 * 0.9f)
-            s_lodWritten[i] = *(float*)0x00D38AC8 * 0.9f;
+        if (kLodDistances[i].var == (float*)G(0x00D38A98) && s_lodWritten[i] > *(float*)G(0x00D38AA0) * 0.9f)
+            s_lodWritten[i] = *(float*)G(0x00D38AA0) * 0.9f;
+        if (kLodDistances[i].var == (float*)G(0x00D38AC0) && s_lodWritten[i] > *(float*)G(0x00D38AC8) * 0.9f)
+            s_lodWritten[i] = *(float*)G(0x00D38AC8) * 0.9f;
         *kLodDistances[i].var = s_lodWritten[i];
         if (i == 0) Log("LOD distances rescaled (high %.0f -> %.0f)", v, s_lodWritten[i]);
-        if (kLodDistances[i].var == (float*)0x00D389F0 || kLodDistances[i].var == (float*)0x00D5FDDC ||
-            kLodDistances[i].var == (float*)0x00D9AFD4)
+        if (kLodDistances[i].var == (float*)G(0x00D389F0) || kLodDistances[i].var == (float*)G(0x00D5FDDC) ||
+            kLodDistances[i].var == (float*)G(0x00D9AFD4))
             Log("stream distance %08X: %.0f -> %.0f", (DWORD)kLodDistances[i].var, v, s_lodWritten[i]);
     }
 }
@@ -241,8 +262,8 @@ static void ScalePowerplayDrawDists()
     if (g_cfg.lodDistanceScale == 1.0f) return;
     int scaled = 0;
     __try {
-        DWORD node = *(DWORD*)0x00D8B384;
-        for (int n = 0; node && node != 0x00D8B388 && n < 4096; n++, node = *(DWORD*)node) {
+        DWORD node = *(DWORD*)G(0x00D8B384);
+        for (int n = 0; node && node != G(0x00D8B388) && n < 4096; n++, node = *(DWORD*)node) {
             float* dist = (float*)(node + 0x90);
             if (*dist <= 0 || *dist > 100000.0f) continue;
             int i = 0;
@@ -268,12 +289,12 @@ static void ScalePowerplayDrawDists()
 // quick play (0x4851C0), episodes, events and vehicles. PCcheat tweakables: the extras the PC port
 // unlocked with cheat codes, among them the Expressway track (Downtown route B, 0x4851C0).
 static BYTE* const kUnlockAll[] = {
-    (BYTE*)0x00D6FC54,  // UI/All Gamemodes Unlocked
-    (BYTE*)0x00D6FBA0,  // UI/Episode Select/All Episodes Unlocked
-    (BYTE*)0x00D7D978,  // UI/Events Select/All Events Unlocked
-    (BYTE*)0x00D6F8F0,  // UI/Vehicle Select/All Vehicles Unlocked
+    (BYTE*)G(0x00D6FC54),  // UI/All Gamemodes Unlocked
+    (BYTE*)G(0x00D6FBA0),  // UI/Episode Select/All Episodes Unlocked
+    (BYTE*)G(0x00D7D978),  // UI/Events Select/All Events Unlocked
+    (BYTE*)G(0x00D6F8F0),  // UI/Vehicle Select/All Vehicles Unlocked
 };
-static BYTE* const kBonusContent = (BYTE*)0x00D6C49C;  // PCcheat;Cobretti SlipStream .. Euro Livery Pack, 8 bytes apart
+static BYTE* const kBonusContent = (BYTE*)G(0x00D6C49C);  // PCcheat;Cobretti SlipStream .. Euro Livery Pack, 8 bytes apart
 static const int kBonusCount = 10;
 
 // Decals are the achievements: cAnchoviesPC (vtable 0xC4AAC4) at [0xD64E00]+0x208 keeps one byte per
@@ -288,8 +309,8 @@ static const int kBonusCount = 10;
 // game's normal path (0xA17F90; only with a signed in profile, [+4] and [+0x3C]). One achievement per
 // frame, and only while a single player race runs: the flags are set before the profile is loaded, and the
 // game saves the profile when the race ends. Before the first one the profile files are copied to a backup folder.
-static BYTE* const kUnlockAnchovy = (BYTE*)0x00D71954;
-static int* const kUnlockAnchovyId = (int*)0x00D11B6C;
+static BYTE* const kUnlockAnchovy = (BYTE*)G(0x00D71954);
+static int* const kUnlockAnchovyId = (int*)G(0x00D11B6C);
 static const int kOnlineFirst = 41, kOnlineLast = 46;
 
 static void BackupSaves()
@@ -321,16 +342,16 @@ static void UnlockDecals()
 {
     static bool backedUp, done, pureLogged;
     static int asked = -1;
-    BYTE* pure = *(BYTE**)0x00D64E6C;
+    BYTE* pure = *(BYTE**)G(0x00D64E6C);
     if (pure && !*pure) {  // the game clears it again when it looks for Pure saves, so it is kept set
         *pure = 1;
         if (!pureLogged) Log("decals: Pure decal unlocked");
         pureLogged = true;
     }
     if (done || *kUnlockAnchovy || !SinglePlayerRace()) return;  // or the game has not taken the last request yet
-    BYTE* mgr = *(BYTE**)0x00D64E00;
+    BYTE* mgr = *(BYTE**)G(0x00D64E00);
     BYTE* ach = mgr ? mgr + 0x208 : NULL;
-    if (!ach || IsBadReadPtr(ach, 0x40) || *(DWORD*)ach != 0x00C4AAC4 || !ach[4] || !ach[0x3C]) return;
+    if (!ach || IsBadReadPtr(ach, 0x40) || *(DWORD*)ach != G(0x00C4AAC4) || !ach[4] || !ach[0x3C]) return;
     BYTE* unlocked = *(BYTE**)(ach + 0x2C);
     int count = *(int*)(ach + 0x38);
     if (count < 2 || count > 64 || IsBadReadPtr(unlocked, count)) return;
@@ -413,9 +434,9 @@ static void HookRumble()
 // table. With SkipIntro=1 they are opened normally (so Bink sets up its sound as usual) but never
 // waited for or decoded, so the game ends them at once, as when the player skips them. Replacing or
 // shortening the movie files instead made the engine sound choppy for the rest of the session.
-static void** const kIatBinkOpen = (void**)0x00B9B39C;
-static void** const kIatBinkWait = (void**)0x00B9B3B0;
-static void** const kIatBinkDoFrame = (void**)0x00B9B380;
+static void** const kIatBinkOpen = (void**)G(0x00B9B39C);
+static void** const kIatBinkWait = (void**)G(0x00B9B3B0);
+static void** const kIatBinkDoFrame = (void**)G(0x00B9B380);
 typedef void*(__stdcall* BinkOpen_t)(const char* name, unsigned flags);
 typedef int(__stdcall* BinkWait_t)(void* bink);
 typedef int(__stdcall* BinkDoFrame_t)(void* bink);
@@ -517,8 +538,8 @@ static const char* const kCaptionKeys[5] = { "KEY_RETURN", "KEY_ESCAPE", "KEY_SP
 // The game's own copies of the icon paths (only SetButtons uses them). While pad glyphs are on,
 // their last letter is changed so SetButtons' gotoAndStop calls miss and leave our frames alone:
 // some screens (main menu) call SetButtons every frame, after our per-frame update.
-static char* const kGameIconPaths[5] = { (char*)0x00BBAC7C, (char*)0x00BBAC50, (char*)0x00BBAC24,
-                                         (char*)0x00BBABF8, (char*)0x00BBABC8 };
+static char* const kGameIconPaths[5] = { (char*)G(0x00BBAC7C), (char*)G(0x00BBAC50), (char*)G(0x00BBAC24),
+                                         (char*)G(0x00BBABF8), (char*)G(0x00BBABC8) };
 
 static bool GameIconPathsKnown()
 {
@@ -577,7 +598,7 @@ static bool WantPadGlyphs()
 static void* PromptBar()
 {
     __try {
-        BYTE* ui = *(BYTE**)0x00D64E0C;
+        BYTE* ui = *(BYTE**)G(0x00D64E0C);
         if (!ui) return NULL;
         BYTE** slot = *(BYTE***)(ui + 8);
         BYTE* layer = slot ? *slot : NULL;
@@ -626,7 +647,7 @@ static bool s_promptBarKnown;
 static void CheckPromptBar()
 {
     s_promptBarKnown = BytesMatch(kPromptBarSetButtons, "81ECA4000000535556") &&
-                       BytesMatch((void*)0x00469CB0, "A10C4ED600578BF98B4808") && GameIconPathsKnown();
+                       BytesMatch((void*)G(0x00469CB0), "A10C4ED600578BF98B4808") && GameIconPathsKnown();
     Log(s_promptBarKnown ? "prompt bar found" : "prompt bar code not recognised, glyphs disabled");
 }
 
@@ -634,7 +655,7 @@ static void CheckPromptBar()
 
 // Dictionary lookup, key -> localised UTF-8 text (or a copy of the key). Called directly, not
 // hooked: the dictionary object is the global the game's own callers pass (0x518416).
-static BYTE* const kTextLookup = (BYTE*)0x00A15BF0;
+static BYTE* const kTextLookup = (BYTE*)G(0x00A15BF0);
 typedef const char*(__thiscall* TextLookup_t)(void* dict, const char* key);
 static TextLookup_t s_origLookup;
 
@@ -676,7 +697,7 @@ static void UpdatePressStart(bool pad)
 
 static void CheckTitleText()
 {
-    if (!BytesMatch(kTextLookup, "568BF1833E00752E") || !BytesMatch((void*)0x00518416, "8B0D284ED600")) {
+    if (!BytesMatch(kTextLookup, "568BF1833E00752E") || !BytesMatch((void*)G(0x00518416), "8B0D284ED600")) {
         Log("text lookup not recognised, title text unchanged");
         return;
     }
@@ -697,7 +718,7 @@ static int CountVmContexts(DWORD* kinds)
     int used = 0;
     __try {
         for (int i = 0; i < 10; i++) {
-            BYTE* c = *(BYTE**)(0x01E0266A + i * 4);
+            BYTE* c = *(BYTE**)(0x01E0266A + i * 4);  // SecuROM's own data, only known on BUILD_STEAM
             kinds[i] = 0;
             if (c && *(DWORD*)(c + 0x24) == 0x66666666) {
                 kinds[i] = *(DWORD*)(c + 0x18);
@@ -738,9 +759,9 @@ void OnInputFrame()
         // decide. Sectors/Visibility/Disable Powerplay Visibility (0x8137FB), Disable Sector
         // Visibility (environment sectors, 0x7C1CC2) and Disable Visibility Map (entities, 0xAE6720).
         if (g_cfg.popInFix) {
-            *(BYTE*)0x00D8B368 = 1;
-            *(BYTE*)0x00D82788 = 1;
-            *(BYTE*)0x00D9AFCC = 1;
+            *(BYTE*)G(0x00D8B368) = 1;
+            *(BYTE*)G(0x00D82788) = 1;
+            *(BYTE*)G(0x00D9AFCC) = 1;
         }
     }
     if (s_knownBuild && g_cfg.fixIconSize && (g_cfg.patchMask & PATCH_ICONSIZE)) FixPowerplayIconSize();
@@ -749,7 +770,7 @@ void OnInputFrame()
     if (s_knownBuild && g_cfg.explosionShakeOff && (g_cfg.patchMask & PATCH_CAMERA)) ApplyExplosionShake();
     if (s_knownBuild && (g_cfg.boost || g_cfg.powerFill || g_cfg.aiBoost) && (g_cfg.patchMask & PATCH_BOOST)) BoostTick();
     if (s_knownBuild && (g_cfg.zoomKeys || g_cfg.photoMode || g_cfg.hudKey) && (g_cfg.patchMask & PATCH_CAMERA)) CameraTick();
-    if (g_cfg.log && s_knownBuild) WatchVmContexts();
+    if (g_cfg.log && s_knownBuild && CurrentBuild() == BUILD_STEAM) WatchVmContexts();
     if (g_cfg.log && (g_cfg.patchMask & PATCH_SAVEDIAG)) WatchSaveFiles();
     if (g_cfg.log && s_knownBuild) {
         // what the tweakables and the renderer look like while playing (they may be reloaded per level)
@@ -757,12 +778,12 @@ void OnInputFrame()
         DWORD now = GetTickCount();
         if (now - last > 15000) {
             last = now;
-            BYTE* r = *(BYTE**)0x00D64708;
+            BYTE* r = *(BYTE**)G(0x00D64708);
             BYTE* rr = r ? *(BYTE**)(r + 4) : NULL;
             Log("state: quality=%d internal=%dx%d screen=%dx%d LOD high=%.0f mid=%.0f low=%.0f pool level=%d used=%d",
-                *(int*)0x00D0F7E8,
-                rr ? *(int*)(rr + 0x4C) : -1, rr ? *(int*)(rr + 0x50) : -1, *(int*)0x00D56648, *(int*)0x00D5664C,
-                *(float*)0x00D38A90, *(float*)0x00D38A98, *(float*)0x00D38AA0, s_levelStreamPoolMB,
+                *(int*)G(0x00D0F7E8),
+                rr ? *(int*)(rr + 0x4C) : -1, rr ? *(int*)(rr + 0x50) : -1, *(int*)G(0x00D56648), *(int*)G(0x00D5664C),
+                *(float*)G(0x00D38A90), *(float*)G(0x00D38A98), *(float*)G(0x00D38AA0), s_levelStreamPoolMB,
                 *kStreamPoolMB);
         }
     }
@@ -796,7 +817,7 @@ void OnInputFrame()
     bool want = WantPadGlyphs();
     static bool pressStartPrepared;
     if (s_origLookup && !pressStartPrepared) {
-        s_dict = *(void**)0x00D64E28;
+        s_dict = *(void**)G(0x00D64E28);
         if (s_dict) pressStartPrepared = PreparePressStart();
     }
     UpdatePressStart(want);
@@ -806,12 +827,16 @@ void OnInputFrame()
 
 void ApplyGamePatches()
 {
-    if (!BytesMatch((void*)0x0040F0F0, "5355568BB16CCF0000")) {
+    if (CurrentBuild() == BUILD_UNKNOWN || !BytesMatch((void*)G(0x0040F0F0), "5355568BB16CCF0000")) {
         Log("unknown SplitSecond.exe build, no patches applied");
         return;
     }
+    if (!BuildMapComplete()) {
+        Log("SplitSecond.exe build (%s): address table incomplete, no patches applied", BuildName());
+        return;
+    }
     s_knownBuild = true;
-    Log("SplitSecond.exe build recognised (Steam 1.0.0.1)");
+    Log("SplitSecond.exe build recognised (%s)", BuildName());
     const unsigned mask = g_cfg.patchMask;
     if (g_cfg.separateTriggers && (mask & PATCH_TRIGGERS)) PatchTriggerPreset();
     if (mask & PATCH_RUMBLE) HookRumble();
@@ -825,6 +850,6 @@ void ApplyGamePatches()
     if (mask & PATCH_FLARES) PatchBloomAndFlares();
     if (mask & PATCH_CAMERA) PatchCamera();
     if (mask & PATCH_CAMERA) PatchDepthOfField();
-    if (g_cfg.profile) InstallProfiler();
+    if (g_cfg.profile && CurrentBuild() == BUILD_STEAM) InstallProfiler();  // research tool, made on this build
     if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
 }

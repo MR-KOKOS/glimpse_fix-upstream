@@ -10,15 +10,15 @@ struct CountSite {
 };
 
 static CountSite s_sites[] = {
-    { 0x00558880, 5, "frame", 0 },
-    { 0x00417940, 6, "race update", 0 },
-    { 0x004B4F90, 7, "sim update", 0 },
-    { 0x0051A8B0, 8, "ai driver", 0 },
-    { 0x00524AC0, 5, "ai steer 524ac0", 0 },
-    { 0x00528D10, 8, "ai 528d10", 0 },
-    { 0x00529000, 6, "ai 529000", 0 },
-    { 0x00859EF0, 6, "859ef0", 0 },
-    { 0x00833A60, 6, "833a60", 0 },
+    { G(0x00558880), 5, "frame", 0 },
+    { G(0x00417940), 6, "race update", 0 },
+    { G(0x004B4F90), 7, "sim update", 0 },
+    { G(0x0051A8B0), 8, "ai driver", 0 },
+    { G(0x00524AC0), 5, "ai steer 524ac0", 0 },
+    { G(0x00528D10), 8, "ai 528d10", 0 },
+    { G(0x00529000), 6, "ai 529000", 0 },
+    { G(0x00859EF0), 6, "859ef0", 0 },
+    { G(0x00833A60), 6, "833a60", 0 },
 };
 
 void InstallProfiler()

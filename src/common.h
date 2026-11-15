@@ -86,7 +86,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "1.7.3"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "1.7.3-ru.1"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -144,8 +144,20 @@ bool CameraBlocksPad();  // photo mode drives the camera with the pad: the game 
 // savediag.cpp
 void WatchSaveFiles();  // Log=1: log every change of the profile files
 
+// builds.cpp - the fixed addresses in this source are those of the Steam build the fix was made on
+// (German depot 297864, built 4BE13C66). G() returns where the same code or
+// data is in the running exe: unchanged on that build and on unknown ones (their byte checks fail),
+// from a table on the Russian depot's build (297867, built 4BE3EA74), 0 if that table lacks it.
+enum GameBuild { BUILD_UNKNOWN, BUILD_STEAM, BUILD_STEAM_RU };
+GameBuild CurrentBuild();
+const char* BuildName();
+DWORD G(DWORD addr);
+bool BuildMapComplete();   // false once G() was asked for an address the table lacks
+bool MapEmbedded(DWORD value, DWORD* mapped);  // value is a table address: its place in this build
+
 // game.cpp
-bool BytesMatch(const void* at, const char* hex);     // hex string, no spaces
+bool BytesMatch(const void* at, const char* hex);     // hex string, no spaces; embedded addresses are mapped
+bool CodeMatches(const void* at, const void* expected, size_t len);  // the same with raw bytes
 void WriteMemory(void* at, const void* src, size_t len);
 
 // Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x48 Invoke

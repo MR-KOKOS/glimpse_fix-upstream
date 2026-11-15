@@ -11,8 +11,8 @@
 // screen space motion blur pass (thiscall, 5 stack args, ret 14h); returns at once unless [[this+4]+8] is set.
 // It is only called through its vtable slot, which is swapped instead of patching the code: code
 // patches here set off SecuROM's integrity checks.
-static BYTE* const kMotionBlurRender = (BYTE*)0x0049B490;
-static void** const kMotionBlurSlot = (void**)0x00BB42B0;
+static BYTE* const kMotionBlurRender = (BYTE*)G(0x0049B490);
+static void** const kMotionBlurSlot = (void**)G(0x00BB42B0);
 typedef void(__thiscall* MotionBlurRender_t)(void* self, void* a, void* b, void* c, void* d, void* e);
 static MotionBlurRender_t s_origMotionBlur;
 static float s_blurScale = 1.0f;
@@ -26,7 +26,7 @@ static void __fastcall Hook_MotionBlurRender(BYTE* self, void*, void* a, void* b
         static unsigned calls;
         if (calls++ % 600 == 0)
             Log("motion blur: enabled=%d amount=%.3f level=%d quality=%d", state ? state[8] : -1, amount ? *amount : -1.0f,
-                params ? *(int*)(params + 0x20) : -1, *(int*)0x00D0F7E8);
+                params ? *(int*)(params + 0x20) : -1, *(int*)G(0x00D0F7E8));
     }
     float scale = s_blurScale * BoostBlurScale();
     DumpMark("motion blur begins");
@@ -63,8 +63,8 @@ void PatchMotionBlur()
 // scales at 0 every pixel sits at the centre, inside the inner distance, so nothing is darkened
 // while the grading and gradient stay as they are. The gradient (the translucent blue band at the top
 // of the screen) has its colour rgba at +0x1C..+0x2C; Gradient=0 sets its alpha to 0 for the call.
-static BYTE* const kGradeRender = (BYTE*)0x0049A7A0;
-static void** const kGradeSlot = (void**)0x00BB4048;
+static BYTE* const kGradeRender = (BYTE*)G(0x0049A7A0);
+static void** const kGradeSlot = (void**)G(0x00BB4048);
 static MotionBlurRender_t s_origGrade;
 
 static void __fastcall Hook_GradeRender(BYTE* self, void*, void* a, void* b, void* c, void* d, void* e)
@@ -111,10 +111,10 @@ void PatchVignette()
 // +0x14 filmic tone mapper. Bloom=0 clears +0x38 for the call, so the frame is still tone mapped.
 // Particle flares (0x496C60, cSSParticleFlareEffect slot 0xBB39B8) run only while the effect's
 // state flag [[this+4]+8] is set, as cameras switch it; ParticleFlare=0 clears it for the call.
-static BYTE* const kBloomRender = (BYTE*)0x00492F50;
-static void** const kBloomSlot = (void**)0x00BB3678;
-static BYTE* const kParticleFlareRender = (BYTE*)0x00496C60;
-static void** const kParticleFlareSlot = (void**)0x00BB39B8;
+static BYTE* const kBloomRender = (BYTE*)G(0x00492F50);
+static void** const kBloomSlot = (void**)G(0x00BB3678);
+static BYTE* const kParticleFlareRender = (BYTE*)G(0x00496C60);
+static void** const kParticleFlareSlot = (void**)G(0x00BB39B8);
 static MotionBlurRender_t s_origBloom, s_origParticleFlare;
 
 // Bloom look: the pass feeds its shaders from the parameter block. [Graphics] BloomStrength scales
@@ -234,24 +234,24 @@ float g_photoBloom = 1.0f, g_photoExposure = 1.0f, g_photoDof = 0.0f, g_photoFoc
 // calls just before, sets +8 of the depth of field block (post processing manager [[0xD714D0]+0x120],
 // its chain at +0xB50, the pass at chain+4, its block at pass+4); the hook fills the block for the call
 // and puts all of the game's values back after it.
-static BYTE* const kDofRender = (BYTE*)0x00ADFE60;
-static void** const kDofSlot = (void**)0x00C645F8;
+static BYTE* const kDofRender = (BYTE*)G(0x00ADFE60);
+static void** const kDofSlot = (void**)G(0x00C645F8);
 typedef void(__thiscall* DofSetBlur_t)(void* params, float amount);
-static const DofSetBlur_t kDofSetBlur = (DofSetBlur_t)0x00ADF430;
+static const DofSetBlur_t kDofSetBlur = (DofSetBlur_t)G(0x00ADF430);
 static MotionBlurRender_t s_origDof;
 static BYTE* s_dofSwitched;  // the block whose +8 the bloom hook set, with the game's value
 static BYTE s_dofWas;
 
-static bool PhotoDofWanted() { return g_photoDof > 0.0f && s_origDof && *(int*)0x00D0F7E8 != 0; }
+static bool PhotoDofWanted() { return g_photoDof > 0.0f && s_origDof && *(int*)G(0x00D0F7E8) != 0; }
 
 static BYTE* DofParams()
 {
     __try {
-        BYTE* pp = *(BYTE**)0x00D714D0;
+        BYTE* pp = *(BYTE**)G(0x00D714D0);
         BYTE* mgr = pp ? *(BYTE**)(pp + 0x120) : NULL;
         BYTE* chain = mgr ? *(BYTE**)(mgr + 0xB50) : NULL;
         BYTE* pass = chain ? *(BYTE**)(chain + 4) : NULL;
-        if (!pass || *(DWORD*)pass != 0x00C645F0) return NULL;
+        if (!pass || *(DWORD*)pass != G(0x00C645F0)) return NULL;
         return *(BYTE**)(pass + 4);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return NULL;
@@ -327,6 +327,6 @@ void PatchDepthOfField()
 void ApplyLensFlare()
 {
     if (g_cfg.lensFlare) return;
-    *(BYTE*)0x00D10A3C = 0;
-    *(BYTE*)0x00D37D08 = 0;
+    *(BYTE*)G(0x00D10A3C) = 0;
+    *(BYTE*)G(0x00D37D08) = 0;
 }

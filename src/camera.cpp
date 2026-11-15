@@ -43,16 +43,16 @@
 #include <math.h>
 #include <string.h>
 
-static void** const kChaseUpdateSlot = (void**)0x00C5AE64;
-static BYTE* const kChaseUpdate = (BYTE*)0x00A89240;
-static void** const kBumperUpdateSlot = (void**)0x00C5B1F0;
-static BYTE* const kBumperUpdate = (BYTE*)0x00A8D9A0;
-static BYTE* const kSlowMotionOn = (BYTE*)0x00D71208;
-static float* const kSlowMotionSpeed = (float*)0x00D113B8;
-static BYTE* const kHudPowerbar = (BYTE*)0x00D1BC94;
-static BYTE* const kHudInfobar = (BYTE*)0x00D1BC9C;
-static void* const* const kDisplay = (void* const*)0x00D64708;      // +0x30 width, +0x34 height
-static void* const* const kInGameResources = (void* const*)0x00D66B28; // +0x14 race setup, +0x9C viewports
+static void** const kChaseUpdateSlot = (void**)G(0x00C5AE64);
+static BYTE* const kChaseUpdate = (BYTE*)G(0x00A89240);
+static void** const kBumperUpdateSlot = (void**)G(0x00C5B1F0);
+static BYTE* const kBumperUpdate = (BYTE*)G(0x00A8D9A0);
+static BYTE* const kSlowMotionOn = (BYTE*)G(0x00D71208);
+static float* const kSlowMotionSpeed = (float*)G(0x00D113B8);
+static BYTE* const kHudPowerbar = (BYTE*)G(0x00D1BC94);
+static BYTE* const kHudInfobar = (BYTE*)G(0x00D1BC9C);
+static void* const* const kDisplay = (void* const*)G(0x00D64708);      // +0x30 width, +0x34 height
+static void* const* const kInGameResources = (void* const*)G(0x00D66B28); // +0x14 race setup, +0x9C viewports
 
 typedef void(__thiscall* CameraUpdate_t)(void* self, void* frame);
 static CameraUpdate_t s_origChase, s_origBumper;
@@ -242,7 +242,7 @@ static void SmoothShake(BYTE* state)
 // when it is clear (levels may load it), not every frame; Log=1 counts how often the game clears it.
 void ApplyExplosionShake()
 {
-    BYTE* flag = (BYTE*)0x00D8B4CC;
+    BYTE* flag = (BYTE*)G(0x00D8B4CC);
     static unsigned cleared;
     static DWORD lastLog;
     if (!*flag) {
@@ -321,13 +321,13 @@ static void __fastcall Hook_BumperUpdate(BYTE* self, void*, void* frame)
 // photo mode changes their state
 struct OtherCamera { DWORD vtable; DWORD update; const char* prologue; int len; const char* name; };
 static const OtherCamera kOtherCameras[] = {
-    { 0x00C5B3DC, 0x00A92520, "\x81\xEC\x18\x01\x00\x00", 6, "bonnet" },
-    { 0x00C5B418, 0x00A93760, "\x81\xEC\xA8\x00\x00\x00", 6, "velocity based" },
-    { 0x00C535B0, 0x00A62540, "\x81\xEC\xB4\x00\x00\x00", 6, "free" },
-    { 0x00C535D8, 0x00A62E10, "\x83\xEC\x30\x56\x8B\xF1", 6, "fixed to world" },
-    { 0x00C53630, 0x00A630E0, "\x81\xEC\x94\x00\x00\x00", 6, "fixed to spline" },
-    { 0x00C53660, 0x00A63A40, "\x81\xEC\xEC\x00\x00\x00", 6, "fixed to subject" },
-    { 0x00C536EC, 0x00A643E0, "\x83\xB9\x2C\x01\x00\x00\x00", 7, "dynamic behaviour" },
+    { G(0x00C5B3DC), G(0x00A92520), "\x81\xEC\x18\x01\x00\x00", 6, "bonnet" },
+    { G(0x00C5B418), G(0x00A93760), "\x81\xEC\xA8\x00\x00\x00", 6, "velocity based" },
+    { G(0x00C535B0), G(0x00A62540), "\x81\xEC\xB4\x00\x00\x00", 6, "free" },
+    { G(0x00C535D8), G(0x00A62E10), "\x83\xEC\x30\x56\x8B\xF1", 6, "fixed to world" },
+    { G(0x00C53630), G(0x00A630E0), "\x81\xEC\x94\x00\x00\x00", 6, "fixed to spline" },
+    { G(0x00C53660), G(0x00A63A40), "\x81\xEC\xEC\x00\x00\x00", 6, "fixed to subject" },
+    { G(0x00C536EC), G(0x00A643E0), "\x83\xB9\x2C\x01\x00\x00\x00", 7, "dynamic behaviour" },
 };
 enum { kOtherCount = sizeof(kOtherCameras) / sizeof(kOtherCameras[0]) };
 static CameraUpdate_t s_origOther[kOtherCount];
@@ -351,7 +351,7 @@ static void* const kOtherHooks[kOtherCount] = {
 
 static bool HookSlot(void** slot, BYTE* fn, const char* prologue, int len, void* hook, void** orig)
 {
-    if (*slot != fn || memcmp(fn, prologue, len)) return false;
+    if (!fn || *slot != fn || !CodeMatches(fn, prologue, len)) return false;
     *orig = fn;
     WriteMemory(slot, &hook, sizeof(hook));
     return true;
@@ -364,8 +364,8 @@ static bool HookSlot(void** slot, BYTE* fn, const char* prologue, int len, void*
 // runs in real time, so the respot came while the world was held still. The hook leaves the update out:
 // in photo mode for every car, so wrecks stay where they are; with WreckTime for the human player
 // ([[+0x30]+0x80+[0xD02D78]*4]+0xC) until that many seconds after the wreck.
-static void** const kRespotUpdateSlot = (void**)(0x00BA7C38 + 0x10);
-static BYTE* const kRespotUpdate = (BYTE*)0x0043C2E0;
+static void** const kRespotUpdateSlot = (void**)(G(0x00BA7C38) + 0x10);
+static BYTE* const kRespotUpdate = (BYTE*)G(0x0043C2E0);
 typedef void(__thiscall* RespotUpdate_t)(void* self, float dt);
 static RespotUpdate_t s_origRespot;
 static DWORD s_wreckSeen;  // tick when a wrecked car was last seen (crash and takedown cameras run then)
@@ -375,9 +375,9 @@ static int RaceState(BYTE* respot, bool* human)
 {
     __try {
         BYTE* car = *(BYTE**)(respot + 0x30);
-        BYTE* who = *(BYTE**)(car + 0x80 + *(int*)0x00D02D78 * 4);
+        BYTE* who = *(BYTE**)(car + 0x80 + *(int*)G(0x00D02D78) * 4);
         *human = who[0xC] != 0;
-        BYTE* state = *(BYTE**)(*(BYTE**)(car + 0xA4 + *(int*)0x00D02BB4 * 4) + 0x2C);
+        BYTE* state = *(BYTE**)(*(BYTE**)(car + 0xA4 + *(int*)G(0x00D02BB4) * 4) + 0x2C);
         return *(int*)(state + 4);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return -1;
@@ -514,13 +514,13 @@ static void SetHud(bool visible)
 typedef void(__thiscall* GFxSetVisible_t)(void* movie, bool visible);
 typedef bool(__thiscall* GFxGetVisible_t)(void* movie);
 enum { kLayers = 0x80 };
-static void* const kMovieRootVtable = (void*)0x00C41CF4;
+static void* const kMovieRootVtable = (void*)G(0x00C41CF4);
 static void* s_hiddenMovie[kLayers];  // the movies photo mode hid, shown again when it ends
 
 static void* LayerMovie(int id)
 {
     __try {
-        BYTE* ui = *(BYTE**)0x00D64E0C;
+        BYTE* ui = *(BYTE**)G(0x00D64E0C);
         BYTE** slots = ui ? *(BYTE***)(ui + 8) : NULL;
         BYTE* layer = slots ? slots[id] : NULL;
         if (!layer || *(int*)(layer + 4) != id) return NULL;
