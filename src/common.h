@@ -163,6 +163,7 @@ typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* r
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
 void* Detour(BYTE* at, int len, void* hook);         // returns the trampoline
 void ApplyGamePatches();
+bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
 void PatchPadNames();
 void OnInputFrame();       // called from the virtual device poll, on the game thread
 void NotePadActivity();

@@ -384,7 +384,7 @@ static float* s_quad;
 static void FitQuadOffset(IDirect3DSurface9* surf)
 {
     D3DSURFACE_DESC d;
-    if (!surf || FAILED(surf->GetDesc(&d))) return;
+    if (!KnownBuild() || !surf || FAILED(surf->GetDesc(&d))) return;  // other builds keep other data there
     BYTE* holder = *(BYTE**)0x00D67758;
     float* quad = holder ? *(float**)(holder + 4) : NULL;
     if (!quad || IsBadReadPtr(quad, 0x70)) return;
@@ -485,7 +485,7 @@ static void DumpAtPresent(IDirect3DDevice9* dev)
         s_dumping = true;
         s_pass = 0;
         s_passDraws = 0;
-        Log("dump %lu: next frame, graphics quality %d", s_dumpIndex, *(int*)0x00D0F7E8);
+        Log("dump %lu: next frame, graphics quality %d", s_dumpIndex, KnownBuild() ? *(int*)0x00D0F7E8 : -1);
     }
     was = down;
 }

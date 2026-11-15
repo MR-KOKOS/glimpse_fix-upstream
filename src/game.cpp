@@ -71,6 +71,8 @@ static InputName* const kJoyButtonNames = (InputName*)0x00CFA6E0;  // JOY_BUTTON
 
 static bool s_knownBuild;
 
+bool KnownBuild() { return s_knownBuild; }
+
 void PatchPadNames()
 {
     if (!s_knownBuild || !(g_cfg.patchMask & PATCH_PADNAMES)) return;
@@ -749,7 +751,7 @@ void OnInputFrame()
     if (s_knownBuild && (g_cfg.zoomKeys || g_cfg.photoMode || g_cfg.hudKey) && (g_cfg.patchMask & PATCH_CAMERA)) CameraTick();
     if (g_cfg.log && s_knownBuild) WatchVmContexts();
     if (g_cfg.log && (g_cfg.patchMask & PATCH_SAVEDIAG)) WatchSaveFiles();
-    if (g_cfg.log) {
+    if (g_cfg.log && s_knownBuild) {
         // what the tweakables and the renderer look like while playing (they may be reloaded per level)
         static DWORD last;
         DWORD now = GetTickCount();
