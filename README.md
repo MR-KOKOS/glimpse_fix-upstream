@@ -49,11 +49,18 @@ code, so they are safe with the copy protection.
 
 > **Compatibility: Steam version only.** Developed and tested exclusively with the Steam release
 > (`SplitSecond.exe` 1.0.0.1, app 297860) on Windows 11. The retail DVD version
-> (Split/Second: Velocity), other regions and any other release have **not** been tested. All
-> addresses come from the Steam executable; on a different exe the byte checks fail and the
-> game-specific patches (60 fps, streaming pool, prompt icons, trigger preset) switch themselves
-> off, and whether the rest works there is unknown. Packs that replace the exe are not supported,
+> (Split/Second: Velocity) and any other release have **not** been tested. All addresses come
+> from the Steam executable; on a different exe the byte checks fail and the game-specific
+> patches (60 fps, streaming pool, prompt icons, trigger preset) switch themselves off, and
+> whether the rest works there is unknown. Packs that replace the exe are not supported,
 > see [The Xbox content modpack](#the-xbox-content-modpack-xenondll).
+>
+> The Steam version ships more than one `SplitSecond.exe`: the language you pick in Steam decides
+> which one you get. Supported are the build of the German and English depots (built
+> `4BE13C66`, the one the fix was made on) and the build of the **Russian** depot 297867 (built
+> `4BE3EA74`), whose addresses are mapped from a table (`src/build_ru.inc`). The Polish depot
+> 297866 is a third build and not supported; French, Italian and Spanish have not been checked. The log names the build it found
+> (`SplitSecond.exe build recognised (...)`) or says `unknown SplitSecond.exe build`.
 
 ## Install
 
@@ -408,6 +415,9 @@ part of this repository.
 
 * `dump.py` — dump the decrypted `SplitSecond.exe` image from the running process (SecuROM/Steam
   DRM decrypt it at runtime).
+* `buildmap.py` — map every fixed address of the source from the supported build to another
+  build from two dumps and write its table (`src/build_ru.inc`); it checks the result against the
+  other dump (code bytes, swapped vtable slots, every byte and prologue check).
 * `dec.sh` + `ghidra_scripts/` — headless Ghidra: decompile functions or ranges, list xrefs.
 * `dis.py`, `xref.py`, `strs.py`, `memgrep.py`, `mem.py`, `vmem.py` — quick disassembly, string,
   memory and address space tools; `objscan.py` finds live objects by vtable or pointers to an
@@ -419,6 +429,9 @@ part of this repository.
   per-channel levels.
 
 ### Notes (Steam exe, image base 0x400000)
+
+Addresses of the supported build (`4BE13C66`); in the source they go through `G()`, which gives
+the Russian build's place from `src/build_ru.inc`.
 
 | Address | What |
 |---|---|
