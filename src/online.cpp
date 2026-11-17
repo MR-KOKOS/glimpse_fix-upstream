@@ -1239,14 +1239,37 @@ void OnlinePresent(IDirect3DDevice9* dev)
     LeaveCriticalSection(&s_showLock);
     if (!count || (int)(GetTickCount() - until) >= 0) return;
 
+    // the game may leave another render target set when it presents: draw on the back buffer and put
+    // the game's target and viewport back afterwards
+    static bool reported;
     IDirect3DSurface9 *rt = NULL, *bb = NULL;
-    if (FAILED(dev->GetRenderTarget(0, &rt))) return;
-    bool onBackBuffer = SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb == rt;
+    dev->GetRenderTarget(0, &rt);
+    if (FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) || !bb) {
+        if (rt) rt->Release();
+        if (!reported) Log("online: banner: no back buffer");
+        reported = true;
+        return;
+    }
     D3DSURFACE_DESC desc = {};
-    if (bb) bb->GetDesc(&desc);
-    if (bb) bb->Release();
-    rt->Release();
-    if (!onBackBuffer || !desc.Height) return;
+    bb->GetDesc(&desc);
+    bool switched = rt != bb;
+    D3DVIEWPORT9 vp = {};
+    dev->GetViewport(&vp);
+    if (switched) dev->SetRenderTarget(0, bb);
+    struct Restore {
+        IDirect3DDevice9* dev;
+        IDirect3DSurface9 *rt, *bb;
+        bool switched;
+        D3DVIEWPORT9* vp;
+        ~Restore()
+        {
+            if (switched && rt) dev->SetRenderTarget(0, rt);
+            dev->SetViewport(vp);
+            if (rt) rt->Release();
+            bb->Release();
+        }
+    } restore = { dev, rt, bb, switched, &vp };
+    if (!desc.Height) return;
 
     UINT height = desc.Height / 40 < 16 ? 16 : desc.Height / 40;
     if (s_font && s_fontForHeight != height) {
@@ -1268,10 +1291,15 @@ void OnlinePresent(IDirect3DDevice9* dev)
     }
     typedef INT(WINAPI* DrawTextA_t)(void*, void*, LPCSTR, INT, RECT*, DWORD, D3DCOLOR);
     DrawTextA_t draw = (DrawTextA_t)(*(void***)s_font)[14];
-    D3DVIEWPORT9 vp, full = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
-    dev->GetViewport(&vp);
+    D3DVIEWPORT9 full = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
     dev->SetViewport(&full);
-    if (SUCCEEDED(dev->BeginScene())) {
+    HRESULT begun = dev->BeginScene();
+    if (!reported) {
+        Log("online: banner drawn %ux%u, the game's render target %s the back buffer, BeginScene %08lX", desc.Width,
+            desc.Height, switched ? "was not" : "was", (unsigned long)begun);
+        reported = true;
+    }
+    if (SUCCEEDED(begun)) {
         int x = (int)desc.Height / 30, y = (int)desc.Height / 30;
         for (int i = 0; i < count; i++) {
             D3DCOLOR color = i == 0 ? D3DCOLOR_ARGB(255, 255, 120, 20)
@@ -1285,7 +1313,6 @@ void OnlinePresent(IDirect3DDevice9* dev)
         }
         dev->EndScene();
     }
-    dev->SetViewport(&vp);
 }
 
 // Steam: a friend's "Join game" while the game runs (GameLobbyJoinRequested_t, 333). The layout of
