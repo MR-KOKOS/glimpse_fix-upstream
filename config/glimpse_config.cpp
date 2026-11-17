@@ -107,7 +107,7 @@ static Option kOptions[] = {
     { "Gameplay", "AIBoostStraightOnly", BOOL_OPT, "  AI boosts on straights only", "Off = anywhere while driving forward, also in corners.", "1" },
     { "Gameplay", "AIBoostChaos", BOOL_OPT, "  Chaos mode", "Every AI car boosts all the time, everywhere, with an endless tank, a full power play bar and the highest AI skill. Overrides the three settings above.", "0" },
     // Online
-    { "Online", "SteamLAN", BOOL_OPT, "LAN over Steam (prototype)", "PROTOTYPE: the game's LAN mode with the players of a Steam lobby instead of the local network, relayed by Steam. Needs steam_api.dll next to the game. Players with the same LobbyName (set in the INI) meet in one lobby. Presets leave this alone.", "0" },
+    { "Online", "SteamLAN", BOOL_OPT, "LAN over Steam (prototype)", "PROTOTYPE: the game's LAN mode with the players of a Steam lobby instead of the local network. Needs steam_api.dll next to the game. Without a LobbyName (set in the INI) everybody meets in the public lobby; Steam friends join through \"Join game\". In a LAN session the lobby owner's boost and AI settings apply to all, the photo mode is off. Presets leave this alone.", "0" },
     // Debug
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
 };

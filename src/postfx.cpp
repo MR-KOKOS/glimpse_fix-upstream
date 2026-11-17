@@ -46,7 +46,7 @@ static void __fastcall Hook_MotionBlurRender(BYTE* self, void*, void* a, void* b
 void PatchMotionBlur()
 {
     s_blurScale = g_cfg.motionBlurStrength * (g_cfg.frameRate == 60 ? 2.0f : 1.0f);
-    if (s_blurScale == 1.0f && !g_cfg.log && !g_cfg.boost) return;
+    if (s_blurScale == 1.0f && !g_cfg.log && !g_cfg.boost && !g_cfg.steamLan) return;  // SteamLAN: a lobby may allow the boost
     if (memcmp(kMotionBlurRender, "\x83\xEC\x68\x57\x8B\xF9", 6) || *kMotionBlurSlot != kMotionBlurRender) {
         Log("motion blur pass not recognised");
         return;

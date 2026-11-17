@@ -89,7 +89,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "1.8.0"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "1.8.0-lan.2"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -183,6 +183,11 @@ void ApplyGamePatches();
 // sockets (its SocketDriver interface) carries the packets through Steam to the players of a Steam
 // lobby, each of them under a virtual 10.x.y.z address.
 void OnlineStart();
+void OnlineFrame();                              // game thread, every frame: lobby rules in a LAN session
+struct IDirect3DDevice9;
+void OnlinePresent(IDirect3DDevice9* dev);       // draws the lobby banner before Present
+void OnlineDeviceLost();                         // before Reset
+void OnlineDeviceReset();                        // after a successful Reset
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
 void PatchPadNames();
 void OnInputFrame();       // called from the virtual device poll, on the game thread

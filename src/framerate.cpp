@@ -153,8 +153,9 @@ static bool HookAiUpdate()
 
 void PatchFrameRate()
 {
-    if (g_cfg.aiBoost && g_cfg.aiBoostChaos && (g_cfg.patchMask & PATCH_AIBOOST) && HookAiUpdate())
-        Log("chaos mode: AI at the highest skill");
+    // SteamLAN: a lobby's rules may switch the chaos mode on later
+    if (((g_cfg.aiBoost && g_cfg.aiBoostChaos) || g_cfg.steamLan) && (g_cfg.patchMask & PATCH_AIBOOST) && HookAiUpdate())
+        Log("chaos mode: AI at the highest skill when it is on");
     if (g_cfg.frameRate != 60) return;
     // the loop must be the one described above
     if (!Matches(G(0x005588A9), "8B2DD899D100") || !Matches(G(0x005588B4), "F30F10052023D700F30F5805F447D700") ||
