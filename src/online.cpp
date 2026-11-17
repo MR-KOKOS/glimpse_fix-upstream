@@ -80,6 +80,9 @@ static std::vector<QSocket*> s_sockets;
 static uint32_t s_myIp;                  // 10.x.y.z, host byte order; 0 until Steam is up
 static uint16_t s_nextPort = 50000;
 
+// Log=1: traffic counters, summed up every 10 seconds
+static volatile LONG s_sentDirect, s_sentBroadcast, s_sentLocal, s_received, s_selects, s_dropped;
+
 // ---------------------------------------------------------------- Steam (flat API)
 
 typedef uint64_t SteamAPICall_t;
@@ -253,6 +256,8 @@ static void Deliver(uint32_t srcIp, uint16_t srcPort, uint16_t dstPort, const ch
         p.data.assign(data, data + size);
         s->queue.push_back(std::move(p));
         SetEvent(s_arrived);
+    } else {
+        InterlockedIncrement(&s_dropped);  // nobody listens on that port (yet)
     }
     LeaveCriticalSection(&s_lock);
 }
@@ -272,8 +277,11 @@ static void SendWire(const SteamNetworkingIdentity* to, uint16_t srcPort, uint16
 static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data, int size)
 {
     bool broadcast = to->ip == 0xFFFFFFFF || (to->ip & 0xFF) == 0xFF;
-    if (broadcast || to->ip == s_myIp || (to->ip >> 24) == 127)
+    if (broadcast) InterlockedIncrement(&s_sentBroadcast);
+    if (broadcast || to->ip == s_myIp || (to->ip >> 24) == 127) {
+        if (!broadcast) InterlockedIncrement(&s_sentLocal);
         Deliver(s_myIp ? s_myIp : 0x7F000001, srcPort, to->port, data, size);  // a broadcast reaches us too
+    }
     if (!s_myIp) return;
     EnterCriticalSection(&s_lock);
     std::vector<SteamNetworkingIdentity> targets;
@@ -289,7 +297,10 @@ static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data,
             unknown = to->ip;
         }
     }
-    for (const SteamNetworkingIdentity& id : targets) SendWire(&id, srcPort, to->port, data, size);
+    for (const SteamNetworkingIdentity& id : targets) {
+        SendWire(&id, srcPort, to->port, data, size);
+        InterlockedIncrement(&s_sentDirect);
+    }
 }
 
 // ---------------------------------------------------------------- the driver
@@ -299,7 +310,9 @@ QSocket* QDriver::CreateSocket()
     QSocket* s = new QSocket();
     EnterCriticalSection(&s_lock);
     s_sockets.push_back(s);
+    size_t n = s_sockets.size();
     LeaveCriticalSection(&s_lock);
+    Log("online: Quazal made a socket through the driver (%u open)", (unsigned)n);
     return s;
 }
 
@@ -310,6 +323,7 @@ void QDriver::DeleteSocket(QSocket* s)
 
 bool QDriver::Select(SelectEntry* entries, unsigned count, unsigned timeoutMs)
 {
+    InterlockedIncrement(&s_selects);
     DWORD start = GetTickCount();
     for (;;) {
         bool any = false;
@@ -360,6 +374,8 @@ bool QSocket::Bind(unsigned wanted)
     bool ok = !SocketOnPort(p);
     if (ok) port = p;
     LeaveCriticalSection(&s_lock);
+    if (wanted) Log(ok ? "online: socket bound to port %u" : "online: port %u already in use", p);
+    else Log("online: socket bound to free port %u", p);
     return ok;
 }
 
@@ -377,6 +393,7 @@ int QSocket::RecvFrom(char* buf, int len, Endpoint* from, int* got)
     if (n > 0) memcpy(buf, p.data.data(), n);
     if (from) *from = p.from;
     if (got) *got = n;
+    InterlockedIncrement(&s_received);
     return Q_OK;
 }
 
@@ -565,6 +582,29 @@ static void Pump()
     }
 }
 
+static QDriver* const* s_activeDriver;  // Quazal's driver in use, [0xD779FC]
+
+// Log=1: what went through the driver in the last 10 seconds
+static void LogTraffic()
+{
+    static bool wasActive;
+    bool active = *s_activeDriver == &s_driver;
+    if (active != wasActive) {
+        Log(active ? "online: Quazal's network runs on the Steam driver" : "online: Quazal's network does not use the driver (yet)");
+        wasActive = active;
+    }
+    LONG direct = InterlockedExchange(&s_sentDirect, 0), bcast = InterlockedExchange(&s_sentBroadcast, 0);
+    LONG local = InterlockedExchange(&s_sentLocal, 0), recv = InterlockedExchange(&s_received, 0);
+    LONG sel = InterlockedExchange(&s_selects, 0), drop = InterlockedExchange(&s_dropped, 0);
+    if (direct || bcast || local || recv || drop) {
+        EnterCriticalSection(&s_lock);
+        size_t peers = s_peers.size(), sockets = s_sockets.size();
+        LeaveCriticalSection(&s_lock);
+        Log("online: 10 s: %ld to players, %ld broadcasts, %ld to itself, %ld received, %ld without a socket, "
+            "%ld waits; %u sockets, %u players", direct, bcast, local, recv, drop, sel, (unsigned)sockets, (unsigned)peers);
+    }
+}
+
 static DWORD WINAPI OnlineThread(void*)
 {
     uint64_t lobby = FindLobby();
@@ -572,7 +612,7 @@ static DWORD WINAPI OnlineThread(void*)
         Log("online: no lobby, SteamLAN stays local");
         return 0;
     }
-    DWORD lastMembers = 0, lastMatch = GetTickCount();
+    DWORD lastMembers = 0, lastMatch = GetTickCount(), lastTraffic = GetTickCount();
     for (;;) {
         S.RunCallbacks();
         Pump();
@@ -580,6 +620,10 @@ static DWORD WINAPI OnlineThread(void*)
         if (now - lastMembers >= 1000) {
             lastMembers = now;
             RefreshMembers();
+        }
+        if (now - lastTraffic >= 10000) {
+            lastTraffic = now;
+            LogTraffic();
         }
         // two players who started at the same time each made a lobby: while alone, look for an older one
         if (now - lastMatch >= 15000) {
@@ -613,6 +657,7 @@ void OnlineStart()
     // the transport Network takes when it starts (it has not yet in the main menu)
     QDriver** setting = (QDriver**)G(0x00D77734);
     QDriver* const* active = (QDriver* const*)G(0x00D779FC);
+    s_activeDriver = active;
     if (*active || *setting) {
         Log("online: Quazal already has a socket driver, SteamLAN off");
         return;
