@@ -82,6 +82,30 @@ static uint16_t s_nextPort = 50000;
 
 // Log=1: traffic counters, summed up every 10 seconds
 static volatile LONG s_sentDirect, s_sentBroadcast, s_sentLocal, s_received, s_selects, s_dropped;
+static volatile LONG s_sendFailed, s_lastSendResult, s_queueFull, s_truncated, s_badWire, s_tooBig;
+
+// Log=1: each kind of event logged the first time only (per key), so a fault shows without flooding
+static CRITICAL_SECTION s_diagLock;
+static std::vector<uint64_t> s_seen;
+static bool FirstTime(uint64_t key)
+{
+    EnterCriticalSection(&s_diagLock);
+    bool first = s_seen.size() < 512;
+    for (uint64_t k : s_seen)
+        if (k == key) {
+            first = false;
+            break;
+        }
+    if (first) s_seen.push_back(key);
+    LeaveCriticalSection(&s_diagLock);
+    return first;
+}
+enum DiagKind : uint64_t {
+    DIAG_NO_SOCKET = 1ull << 56, DIAG_FIRST_IN = 2ull << 56, DIAG_FIRST_OUT = 3ull << 56, DIAG_QUEUE_FULL = 4ull << 56,
+    DIAG_TRUNCATED = 5ull << 56, DIAG_BAD_WIRE = 6ull << 56, DIAG_TOO_BIG = 7ull << 56, DIAG_UNSUPPORTED = 8ull << 56,
+    DIAG_WINSOCK_SOCKET = 9ull << 56, DIAG_SEND_FAILED = 10ull << 56, DIAG_IP_CLASH = 11ull << 56,
+};
+static uint64_t Key(DiagKind kind, uint32_t ip, uint16_t port) { return kind | ((uint64_t)ip << 16) | port; }
 
 // ---------------------------------------------------------------- Steam (flat API)
 
@@ -122,7 +146,38 @@ static struct {
     void (__cdecl* IdentitySetSteamID)(SteamNetworkingIdentity*, uint64_t);
     void (__cdecl* IdentityClear)(SteamNetworkingIdentity*);
     void (__cdecl* InitRelay)(void*);
+    int (__cdecl* SessionInfo)(void*, const SteamNetworkingIdentity*, void* info, void* status);
 } S;
+
+// SteamNetConnectionInfo_t (pack 8), the fields read here
+#pragma pack(push, 8)
+struct ConnectionInfo {
+    SteamNetworkingIdentity remote;  // 0
+    int64_t userData;                // 136
+    uint32_t listenSocket;           // 144
+    BYTE addrRemote[18];             // 148
+    uint16_t pad;                    // 166
+    uint32_t popRemote;              // 168
+    uint32_t popRelay;               // 172, non-zero: through a Steam relay
+    int state;                       // 176
+    int endReason;                   // 180
+    char endDebug[128];              // 184
+    char description[128];           // 312
+    int flags;                       // 440
+    uint32_t reserved[63];
+};
+// SteamNetConnectionRealTimeStatus_t, the leading fields
+struct ConnectionStatus {
+    int state;
+    int ping;
+    float qualityLocal, qualityRemote;
+    float outPackets, outBytes, inPackets, inBytes;
+    int sendRate, pendingUnreliable, pendingReliable, sentUnacked;
+    int64_t queueTime;
+    uint32_t reserved[16];
+};
+#pragma pack(pop)
+static_assert(offsetof(ConnectionInfo, state) == 176 && offsetof(ConnectionInfo, flags) == 440, "SteamNetConnectionInfo_t");
 
 static void *s_user, *s_utils, *s_mm, *s_msg;
 static CRITICAL_SECTION s_steamLock;     // Steam calls from the game's network threads and ours
@@ -132,6 +187,8 @@ struct Peer {
     uint64_t steamID;
     uint32_t ip;
     SteamNetworkingIdentity identity;
+    int state;      // Steam connection state last logged
+    bool relayed;
 };
 static std::vector<Peer> s_peers;        // the other lobby members
 
@@ -202,7 +259,8 @@ static bool LoadSteam()
               Load(dll, S.ReleaseMessage, "SteamAPI_SteamNetworkingMessage_t_Release") &
               Load(dll, S.IdentitySetSteamID, "SteamAPI_SteamNetworkingIdentity_SetSteamID64") &
               Load(dll, S.IdentityClear, "SteamAPI_SteamNetworkingIdentity_Clear") &
-              Load(dll, S.InitRelay, "SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess");
+              Load(dll, S.InitRelay, "SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess") &
+              Load(dll, S.SessionInfo, "SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo");
     if (!ok) {
         Log("online: this steam_api.dll is too old (needs SteamNetworkingMessages002), SteamLAN off");
         return false;
@@ -247,31 +305,81 @@ static QSocket* SocketOnPort(uint16_t port)
 
 static void Deliver(uint32_t srcIp, uint16_t srcPort, uint16_t dstPort, const char* data, int size)
 {
+    bool queued = false, full = false;
     EnterCriticalSection(&s_lock);
     if (QSocket* s = SocketOnPort(dstPort)) {
-        if (s->queue.size() >= 256) s->queue.pop_front();
+        if (s->queue.size() >= 256) {
+            s->queue.pop_front();
+            full = true;
+        }
         QSocket::Packet p;
         p.from.ip = srcIp;
         p.from.port = srcPort;
         p.data.assign(data, data + size);
         s->queue.push_back(std::move(p));
         SetEvent(s_arrived);
-    } else {
-        InterlockedIncrement(&s_dropped);  // nobody listens on that port (yet)
+        queued = true;
     }
     LeaveCriticalSection(&s_lock);
+    char t[20];
+    IpText(srcIp, t, sizeof(t));
+    if (!queued) {
+        InterlockedIncrement(&s_dropped);  // nobody listens on that port (yet)
+        if (FirstTime(Key(DIAG_NO_SOCKET, srcIp, dstPort)))
+            Log("online: datagram from %s:%u for port %u, but no socket there (%d bytes)", t, srcPort, dstPort, size);
+        return;
+    }
+    if (full) {
+        InterlockedIncrement(&s_queueFull);
+        if (FirstTime(Key(DIAG_QUEUE_FULL, 0, dstPort)))
+            Log("online: receive queue of port %u full (256), the oldest datagram dropped: Quazal reads too slowly", dstPort);
+    }
+    if (FirstTime(Key(DIAG_FIRST_IN, srcIp, dstPort)))
+        Log("online: first datagram from %s:%u to port %u (%d bytes)", t, srcPort, dstPort, size);
 }
 
-static void SendWire(const SteamNetworkingIdentity* to, uint16_t srcPort, uint16_t dstPort, const char* data, int size)
+static const char* SteamResultText(int r)
+{
+    switch (r) {
+    case 1: return "OK";
+    case 2: return "fail";
+    case 3: return "no connection";
+    case 8: return "invalid parameter";
+    case 10: return "busy";
+    case 16: return "timeout";
+    case 25: return "limit exceeded";
+    case 37: return "connect failed";
+    case 41: return "ignored";
+    default: return "?";
+    }
+}
+
+static void SendWire(const SteamNetworkingIdentity* to, uint32_t toIp, uint16_t srcPort, uint16_t dstPort, const char* data,
+                     int size)
 {
     char buf[2048];
-    if (size < 0 || size > (int)(sizeof(buf) - sizeof(Wire))) return;
+    if (size < 0 || size > (int)(sizeof(buf) - sizeof(Wire))) {
+        InterlockedIncrement(&s_tooBig);
+        if (FirstTime(Key(DIAG_TOO_BIG, 0, dstPort)))
+            Log("online: datagram to port %u too big for the tunnel (%d bytes, at most %u), dropped", dstPort, size,
+                (unsigned)(sizeof(buf) - sizeof(Wire)));
+        return;
+    }
     Wire w = { kMagic, s_myIp, srcPort, dstPort };
     memcpy(buf, &w, sizeof(w));
     if (size) memcpy(buf + sizeof(w), data, size);
     EnterCriticalSection(&s_steamLock);
-    S.SendToUser(s_msg, to, buf, (uint32_t)(sizeof(w) + size), kSendFlags, 0);
+    int r = S.SendToUser(s_msg, to, buf, (uint32_t)(sizeof(w) + size), kSendFlags, 0);
     LeaveCriticalSection(&s_steamLock);
+    if (r != 1) {
+        InterlockedIncrement(&s_sendFailed);
+        InterlockedExchange(&s_lastSendResult, r);
+        if (FirstTime(Key(DIAG_SEND_FAILED, toIp, (uint16_t)r))) {
+            char t[20];
+            IpText(toIp, t, sizeof(t));
+            Log("online: Steam did not take a datagram to %s:%u: result %d (%s)", t, dstPort, r, SteamResultText(r));
+        }
+    }
 }
 
 static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data, int size)
@@ -284,21 +392,25 @@ static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data,
     }
     if (!s_myIp) return;
     EnterCriticalSection(&s_lock);
-    std::vector<SteamNetworkingIdentity> targets;
+    std::vector<std::pair<SteamNetworkingIdentity, uint32_t>> targets;
     for (const Peer& p : s_peers)
-        if (broadcast || p.ip == to->ip) targets.push_back(p.identity);
+        if (broadcast || p.ip == to->ip) targets.push_back(std::make_pair(p.identity, p.ip));
     LeaveCriticalSection(&s_lock);
+    char t[20];
+    IpText(to->ip, t, sizeof(t));
     if (targets.empty() && !broadcast && to->ip != s_myIp && (to->ip >> 24) != 127) {
-        static uint32_t unknown;
-        if (unknown != to->ip) {
-            char t[20];
-            IpText(to->ip, t, sizeof(t));
-            Log("online: no lobby member has the address %s, datagram dropped", t);
-            unknown = to->ip;
-        }
+        InterlockedIncrement(&s_dropped);
+        if (FirstTime(Key(DIAG_NO_SOCKET, to->ip, 0)))
+            Log("online: no lobby member has the address %s (datagram to port %u dropped)", t, to->port);
+        return;
     }
-    for (const SteamNetworkingIdentity& id : targets) {
-        SendWire(&id, srcPort, to->port, data, size);
+    if (!broadcast && !targets.empty() && FirstTime(Key(DIAG_FIRST_OUT, to->ip, to->port)))
+        Log("online: first datagram to %s:%u from port %u (%d bytes)", t, to->port, srcPort, size);
+    if (broadcast && FirstTime(Key(DIAG_FIRST_OUT, 0xFFFFFFFF, to->port)))
+        Log("online: first broadcast to port %u from port %u (%d bytes, %u players)", to->port, srcPort, size,
+            (unsigned)targets.size());
+    for (const auto& target : targets) {
+        SendWire(&target.first, target.second, srcPort, to->port, data, size);
         InterlockedIncrement(&s_sentDirect);
     }
 }
@@ -331,7 +443,11 @@ bool QDriver::Select(SelectEntry* entries, unsigned count, unsigned timeoutMs)
         for (unsigned i = 0; i < count; i++) {
             SelectEntry& e = entries[i];
             e.ready = 0;
-            if (!e.socket) continue;  // made by Winsock before the driver was there
+            if (!e.socket) {  // made by Winsock before the driver was there: never served
+                if (FirstTime(Key(DIAG_WINSOCK_SOCKET, 0, 0)))
+                    Log("online: Quazal waits on a socket made before the driver, it will not get anything");
+                continue;
+            }
             if ((e.want & 1) && !e.socket->queue.empty()) e.ready |= 1;
             if (e.want & 2) e.ready |= 2;  // sending never waits
             any |= e.ready != 0;
@@ -358,9 +474,12 @@ bool QSocket::Open(int type)
 void QSocket::Close()
 {
     EnterCriticalSection(&s_lock);
+    uint16_t was = port;
+    size_t unread = queue.size();
     port = 0;
     queue.clear();
     LeaveCriticalSection(&s_lock);
+    if (was) Log("online: socket on port %u closed (%u datagrams unread)", was, (unsigned)unread);
 }
 
 bool QSocket::Bind(unsigned wanted)
@@ -394,6 +513,11 @@ int QSocket::RecvFrom(char* buf, int len, Endpoint* from, int* got)
     if (from) *from = p.from;
     if (got) *got = n;
     InterlockedIncrement(&s_received);
+    if (n < (int)p.data.size()) {
+        InterlockedIncrement(&s_truncated);
+        if (FirstTime(Key(DIAG_TRUNCATED, 0, port)))
+            Log("online: datagram on port %u cut to Quazal's buffer (%u of %d bytes)", port, (unsigned)p.data.size(), len);
+    }
     return Q_OK;
 }
 
@@ -406,9 +530,15 @@ int QSocket::SendTo(const char* buf, int len, const Endpoint* to, int* sent)
     return Q_OK;
 }
 
-int QSocket::Connect(const Endpoint*) { return Q_ERROR; }
-int QSocket::Recv(char*, int, int*) { return Q_ERROR; }
-int QSocket::Send(const char*, int, int*) { return Q_ERROR; }
+static int Unsupported(const char* what)
+{
+    if (FirstTime(Key(DIAG_UNSUPPORTED, 0, what[0] | (what[1] << 8))))
+        Log("online: Quazal called %s on a socket, which the Steam driver does not carry (TCP)", what);
+    return Q_ERROR;
+}
+int QSocket::Connect(const Endpoint*) { return Unsupported("Connect"); }
+int QSocket::Recv(char*, int, int*) { return Unsupported("Recv"); }
+int QSocket::Send(const char*, int, int*) { return Unsupported("Send"); }
 bool QSocket::SetOption(int) { return true; }
 
 QSocket* QSocket::Destroy(unsigned flags)
@@ -531,14 +661,30 @@ static void RefreshMembers()
         Peer p = {};
         p.steamID = id;
         p.ip = VirtualIp(id);
+        p.state = -1;
         S.IdentityClear(&p.identity);
         S.IdentitySetSteamID(&p.identity, id);
         now.push_back(p);
     }
     EnterCriticalSection(&s_lock);
     std::vector<Peer> before = s_peers;
+    for (Peer& p : now)
+        for (const Peer& b : before)
+            if (b.steamID == p.steamID) {
+                p.state = b.state;
+                p.relayed = b.relayed;
+            }
     s_peers = now;
     LeaveCriticalSection(&s_lock);
+    for (size_t i = 0; i < now.size(); i++)
+        for (size_t j = i + 1; j < now.size(); j++)
+            if (now[i].ip == now[j].ip && FirstTime(Key(DIAG_IP_CLASH, now[i].ip, 0))) {
+                char t[20];
+                IpText(now[i].ip, t, sizeof(t));
+                Log("online: two players got the same address %s, one of them cannot be reached", t);
+            }
+    for (const Peer& p : now)
+        if (p.ip == s_myIp && FirstTime(Key(DIAG_IP_CLASH, p.ip, 1))) Log("online: a player got this player's own address");
     for (const Peer& p : now) {
         bool known = false;
         for (const Peer& b : before) known |= b.steamID == p.steamID;
@@ -549,7 +695,7 @@ static void RefreshMembers()
         EnterCriticalSection(&s_steamLock);
         S.AcceptSession(s_msg, &p.identity);
         LeaveCriticalSection(&s_steamLock);
-        SendWire(&p.identity, 0, 0, NULL, 0);  // hello: our first message opens the session both ways
+        SendWire(&p.identity, p.ip, 0, 0, NULL, 0);  // hello: our first message opens the session both ways
     }
     for (const Peer& b : before) {
         bool still = false;
@@ -571,13 +717,76 @@ static void Pump()
         if (n <= 0) return;
         for (int i = 0; i < n; i++) {
             const SteamNetworkingMessage_t* m = msgs[i];
-            if (m->size >= (int)sizeof(Wire)) {
-                Wire w;
-                memcpy(&w, m->data, sizeof(w));
-                if (w.magic == kMagic && w.dstPort)
-                    Deliver(w.srcIp, w.srcPort, w.dstPort, (const char*)m->data + sizeof(w), m->size - (int)sizeof(w));
+            Wire w = {};
+            if (m->size >= (int)sizeof(Wire)) memcpy(&w, m->data, sizeof(w));
+            if (w.magic != kMagic) {
+                InterlockedIncrement(&s_badWire);
+                if (FirstTime(Key(DIAG_BAD_WIRE, 0, 0)))
+                    Log("online: message from Steam that is not ours (%d bytes): other version of the fix?", m->size);
+            } else if (!w.dstPort) {
+                char t[20];
+                IpText(w.srcIp, t, sizeof(t));
+                if (FirstTime(Key(DIAG_FIRST_IN, w.srcIp, 0))) Log("online: hello from %s, the Steam session is open", t);
+            } else {
+                Deliver(w.srcIp, w.srcPort, w.dstPort, (const char*)m->data + sizeof(w), m->size - (int)sizeof(w));
             }
             S.ReleaseMessage(msgs[i]);
+        }
+    }
+}
+
+static const char* StateText(int s)
+{
+    switch (s) {
+    case 0: return "no session";
+    case 1: return "connecting";
+    case 2: return "finding a route";
+    case 3: return "connected";
+    case 4: return "closed by the other player";
+    case 5: return "lost (problem on this side)";
+    default: return "?";
+    }
+}
+
+// Steam's connection to each player: logged when it changes, with ping and route every 10 s (full)
+static void PeerConnections(bool full)
+{
+    EnterCriticalSection(&s_lock);
+    std::vector<Peer> peers = s_peers;
+    LeaveCriticalSection(&s_lock);
+    for (Peer& p : peers) {
+        ConnectionInfo info;
+        ConnectionStatus status;
+        memset(&info, 0, sizeof(info));
+        memset(&status, 0, sizeof(status));
+        EnterCriticalSection(&s_steamLock);
+        int state = S.SessionInfo(s_msg, &p.identity, &info, &status);
+        LeaveCriticalSection(&s_steamLock);
+        bool infoOk = info.state == state;  // the structure read as laid out above
+        bool relayed = infoOk && info.popRelay != 0;
+        char t[20];
+        IpText(p.ip, t, sizeof(t));
+        if (state != p.state || relayed != p.relayed) {
+            if ((state == 4 || state == 5) && infoOk) {
+                info.endDebug[sizeof(info.endDebug) - 1] = 0;
+                Log("online: connection to %s %s, reason %d: %s", t, StateText(state), info.endReason, info.endDebug);
+            } else if (state == 3) {
+                Log("online: connection to %s connected, %s, ping %d ms", t, infoOk ? (relayed ? "through a Steam relay" : "direct") : "route unknown",
+                    status.ping);
+            } else {
+                Log("online: connection to %s: %s", t, StateText(state));
+            }
+            EnterCriticalSection(&s_lock);
+            for (Peer& q : s_peers)
+                if (q.steamID == p.steamID) {
+                    q.state = state;
+                    q.relayed = relayed;
+                }
+            LeaveCriticalSection(&s_lock);
+        } else if (full && state == 3) {
+            Log("online: %s: ping %d ms, quality %.0f%%/%.0f%%, out %.0f/s, in %.0f/s, %d bytes waiting to be sent", t,
+                status.ping, status.qualityLocal * 100, status.qualityRemote * 100, status.outPackets, status.inPackets,
+                status.pendingUnreliable + status.pendingReliable);
         }
     }
 }
@@ -603,6 +812,77 @@ static void LogTraffic()
         Log("online: 10 s: %ld to players, %ld broadcasts, %ld to itself, %ld received, %ld without a socket, "
             "%ld waits; %u sockets, %u players", direct, bcast, local, recv, drop, sel, (unsigned)sockets, (unsigned)peers);
     }
+    LONG failed = InterlockedExchange(&s_sendFailed, 0), full = InterlockedExchange(&s_queueFull, 0);
+    LONG cut = InterlockedExchange(&s_truncated, 0), bad = InterlockedExchange(&s_badWire, 0), big = InterlockedExchange(&s_tooBig, 0);
+    if (failed || full || cut || bad || big)
+        Log("online: 10 s PROBLEMS: %ld sends refused by Steam (last result %ld), %ld dropped from full queues, %ld cut short, "
+            "%ld foreign messages, %ld too big", failed, s_lastSendResult, full, cut, bad, big);
+    PeerConnections(true);
+}
+
+// ---------------------------------------------------------------- crashes and the game's debug text
+
+static LPTOP_LEVEL_EXCEPTION_FILTER s_prevFilter;
+
+static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep)
+{
+    const EXCEPTION_RECORD* r = ep->ExceptionRecord;
+    HMODULE mod = NULL;
+    char name[MAX_PATH] = "?";
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)r->ExceptionAddress, &mod);
+    if (mod) GetModuleFileNameA(mod, name, sizeof(name));
+    const char* file = strrchr(name, '\\');
+    Log("CRASH: exception %08lX at %p (%s+0x%lX), thread %lu, access %s %p", r->ExceptionCode, r->ExceptionAddress,
+        file ? file + 1 : name, (unsigned long)((BYTE*)r->ExceptionAddress - (BYTE*)mod), GetCurrentThreadId(),
+        r->NumberParameters >= 2 ? (r->ExceptionInformation[0] ? "write" : "read") : "-",
+        r->NumberParameters >= 2 ? (void*)r->ExceptionInformation[1] : NULL);
+    const CONTEXT* c = ep->ContextRecord;
+    Log("CRASH: eax %08lX ebx %08lX ecx %08lX edx %08lX esi %08lX edi %08lX ebp %08lX esp %08lX", c->Eax, c->Ebx, c->Ecx,
+        c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+    return s_prevFilter ? s_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+// OutputDebugStringA through the import slot: Quazal's log device (LogDeviceDebugOutput, 0xAF7700) and the
+// game's own debug text, into the log; at most 100 lines per 10 seconds
+typedef void(WINAPI* OutputDebugStringA_t)(LPCSTR);
+static OutputDebugStringA_t s_origOds;
+static void WINAPI Hook_OutputDebugStringA(LPCSTR text)
+{
+    s_origOds(text);
+    if (!text) return;
+    static DWORD windowStart;
+    static LONG lines, skipped;
+    DWORD now = GetTickCount();
+    if (now - windowStart > 10000) {
+        if (skipped) Log("debug text: %ld more lines left out", skipped);
+        windowStart = now;
+        lines = skipped = 0;
+    }
+    if (InterlockedIncrement(&lines) > 100) {
+        InterlockedIncrement(&skipped);
+        return;
+    }
+    char line[512];
+    lstrcpynA(line, text, sizeof(line));
+    size_t n = strlen(line);
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+    if (n) Log("debug text: %s", line);
+}
+
+static void InstallDiagnostics()
+{
+    s_prevFilter = SetUnhandledExceptionFilter(CrashFilter);
+    void** slot = (void**)G(0x00B9B174);  // KERNEL32!OutputDebugStringA import
+    HMODULE k32 = GetModuleHandleA("kernel32.dll");
+    if (k32 && *slot == (void*)GetProcAddress(k32, "OutputDebugStringA")) {
+        s_origOds = (OutputDebugStringA_t)*slot;
+        void* hook = (void*)Hook_OutputDebugStringA;
+        WriteMemory(slot, &hook, sizeof(hook));
+        Log("online: crash handler set, the game's debug text goes to the log");
+    } else {
+        Log("online: crash handler set; OutputDebugStringA import not as expected, debug text not logged");
+    }
 }
 
 static DWORD WINAPI OnlineThread(void*)
@@ -620,6 +900,7 @@ static DWORD WINAPI OnlineThread(void*)
         if (now - lastMembers >= 1000) {
             lastMembers = now;
             RefreshMembers();
+            PeerConnections(false);
         }
         if (now - lastTraffic >= 10000) {
             lastTraffic = now;
@@ -653,6 +934,7 @@ void OnlineStart()
     }
     InitializeCriticalSection(&s_lock);
     InitializeCriticalSection(&s_steamLock);
+    InitializeCriticalSection(&s_diagLock);
     s_arrived = CreateEventA(NULL, FALSE, FALSE, NULL);
     // the transport Network takes when it starts (it has not yet in the main menu)
     QDriver** setting = (QDriver**)G(0x00D77734);
@@ -681,5 +963,6 @@ void OnlineStart()
     char t[20];
     IpText(s_myIp, t, sizeof(t));
     Log("online: SteamLAN on, this player is %s, socket driver set", t);
+    if (g_cfg.log) InstallDiagnostics();
     CloseHandle(CreateThread(NULL, 0, OnlineThread, NULL, 0, NULL));
 }
