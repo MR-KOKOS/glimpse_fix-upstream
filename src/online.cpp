@@ -1027,6 +1027,7 @@ static char s_appliedText[170];      // "S|" or "M|" (in a LAN session or not) a
 static bool s_inSession;
 static char s_warning[160];          // a player with other rules or another version
 static char s_presence[128];         // Steam status text
+static bool s_noLaa;                 // 2 GB address space only: Steam's libraries make running out likelier
 
 static void ShowBanner(DWORD ms)
 {
@@ -1045,6 +1046,7 @@ static void ShowBanner(DWORD ms)
     if (s_inSession && s_ownPhotoMode)
         strcpy_s(s_bannerLines[s_bannerCount++], "Photo mode: free camera only, the race goes on");
     if (s_warning[0]) strcpy_s(s_bannerLines[s_bannerCount++], s_warning);
+    else if (s_noLaa) strcpy_s(s_bannerLines[s_bannerCount++], "WARNING: SplitSecond.exe without LAA flag - run setlaa.exe, the game may run out of memory");
     s_bannerUntil = GetTickCount() + ms;
     _snprintf_s(s_presence, _TRUNCATE, "LAN over Steam: %s (%u/8)", s_lobbyName, (unsigned)players);
     LeaveCriticalSection(&s_showLock);
@@ -1166,7 +1168,15 @@ void OnlineFrame()
 {
     if (!s_started) return;
     EnterCriticalSection(&s_lock);
-    bool active = !s_sockets.empty();  // Quazal has sockets only while the LAN mode is in use
+    // Quazal has sockets only while the LAN mode is in use; between closing the search socket and making
+    // the session's there is a gap, so the session ends only 3 s after the last socket went
+    static DWORD lastSockets;
+    static bool hadSockets;
+    if (!s_sockets.empty()) {
+        lastSockets = GetTickCount();
+        hadSockets = true;
+    }
+    bool active = hadSockets && GetTickCount() - lastSockets < 3000;
     LeaveCriticalSection(&s_lock);
     EnterCriticalSection(&s_showLock);
     Rules target = active ? (s_lobbyRulesKnown ? s_lobbyRules : Rules()) : s_own;  // all off until the rules are known
@@ -1429,6 +1439,11 @@ void OnlineStart()
     }
     if (!LoadSteam()) return;
     s_myIp = VirtualIp(s_mySteamID);
+    MEMORYSTATUSEX ms = { sizeof(ms) };
+    GlobalMemoryStatusEx(&ms);
+    s_noLaa = ms.ullTotalVirtual <= 0x80000000ull;
+    if (s_noLaa) Log("online: WARNING: no 4 GB address space (SplitSecond.exe without LAA flag); with Steam's libraries "
+                     "loaded as well the game may run out of memory when loading - run setlaa.exe on SplitSecond.exe");
 
     s_origIoctl = (WSAIoctl_t)*ioctlSlot;
     void* hook = (void*)Hook_WSAIoctl;

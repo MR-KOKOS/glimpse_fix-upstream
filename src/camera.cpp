@@ -305,6 +305,7 @@ static void ChangeState(BYTE* self, bool raceCamera)
 // player's car, which tells it among the cars of a network race (boost.cpp)
 static float s_raceCameraPos[3], s_raceCameraFwd[3];
 static DWORD s_raceCameraPosTick;
+static bool s_raceCameraPosSeen;
 static void NoteRaceCamera(BYTE* self)
 {
     __try {
@@ -312,14 +313,15 @@ static void NoteRaceCamera(BYTE* self)
         if (!state) return;
         memcpy(s_raceCameraPos, state + 4, sizeof(s_raceCameraPos));     // +4 position
         memcpy(s_raceCameraFwd, state + 0x34, sizeof(s_raceCameraFwd));  // +0x34 forward axis
-        s_raceCameraPosTick = GetTickCount() | 1;
+        s_raceCameraPosTick = GetTickCount();
+        s_raceCameraPosSeen = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
 
 bool RaceCameraPose(float* pos, float* fwd)
 {
-    if (!s_raceCameraPosTick || GetTickCount() - s_raceCameraPosTick > 500) return false;
+    if (!s_raceCameraPosSeen || GetTickCount() - s_raceCameraPosTick > 500) return false;
     memcpy(pos, s_raceCameraPos, sizeof(s_raceCameraPos));
     memcpy(fwd, s_raceCameraFwd, sizeof(s_raceCameraFwd));
     return true;
