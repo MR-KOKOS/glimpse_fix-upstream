@@ -206,6 +206,54 @@ float BoostBlurScale()
     return 1.0f + (g_cfg.boostMotionBlur - 1.0f) * s_boostBlend;
 }
 
+// This player's place in the player and car lists. In a single player race it is the first. In a network
+// race (SteamLAN) the lists are in the session's order on every computer, so on a guest the first car is
+// the host's, a copy that the host's updates overwrite. The race camera follows this player's car: the
+// car straight ahead of it, nearest to its line of sight, is the one; it has to stay the same for half
+// a second and is then kept for the race (until the cars change).
+static int LocalIndex(BYTE* logic)
+{
+    static int locked = -1, candidate = -1, seen;
+    static BYTE* lockedBody;
+    if (!g_cfg.steamLan || !OnlineSession()) {
+        locked = -1;
+        return 0;
+    }
+    int count = *(int*)(logic + 0x18);
+    BYTE* p0 = Player(logic, 0);
+    if (count <= 1 || !p0) return 0;
+    if (locked >= 0 && locked < count && Chassis(p0, locked) == lockedBody) return locked;
+    float cam[3], fwd[3];
+    if (!RaceCameraPose(cam, fwd)) return 0;
+    int best = -1;
+    float bestScore = 1e30f;
+    for (int i = 0; i < count && i < 16; i++) {
+        BYTE* body = Chassis(p0, i);
+        if (!body) continue;
+        float* pos = (float*)(body + 0x110);
+        float d[3] = { pos[0] - cam[0], pos[1] - cam[1], pos[2] - cam[2] };
+        float along = Dot(d, fwd);
+        if (along < 1.0f || along > 40.0f) continue;  // in front of the camera, at chase or bumper distance
+        float off[3] = { d[0] - fwd[0] * along, d[1] - fwd[1] * along, d[2] - fwd[2] * along };
+        float score = sqrtf(Dot(off, off)) + 0.05f * along;
+        if (score < bestScore) {
+            bestScore = score;
+            best = i;
+        }
+    }
+    if (best < 0 || bestScore > 6.0f) return 0;
+    if (best != candidate) {
+        candidate = best;
+        seen = 0;
+    }
+    if (++seen >= 30) {
+        locked = best;
+        lockedBody = Chassis(p0, best);
+        Log("boost: in this network race this player's car is number %d of %d", best, count);
+    }
+    return best;
+}
+
 void BoostTick()
 {
     static DWORD lastTick;
@@ -224,7 +272,8 @@ void BoostTick()
 
     __try {
         BYTE* logic = GameLogic();
-        BYTE* player = logic ? Player(logic, 0) : NULL;
+        int me = logic ? LocalIndex(logic) : 0;
+        BYTE* player = logic ? Player(logic, me) : NULL;
         if (player) {
             const WORD fill = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
             if (g_cfg.powerFill && (buttons & fill) == fill && (pressed & fill)) {
@@ -233,7 +282,7 @@ void BoostTick()
                     Log("power bar filled");
                 }
             }
-            BYTE* body = Chassis(player, 0);
+            BYTE* body = Chassis(player, me);
             if (body && g_cfg.boost) {
                 float* pos = (float*)(body + 0x110);
                 bool moved = pos[0] != lastPos[0] || pos[1] != lastPos[1] || pos[2] != lastPos[2];

@@ -300,11 +300,36 @@ static void ChangeState(BYTE* self, bool raceCamera)
     memcpy(r->set, state + kPose, kPoseLen);
 }
 
+// where the game's race camera is (before the photo mode or the FOV change it): it follows this
+// player's car, which tells it among the cars of a network race (boost.cpp)
+static float s_raceCameraPos[3], s_raceCameraFwd[3];
+static DWORD s_raceCameraPosTick;
+static void NoteRaceCamera(BYTE* self)
+{
+    __try {
+        BYTE* state = *(BYTE**)(self + 4);
+        if (!state) return;
+        memcpy(s_raceCameraPos, state + 4, sizeof(s_raceCameraPos));     // +4 position
+        memcpy(s_raceCameraFwd, state + 0x34, sizeof(s_raceCameraFwd));  // +0x34 forward axis
+        s_raceCameraPosTick = GetTickCount() | 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+bool RaceCameraPose(float* pos, float* fwd)
+{
+    if (!s_raceCameraPosTick || GetTickCount() - s_raceCameraPosTick > 500) return false;
+    memcpy(pos, s_raceCameraPos, sizeof(s_raceCameraPos));
+    memcpy(fwd, s_raceCameraFwd, sizeof(s_raceCameraFwd));
+    return true;
+}
+
 static void __fastcall Hook_ChaseUpdate(BYTE* self, void*, void* frame)
 {
     s_raceCamera = s_anyCamera = GetTickCount() | 1;
     RestoreState(self);
     s_origChase(self, frame);
+    NoteRaceCamera(self);
     ChangeState(self, true);
 }
 
@@ -313,6 +338,7 @@ static void __fastcall Hook_BumperUpdate(BYTE* self, void*, void* frame)
     s_raceCamera = s_anyCamera = GetTickCount() | 1;
     RestoreState(self);
     s_origBumper(self, frame);
+    NoteRaceCamera(self);
     ChangeState(self, true);
 }
 

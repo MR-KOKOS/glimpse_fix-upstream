@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <deque>
+#include <string>
 #include <vector>
 
 // ---------------------------------------------------------------- Quazal's SocketDriver interface
@@ -1022,7 +1023,7 @@ static CRITICAL_SECTION s_showLock;
 static char s_bannerLines[4][192];
 static int s_bannerCount;
 static DWORD s_bannerUntil;
-static char s_appliedText[160];      // what this player applies, encoded (member data)
+static char s_appliedText[170];      // "S|" or "M|" (in a LAN session or not) and what applies (member data)
 static bool s_inSession;
 static char s_warning[160];          // a player with other rules or another version
 static char s_presence[128];         // Steam status text
@@ -1081,9 +1082,8 @@ static void SyncRules()
     if (s_lobbyRulesKnown) Encode(s_lobbyRules, before, sizeof(before));
     s_lobbyRules = r;
     s_lobbyRulesKnown = known;
-    char applied[160];
+    char applied[170];
     strcpy_s(applied, s_appliedText);
-    bool session = s_inSession;
     LeaveCriticalSection(&s_showLock);
     if (strcmp(now, before)) {
         char d[160];
@@ -1094,7 +1094,7 @@ static void SyncRules()
 
     // own report
     static uint64_t reportedLobby;
-    static char reported[160];
+    static char reported[170];
     if (reportedLobby != s_lobby) {
         S.SetMemberData(s_mm, s_lobby, "glimpse_ver", GLIMPSE_VERSION);
         reportedLobby = s_lobby;
@@ -1119,13 +1119,28 @@ static void SyncRules()
             if (FirstTime(Key(DIAG_IP_CLASH, p.ip, 2))) Log("online: player %s runs glimpse_fix %s, this one %s", t, ver, GLIMPSE_VERSION);
             _snprintf_s(warning, _TRUNCATE, "Note: player %s runs glimpse_fix %s (you: %s)", t, ver, GLIMPSE_VERSION);
         }
-        if (session && known && theirs && *theirs && strcmp(theirs, now)) {
-            Rules other;
-            char d[160] = "?";
-            if (Decode(theirs, &other)) Describe(other, d, sizeof(d));
-            if (FirstTime(Key(DIAG_IP_CLASH, p.ip, 3))) Log("online: player %s applies other settings than the lobby: %s", t, d);
-            _snprintf_s(warning, _TRUNCATE, "WARNING: player %s plays with other settings: %s", t, d);
+        if (!theirs || !*theirs) continue;
+        bool theirSession = theirs[0] == 'S' && theirs[1] == '|';
+        const char* theirRules = theirs[0] && theirs[1] == '|' ? theirs + 2 : theirs;
+        Rules other;
+        char d[160] = "?";
+        if (Decode(theirRules, &other)) Describe(other, d, sizeof(d));
+        // every change of what a player applies goes to the log
+        static std::vector<std::pair<uint64_t, std::string>> last;
+        bool changed = true;
+        for (auto& l : last)
+            if (l.first == p.steamID) {
+                changed = l.second != theirs;
+                l.second = theirs;
+            }
+        if (changed) {
+            bool listed = false;
+            for (auto& l : last) listed |= l.first == p.steamID;
+            if (!listed) last.push_back(std::make_pair(p.steamID, std::string(theirs)));
+            Log("online: player %s %s: %s", t, theirSession ? "in the LAN session" : "not in a LAN session", d);
         }
+        if (theirSession && known && strcmp(theirRules, now))
+            _snprintf_s(warning, _TRUNCATE, "WARNING: player %s plays with other settings: %s", t, d);
     }
     EnterCriticalSection(&s_showLock);
     bool changed = strcmp(warning, s_warning) != 0;
@@ -1135,6 +1150,15 @@ static void SyncRules()
 }
 
 static volatile bool s_started;
+
+bool OnlineSession()
+{
+    if (!s_started) return false;
+    EnterCriticalSection(&s_showLock);
+    bool in = s_inSession;
+    LeaveCriticalSection(&s_showLock);
+    return in;
+}
 
 // game thread, every frame (OnInputFrame): the lobby rules in a LAN session, the own INI outside
 void OnlineFrame()
@@ -1162,10 +1186,13 @@ void OnlineFrame()
         strcpy_s(applied, enc);
         appliedPhoto = photo;
         first = false;
-        EnterCriticalSection(&s_showLock);
-        strcpy_s(s_appliedText, enc);
-        LeaveCriticalSection(&s_showLock);
     }
+    // reported to the others: in a session ("S|") or not ("M|"), and what applies
+    char report[170];
+    _snprintf_s(report, _TRUNCATE, "%s|%s", active ? "S" : "M", enc);
+    EnterCriticalSection(&s_showLock);
+    strcpy_s(s_appliedText, report);
+    LeaveCriticalSection(&s_showLock);
     if (active != wasActive && active) ShowBanner(10000);
 }
 

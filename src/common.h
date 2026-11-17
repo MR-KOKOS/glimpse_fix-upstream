@@ -89,7 +89,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "1.8.0-lan.2"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "1.8.0-lan.3"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -143,6 +143,8 @@ void CameraTick();       // per input frame: zoom keys, HUD key, photo mode
 void ApplyExplosionShake();  // per input frame: ExplosionShakeOff=1
 bool SinglePlayerRace(); // a race camera runs on a single screen (not paused)
 bool CameraBlocksPad();  // photo mode drives the camera with the pad: the game sees it idle
+bool RaceCameraPose(float* pos, float* fwd);  // the game's race camera, updated in the last half second
+bool OnlineSession();      // SteamLAN: Quazal's LAN mode is in use (online.cpp)
 
 // savediag.cpp
 void WatchSaveFiles();  // Log=1: log every change of the profile files
