@@ -78,7 +78,7 @@ static Option kOptions[] = {
     // Gameplay
     // Camera
     { "Camera", "FOV", RANGE, "Field of view", "Race cameras (chase and bumper) as a factor of the game's own; the game still widens the view with speed.", "1.0", 0, 0.5, 2, 0.05, 2 },
-    { "Camera", "UltrawideFix", BOOL_OPT, "Ultrawide fix", "On screens wider than 16:9 the picture keeps the height of 16:9 instead of losing the top and bottom.", "1" },
+    { "Camera", "UltrawideFix", CHOICE, "Ultrawide fix", "Screens wider than 16:9. Race cameras: they keep the picture height of 16:9 instead of losing the top and bottom. Full (experimental): every camera does, and menus, HUD and result screens are shown at 16:9 in the centre.", "1", "0|Off;1|Race cameras;2|Full (experimental)" },
     { "Camera", "CameraShake", RANGE, "Camera shake", "How much the race cameras (chase and bumper) shake on bumps and hits. Lower values smooth their rotation and help against motion sickness; turns follow a little later.", "1.0", 0, 0, 1, 0.05, 2 },
     { "Camera", "ExplosionShakeOff", BOOL_OPT, "No explosion shake", "On: the camera no longer shakes when explosions, collapsing buildings and power plays go off nearby.", "0" },
     { "Camera", "ZoomKeys", BOOL_OPT, "Zoom keys", "Zoom the race camera while a key is held.", "0" },

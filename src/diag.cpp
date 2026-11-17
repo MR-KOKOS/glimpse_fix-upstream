@@ -528,6 +528,7 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         void** vt = *(void***)*out;
         if (g_cfg.log || g_cfg.frameRate == 60) PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
         s_device = *out;
+        if (g_cfg.ultrawideFix == 2) UltrawideDeviceCreated(*out, pp, focus);
         if (g_cfg.anisotropy > 1) {
             PatchVtable(vt, 65, (void*)Hook_SetTexture, (void**)&s_origSetTexture);
             Log("anisotropic filtering %dx", g_cfg.anisotropy);

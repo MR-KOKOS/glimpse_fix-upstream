@@ -13,6 +13,7 @@
 // The view setup (0x4B8DD0) keeps the horizontal field of view whatever the screen's aspect ratio, so
 // wider screens than 16:9 lose picture at the top and bottom. UltrawideFix widens the horizontal FOV
 // until the vertical one matches 16:9 again (single screen only, split screen keeps the game's view).
+// UltrawideFix=2 (ultrawide.cpp) corrects the game's aspect instead; the hooks stay, in case it falls back to 1.
 //
 // The near plane is 1 m (0x4B8DD0 takes the state's own +0x64 instead while the byte at +0x60 is set; the
 // projection is built from it at 0x50C0D0). With a much wider FOV the bottom of the picture looks down at
@@ -142,7 +143,7 @@ static void ScaleFov(BYTE* state, float factor, bool ultrawide)
     float stock = *fov;
     if (!(stock > 0.01f && stock < 3.0f)) return;
     float base = stock, f = stock * factor;
-    if (ultrawide && g_cfg.ultrawideFix && Viewports() == 1) {
+    if (ultrawide && g_cfg.ultrawideFix == 1 && Viewports() == 1) {
         float wide = ScreenAspect() / (16.0f / 9);
         if (wide > 1.01f) {
             base = 2.0f * atanf(tanf(base * 0.5f) * wide);
