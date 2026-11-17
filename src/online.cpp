@@ -735,6 +735,23 @@ static void Pump()
     }
 }
 
+// what kind of address Steam talks to, without the address itself (logs end up in public issues)
+static const char* AddressKind(const BYTE* addr18)
+{
+    static const BYTE v4mapped[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF };
+    if (memcmp(addr18, v4mapped, 12)) {
+        static const BYTE zero[16] = {};
+        return memcmp(addr18, zero, 16) ? "IPv6" : "no address";
+    }
+    BYTE a = addr18[12], b = addr18[13];
+    if (a == 10 || (a == 172 && (b & 0xF0) == 16) || (a == 192 && b == 168)) return "home network (private address)";
+    if (a == 100 && (b & 0xC0) == 64) return "carrier NAT (shared address)";
+    if (a == 169 && b == 254) return "link-local";
+    if (a == 127) return "this computer";
+    if (a == 0) return "no address";
+    return "internet (public address)";
+}
+
 static const char* StateText(int s)
 {
     switch (s) {
@@ -771,8 +788,9 @@ static void PeerConnections(bool full)
                 info.endDebug[sizeof(info.endDebug) - 1] = 0;
                 Log("online: connection to %s %s, reason %d: %s", t, StateText(state), info.endReason, info.endDebug);
             } else if (state == 3) {
-                Log("online: connection to %s connected, %s, ping %d ms", t, infoOk ? (relayed ? "through a Steam relay" : "direct") : "route unknown",
-                    status.ping);
+                Log("online: connection to %s connected, %s, other side: %s, ping %d ms", t,
+                    infoOk ? (relayed ? "through a Steam relay" : "direct") : "route unknown",
+                    infoOk ? AddressKind(info.addrRemote) : "?", status.ping);
             } else {
                 Log("online: connection to %s: %s", t, StateText(state));
             }
