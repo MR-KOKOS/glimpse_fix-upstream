@@ -83,8 +83,10 @@ static void LoadConfig()
     g_cfg.testFeed = IniBool("Debug", "TestFeed", false);
     g_cfg.profile = IniBool("Debug", "Profile", false);
     if (g_cfg.log) {
-        char path[MAX_PATH];
+        char path[MAX_PATH], prev[MAX_PATH];
         ModulePath(path, "SplitSecondPad.log");
+        ModulePath(prev, "SplitSecondPad.prev.log");
+        MoveFileExA(path, prev, MOVEFILE_REPLACE_EXISTING);  // the last run's log stays for one more start
         s_log = _fsopen(path, "w", _SH_DENYWR);
     }
     {
