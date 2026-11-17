@@ -62,6 +62,7 @@ static float s_photoZoom = 1.0f;  // zoom keys in photo mode
 
 // photo mode
 static bool s_photo;              // on
+static bool s_photoFrozen;        // holding the world still (not in a network race)
 static bool s_photoPose;          // the free pose has been taken from the camera
 static float s_pos[3];
 static float s_axis[3][3];        // left, up, forward (the state's axes)
@@ -440,7 +441,7 @@ static void __fastcall Hook_RespotUpdate(BYTE* self, void*, float dt)
     bool human = false;
     int state = RaceState(self, &human);
     if (state == 1 || state == 2) s_wreckSeen = GetTickCount() | 1;
-    if (s_photo) {
+    if (s_photo && s_photoFrozen) {  // in a network race the respot goes on as usual
         static DWORD logged;
         if (GetTickCount() - logged > 5000) Log("photo mode: respot held");
         logged = GetTickCount();
@@ -701,10 +702,14 @@ static void LookPhoto(float dt, const XINPUT_GAMEPAD& pad, bool padOk)
     }
 }
 
+// In a network race (SteamLAN session) the world is not held still (s_photoFrozen false): the others
+// race on and this player's simulation has to keep up with them. The photo mode is then a free camera
+// with the HUD hidden, like the game's own pause in an online race; the car rolls on without input.
 static void SetPhoto(bool on, const char* why)
 {
     if (on == s_photo) return;
-    Log("photo mode %s (%s)", on ? "on" : "off", why);
+    if (on) s_photoFrozen = !(g_cfg.steamLan && OnlineSession());
+    Log("photo mode %s (%s)%s", on ? "on" : "off", why, on && !s_photoFrozen ? ", network race: the world keeps running" : "");
     s_photo = on;
     // the look stays for the next photo; outside the photo mode the game's own
     static float look[4] = { 1.0f, 1.0f, 0.0f, 15.0f };
@@ -720,17 +725,21 @@ static void SetPhoto(bool on, const char* why)
         memset(s_otherSeen, 0, sizeof(s_otherSeen));
         s_photoPose = false;
         s_photoZoom = 1.0f;
-        s_slowOn = *kSlowMotionOn;
-        s_slowSpeed = *kSlowMotionSpeed;
-        *kSlowMotionSpeed = 0.000001f;
-        *kSlowMotionOn = 1;
+        if (s_photoFrozen) {
+            s_slowOn = *kSlowMotionOn;
+            s_slowSpeed = *kSlowMotionSpeed;
+            *kSlowMotionSpeed = 0.000001f;
+            *kSlowMotionOn = 1;
+        }
         SetHud(false);
         SetOverlays(false);
-        PauseGameSound(true);
+        if (s_photoFrozen) PauseGameSound(true);
     } else {
-        *kSlowMotionOn = s_slowOn;
-        *kSlowMotionSpeed = s_slowSpeed;
-        PauseGameSound(false);
+        if (s_photoFrozen) {
+            *kSlowMotionOn = s_slowOn;
+            *kSlowMotionSpeed = s_slowSpeed;
+            PauseGameSound(false);
+        }
         s_padHeld = true;
         SetHud(!s_hudHidden);
         SetOverlays(true);

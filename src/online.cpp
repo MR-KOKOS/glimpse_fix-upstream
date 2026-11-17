@@ -680,8 +680,8 @@ static bool Create()
 //
 // In a LAN session the extras that change the race (boost, power bar fill, AI boost, wreck time)
 // follow the rules of the lobby, set by its owner from the owner's own INI: everybody has the same,
-// what the lobby does not allow is off for all. The photo mode is off in a session (it holds this
-// player's simulation still while the others race on). Outside a session the own INI applies.
+// what the lobby does not allow is off for all. The photo mode is a free camera in a session and does
+// not hold the world still (camera.cpp), since the others race on. Outside a session the own INI applies.
 
 struct Rules {
     bool boost = false, powerFill = false, aiBoost = false, aiUnlimited = false, aiStraight = true, aiChaos = false;
@@ -1042,7 +1042,8 @@ static void ShowBanner(DWORD ms)
     _snprintf_s(s_bannerLines[1], _TRUNCATE, "%s: %s", s_inSession ? "Rules of this lobby, for everybody" : "Your settings (no LAN session)",
                 rules);
     s_bannerCount = 2;
-    if (s_inSession) strcpy_s(s_bannerLines[s_bannerCount++], "Photo mode is off in a LAN session");
+    if (s_inSession && s_ownPhotoMode)
+        strcpy_s(s_bannerLines[s_bannerCount++], "Photo mode: free camera only, the race goes on");
     if (s_warning[0]) strcpy_s(s_bannerLines[s_bannerCount++], s_warning);
     s_bannerUntil = GetTickCount() + ms;
     _snprintf_s(s_presence, _TRUNCATE, "LAN over Steam: %s (%u/8)", s_lobbyName, (unsigned)players);
@@ -1172,7 +1173,7 @@ void OnlineFrame()
     bool wasActive = s_inSession;
     s_inSession = active;
     LeaveCriticalSection(&s_showLock);
-    bool photo = active ? false : s_ownPhotoMode;
+    bool photo = s_ownPhotoMode;  // in a session a free camera only, the world keeps running (camera.cpp)
     char enc[160];
     Encode(target, enc, sizeof(enc));
     static char applied[160];
@@ -1182,7 +1183,7 @@ void OnlineFrame()
         char d[160];
         Describe(target, d, sizeof(d));
         Log("online: %s: %s%s", active ? "LAN session, the lobby rules apply" : "no LAN session, own settings apply", d,
-            active && s_ownPhotoMode ? "; photo mode off" : "");
+            active && s_ownPhotoMode ? "; photo mode as a free camera, the world keeps running" : "");
         strcpy_s(applied, enc);
         appliedPhoto = photo;
         first = false;
