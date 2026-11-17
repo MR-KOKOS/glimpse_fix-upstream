@@ -851,5 +851,6 @@ void ApplyGamePatches()
     if (mask & PATCH_CAMERA) PatchCamera();
     if (mask & PATCH_CAMERA) PatchDepthOfField();
     if (g_cfg.profile && CurrentBuild() == BUILD_STEAM) InstallProfiler();  // research tool, made on this build
+    if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
     if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
 }

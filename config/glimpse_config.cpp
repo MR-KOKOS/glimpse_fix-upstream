@@ -106,12 +106,17 @@ static Option kOptions[] = {
     { "Gameplay", "AIBoostUnlimited", BOOL_OPT, "  Unlimited AI boost", "The AI's boost tank never empties.", "0" },
     { "Gameplay", "AIBoostStraightOnly", BOOL_OPT, "  AI boosts on straights only", "Off = anywhere while driving forward, also in corners.", "1" },
     { "Gameplay", "AIBoostChaos", BOOL_OPT, "  Chaos mode", "Every AI car boosts all the time, everywhere, with an endless tank, a full power play bar and the highest AI skill. Overrides the three settings above.", "0" },
+    // Online
+    { "Online", "SteamLAN", BOOL_OPT, "LAN over Steam (prototype)", "PROTOTYPE: the game's LAN mode with the players of a Steam lobby instead of the local network, relayed by Steam. Needs steam_api.dll next to the game. Players with the same LobbyName (set in the INI) meet in one lobby. Presets leave this alone.", "0" },
     // Debug
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
-static const char* const kPages[] = { "Controller", "Graphics", "World", "Camera", "Gameplay", "AI", "Debug" };
-static const int kPageCount = 7;
+static const char* const kPages[] = { "Controller", "Graphics", "World", "Camera", "Gameplay", "AI", "Online", "Debug" };
+static const int kPageCount = 8;
+
+// options the presets do not touch
+static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online"); }
 
 // the page an option is shown on: its INI section, except the AI boost options (in [Gameplay])
 static const char* PageOf(const Option& o) { return strncmp(o.key, "AIBoost", 7) ? o.section : "AI"; }
@@ -579,7 +584,7 @@ static std::string PresetValue(const Preset& p, const Option& o)
 static bool PresetMatches(const Preset& p)
 {
     for (const Option& o : kOptions) {
-        if (!strcmp(o.section, "Debug")) continue;
+        if (OutsidePresets(o)) continue;
         std::string want = PresetValue(p, o), have = GetValue(o);
         if (!_stricmp(want.c_str(), have.c_str())) continue;
         char* end1;
@@ -594,7 +599,7 @@ static bool PresetMatches(const Preset& p)
 static void ApplyPreset(const Preset& p)
 {
     for (Option& o : kOptions) {
-        if (!strcmp(o.section, "Debug")) continue;
+        if (OutsidePresets(o)) continue;
         SetValue(o, PresetValue(p, o));
     }
     LoadControls();

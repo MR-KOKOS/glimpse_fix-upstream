@@ -144,6 +144,8 @@ static void LoadConfig()
     g_cfg.hudKey = IniInt("Camera", "HudKey", 0);
     g_cfg.cameraShake = IniFloat("Camera", "CameraShake", 1.0f, 0.0f, 1.0f);
     g_cfg.explosionShakeOff = IniBool("Camera", "ExplosionShakeOff", false);
+    g_cfg.steamLan = IniBool("Online", "SteamLAN", false);
+    IniString("Online", "LobbyName", "", g_cfg.lobbyName, sizeof(g_cfg.lobbyName));
 
     // [Gameplay]
     g_cfg.unlockAll = IniBool("Gameplay", "UnlockAll", false);

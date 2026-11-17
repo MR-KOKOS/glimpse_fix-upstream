@@ -57,6 +57,8 @@ struct Config {
     float cameraShake;       // race cameras' shake: 1 = as the game, 0 = their rotation smoothed most
     bool  explosionShakeOff; // no camera shake from explosions and power plays
     bool  gradient;          // keep the cameras' screen gradient (the blue band at the top)
+    bool  steamLan;          // the game's LAN mode over Steam (lobby, relayed P2P), PROTOTYPE
+    char  lobbyName[64];     // players with the same name share a lobby; empty = the public one
     unsigned patchMask;      // PATCH_* bits that may be applied (development, to bisect side effects)
 };
 
@@ -66,6 +68,7 @@ enum PatchBits {
     /* 0x100: was RenderScale, removed */ PATCH_PADNAMES = 0x200, PATCH_LOD = 0x400, PATCH_D3D = 0x800,
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
+    PATCH_ONLINE = 0x400000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -175,6 +178,11 @@ typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* r
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
 void* Detour(BYTE* at, int len, void* hook);         // returns the trampoline
 void ApplyGamePatches();
+
+// online.cpp - SteamLAN=1 (PROTOTYPE): the game's LAN mode over Steam. A transport for Quazal's
+// sockets (its SocketDriver interface) carries the packets through Steam to the players of a Steam
+// lobby, each of them under a virtual 10.x.y.z address.
+void OnlineStart();
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
 void PatchPadNames();
 void OnInputFrame();       // called from the virtual device poll, on the game thread
