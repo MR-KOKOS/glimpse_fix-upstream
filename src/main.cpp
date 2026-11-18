@@ -66,6 +66,19 @@ static bool IniBool(const char* section, const char* key, bool def)
     return IniInt(section, key, def ? 1 : 0) != 0;
 }
 
+// a pad button by name: X, Y, LS, RS (the ones the game leaves free while driving), None
+static WORD IniButton(const char* section, const char* key, WORD def)
+{
+    char buf[16];
+    IniString(section, key, "", buf, sizeof(buf));
+    if (!buf[0]) return def;
+    if (!_stricmp(buf, "X")) return XINPUT_GAMEPAD_X;
+    if (!_stricmp(buf, "Y")) return XINPUT_GAMEPAD_Y;
+    if (!_stricmp(buf, "LS")) return XINPUT_GAMEPAD_LEFT_THUMB;
+    if (!_stricmp(buf, "RS")) return XINPUT_GAMEPAD_RIGHT_THUMB;
+    return 0;
+}
+
 static float IniFloat(const char* section, const char* key, float def, float lo, float hi)
 {
     char buf[32];
@@ -83,8 +96,10 @@ static void LoadConfig()
     g_cfg.testFeed = IniBool("Debug", "TestFeed", false);
     g_cfg.profile = IniBool("Debug", "Profile", false);
     if (g_cfg.log) {
-        char path[MAX_PATH];
+        char path[MAX_PATH], prev[MAX_PATH];
         ModulePath(path, "SplitSecondPad.log");
+        ModulePath(prev, "SplitSecondPad.prev.log");
+        MoveFileExA(path, prev, MOVEFILE_REPLACE_EXISTING);  // the last run's log stays for one more start
         s_log = _fsopen(path, "w", _SH_DENYWR);
     }
     {
@@ -122,7 +137,14 @@ static void LoadConfig()
     g_cfg.bloom = IniBool("Graphics", "Bloom", true);
     g_cfg.lensFlare = IniBool("Graphics", "LensFlare", true);
     g_cfg.particleFlare = IniBool("Graphics", "ParticleFlare", true);
+    g_cfg.hdr = IniBool("Graphics", "HDR", false);
+    g_cfg.hdrPeak = IniInt("Graphics", "HDRPeakBrightness", 1000);
+    g_cfg.hdrPeak = g_cfg.hdrPeak < 400 ? 400 : g_cfg.hdrPeak > 10000 ? 10000 : g_cfg.hdrPeak;
+    g_cfg.hdrPaperWhite = IniInt("Graphics", "HDRPaperWhite", 200);
+    g_cfg.hdrPaperWhite = g_cfg.hdrPaperWhite < 80 ? 80 : g_cfg.hdrPaperWhite > 500 ? 500 : g_cfg.hdrPaperWhite;
     g_cfg.fixIconSize = IniBool("Graphics", "FixPowerplayIconSize", true);
+    g_cfg.opponentEngines = IniBool("Audio", "OpponentEngines", true);
+    g_cfg.consoleReverb = IniBool("Audio", "ConsoleReverb", true);
 
     // [World]
     g_cfg.streamPoolMB = IniInt("World", "StreamPoolMB", 512);
@@ -146,6 +168,8 @@ static void LoadConfig()
     g_cfg.hudKey = IniInt("Camera", "HudKey", 0);
     g_cfg.cameraShake = IniFloat("Camera", "CameraShake", 1.0f, 0.0f, 1.0f);
     g_cfg.explosionShakeOff = IniBool("Camera", "ExplosionShakeOff", false);
+    g_cfg.steamLan = IniBool("Online", "SteamLAN", false);
+    IniString("Online", "LobbyName", "", g_cfg.lobbyName, sizeof(g_cfg.lobbyName));
 
     // [Gameplay]
     g_cfg.unlockAll = IniBool("Gameplay", "UnlockAll", false);
@@ -156,6 +180,17 @@ static void LoadConfig()
     g_cfg.skipIntro = IniInt("Gameplay", "SkipIntro", 0);
     g_cfg.boost = IniBool("Gameplay", "Boost", false);
     g_cfg.boostKey = IniInt("Gameplay", "BoostKey", VK_LSHIFT);
+    g_cfg.boostButton = IniButton("Gameplay", "BoostButton", XINPUT_GAMEPAD_X);
+    g_cfg.handbrake = IniBool("Gameplay", "Handbrake", false);
+    g_cfg.handbrakeButton = IniButton("Gameplay", "HandbrakeButton", XINPUT_GAMEPAD_Y);
+    g_cfg.handbrakeKey = IniInt("Gameplay", "HandbrakeKey", 'X');
+    g_cfg.handbrakeMode = IniInt("Gameplay", "HandbrakeMode", 1) == 2 ? 2 : 1;
+    g_cfg.handbrakeStrength = IniFloat("Gameplay", "HandbrakeStrength", 15.0f, 0.0f, 40.0f);
+    g_cfg.handbrakeDrift = IniFloat("Gameplay", "HandbrakeDrift", 2.5f, 0.0f, 5.0f);
+    if (g_cfg.handbrakeButton == g_cfg.boostButton && g_cfg.boost && g_cfg.handbrake) {
+        Log("BoostButton and HandbrakeButton are the same pad button, the handbrake gets none");
+        g_cfg.handbrakeButton = 0;
+    }
     g_cfg.boostAcceleration = IniFloat("Gameplay", "BoostAcceleration", 15.0f, 1.0f, 100.0f);
     g_cfg.boostMaxSpeed = IniFloat("Gameplay", "BoostMaxSpeed", 90.0f, 10.0f, 200.0f);
     g_cfg.boostMotionBlur = IniFloat("Gameplay", "BoostMotionBlur", 3.0f, 1.0f, 5.0f);
@@ -270,7 +305,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         DisableThreadLibraryCalls(inst);
         InitializeCriticalSection(&s_logLock);
         LoadConfig();
-        if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.ultrawideFix == 2) &&
+        FixOpponentEngineBanks();  // plain data in the exe file, read when the audio system starts
+        FixReverbPresets();        // fmod_event.dll is mapped already (an import of the exe)
+        if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2) &&
             (g_cfg.patchMask & PATCH_D3D))
             InstallD3DHooks();
     }

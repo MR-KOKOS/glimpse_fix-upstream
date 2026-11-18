@@ -75,6 +75,25 @@ void FramePace()
     *kMaxTicks = ticks;
     *kAccumulator = kGamePeriod * ((ticks + 1) / 2);
     *kTickCounter = 0;
+
+    // Log=1: frames and game ticks per 10 s (60 ticks a second is real time) and the game's slow motion
+    // switches, so a game that runs slow shows whether frames are missing or the simulation is slowed
+    if (g_cfg.log) {
+        static LONGLONG windowStart;
+        static unsigned frames, tickSum;
+        frames++;
+        tickSum += ticks;
+        if (!windowStart) windowStart = now.QuadPart;
+        double secs = (double)(now.QuadPart - windowStart) / freq.QuadPart;
+        if (secs >= 10.0) {
+            BYTE slowOn = *(BYTE*)G(0x00D71208);
+            float slowSpeed = *(float*)G(0x00D113B8);
+            Log("frame pace: %.1f fps, %.1f game ticks/s (%.0f%% of real time), slow motion switch %u (speed %.3f)",
+                frames / secs, tickSum / secs, tickSum / secs / 60.0 * 100.0, slowOn, slowSpeed);
+            windowStart = now.QuadPart;
+            frames = tickSum = 0;
+        }
+    }
 }
 
 typedef void(__thiscall* AiUpdate_t)(void* self, void* a, void* b);
@@ -153,8 +172,9 @@ static bool HookAiUpdate()
 
 void PatchFrameRate()
 {
-    if (g_cfg.aiBoost && g_cfg.aiBoostChaos && (g_cfg.patchMask & PATCH_AIBOOST) && HookAiUpdate())
-        Log("chaos mode: AI at the highest skill");
+    // SteamLAN: a lobby's rules may switch the chaos mode on later
+    if (((g_cfg.aiBoost && g_cfg.aiBoostChaos) || g_cfg.steamLan) && (g_cfg.patchMask & PATCH_AIBOOST) && HookAiUpdate())
+        Log("chaos mode: AI at the highest skill when it is on");
     if (g_cfg.frameRate != 60) return;
     // the loop must be the one described above
     if (!Matches(G(0x005588A9), "8B2DD899D100") || !Matches(G(0x005588B4), "F30F10052023D700F30F5805F447D700") ||

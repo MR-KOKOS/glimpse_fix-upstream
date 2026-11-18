@@ -69,6 +69,12 @@ static HRESULT STDMETHODCALLTYPE Hook_SetTexture(IDirect3DDevice9* dev, DWORD st
     return hr;
 }
 
+// A pass of our own (HDR) sets stage 0 through the device and then puts the game's state back with a
+// state block, past these hooks: what they noted of stage 0 is kept around it.
+static StageState s_savedStage0;
+void SaveStage0Tracking() { s_savedStage0 = s_stages[0]; }
+void RestoreStage0Tracking() { s_stages[0] = s_savedStage0; }
+
 // The motion blur pass samples along the motion; at speed (and more so with the doubled blur at 60 fps
 // and the boost) the samples near the bottom edge reach past the picture and bring in a thin line from
 // outside it. While the pass runs, U and V addressing of the first stages is clamped to the edge. What
@@ -490,9 +496,90 @@ static void DumpAtPresent(IDirect3DDevice9* dev)
     was = down;
 }
 
+// SteamLAN: the banner's font lets go of its device resources around a Reset
+typedef HRESULT(STDMETHODCALLTYPE* Reset_t)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+static Reset_t s_origReset;
+
+// Another module may put its own hook into the device's vtable after ours: Steam's overlay does so once
+// the game process calls SteamAPI_Init (SteamLAN), and Present then no longer reached us, so the frame
+// pacing stopped and the game ran at half speed. CheckD3DHooks (every input frame) puts ours in front of
+// such a hook again and passes on to it; if that hook calls ours in turn, the nested call goes straight
+// to the device's own function (s_d3dPresent / s_d3dReset), so nothing runs twice and nothing loops.
+static void** s_vt;
+static Present_t s_d3dPresent;
+static Reset_t s_d3dReset;
+static __declspec(thread) int s_presentDepth, s_resetDepth;
+
+static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
+{
+    if (s_resetDepth) return s_d3dReset(dev, pp);  // another hook called ours again
+    s_resetDepth++;
+    OnlineDeviceLost();
+    HdrDeviceLost();
+    UltrawideDeviceLost();
+    HdrPresentParams(NULL, 0, NULL, pp);  // keeps the device windowed for the HDR swap chain
+    HRESULT hr = s_origReset(dev, pp);
+    if (SUCCEEDED(hr)) {
+        OnlineDeviceReset();
+        HdrDeviceReset(dev);
+        if (g_cfg.ultrawideFix == 2) UltrawideDeviceReset(dev, pp);
+    }
+    s_resetDepth--;
+    return hr;
+}
+
+static const char* ModuleOf(const void* p, char* buf, DWORD n)
+{
+    HMODULE mod = NULL;
+    buf[0] = 0;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)p, &mod) && mod && GetModuleFileNameA(mod, buf, n)) {
+        const char* slash = strrchr(buf, '\\');
+        return slash ? slash + 1 : buf;
+    }
+    return "?";
+}
+
+static void SetSlot(int index, void* value)
+{
+    DWORD old;
+    VirtualProtect(&s_vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &old);
+    s_vt[index] = value;
+    VirtualProtect(&s_vt[index], sizeof(void*), old, &old);
+}
+
+static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty);
+
+void CheckD3DHooks()
+{
+    if (!s_vt) return;
+    char buf[MAX_PATH];
+    static int logged;  // the first few times; a module that keeps taking it back would flood the log
+    if (s_d3dPresent && s_vt[17] != (void*)Diag_Present) {
+        void* other = s_vt[17];
+        if (logged++ < 5)
+            Log("Direct3D: Present was taken over by %s, our hook goes in front of it again", ModuleOf(other, buf, sizeof(buf)));
+        s_origPresent = (Present_t)other;
+        SetSlot(17, (void*)Diag_Present);
+    }
+    if (s_d3dReset && s_vt[16] != (void*)Hook_Reset) {
+        void* other = s_vt[16];
+        if (logged++ < 5)
+            Log("Direct3D: Reset was taken over by %s, our hook goes in front of it again", ModuleOf(other, buf, sizeof(buf)));
+        s_origReset = (Reset_t)other;
+        SetSlot(16, (void*)Hook_Reset);
+    }
+}
+
 static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty)
 {
+    if (s_presentDepth) return s_d3dPresent(dev, src, dst, wnd, dirty);  // another hook called ours again
+    s_presentDepth++;
+    struct Leave {
+        ~Leave() { s_presentDepth--; }
+    } leave;
     if (g_cfg.log) DumpAtPresent(dev);
+    if (g_cfg.steamLan) OnlinePresent(dev);
     static DWORD frames, since;
     DWORD now = GetTickCount();
     frames++;
@@ -508,21 +595,10 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
             feed->shotRequest = 0;
         }
     }
-    if (g_cfg.ultrawideFix == 2) UltrawidePresent(dev);
-    HRESULT hr = s_origPresent(dev, src, dst, wnd, dirty);
+    if (g_cfg.ultrawideFix == 2) UltrawidePresent(dev);  // its last touches to the back buffer, before HDR reads it
+    HRESULT hr;
+    if (!HdrPresent(dev, &hr)) hr = s_origPresent(dev, src, dst, wnd, dirty);
     FramePace();
-    return hr;
-}
-
-// UltrawideFix=2: its surfaces let go of before a Reset, the aspect applied after it
-typedef HRESULT(STDMETHODCALLTYPE* Reset_t)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
-static Reset_t s_origReset;
-
-static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
-{
-    UltrawideDeviceLost();
-    HRESULT hr = s_origReset(dev, pp);
-    if (SUCCEEDED(hr)) UltrawideDeviceReset(dev, pp);
     return hr;
 }
 
@@ -533,15 +609,25 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         adapter, type, focus, GetForegroundWindow(), flags, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
         pp ? pp->BackBufferFormat : 0, pp ? pp->Windowed : -1, pp ? pp->FullScreen_RefreshRateInHz : 0,
         pp ? pp->PresentationInterval : 0);
+    HdrPresentParams(d3d, adapter, focus, pp);
     HRESULT hr = s_origCreateDevice(d3d, adapter, type, focus, flags, pp, out);
     Log("CreateDevice -> %08lx", hr);
     if (SUCCEEDED(hr) && out && *out) {
         Log("available texture memory %u MB", (*out)->GetAvailableTextureMem() >> 20);
         LogForeignModules("after device");
         void** vt = *(void***)*out;
-        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.ultrawideFix == 2)
+        bool ultrawide = g_cfg.ultrawideFix == 2;
+        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan || g_cfg.hdr || ultrawide) {
             PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
-        if (g_cfg.ultrawideFix == 2) PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);
+            s_d3dPresent = s_origPresent;  // the device's own, for nested calls (CheckD3DHooks)
+        }
+        if (g_cfg.steamLan || g_cfg.hdr || ultrawide) {
+            // the banner's font, the HDR targets, the ultrawide surfaces and aspect
+            PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);
+            s_d3dReset = s_origReset;
+        }
+        HdrDeviceCreated(*out);
+        s_vt = vt;
         s_device = *out;
         if (g_cfg.ultrawideFix == 2) UltrawideDeviceCreated(*out, pp, focus);
         if (g_cfg.anisotropy > 1) {

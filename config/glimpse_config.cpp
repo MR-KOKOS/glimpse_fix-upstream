@@ -43,6 +43,8 @@ struct Option {
 };
 
 // keys for the camera and gameplay options, as virtual key codes (P is the game's own pause key)
+// pad buttons the game leaves free while driving
+#define PAD_CHOICES "X|X;Y|Y;LS|Left stick click;RS|Right stick click;None|None"
 #define KEY_CHOICES "0x31|1;0x32|2;0x33|3;0x34|4;0x35|5;0x36|6;0x37|7;0x38|8;0x39|9;0x30|0;0x41|A;0x42|B;0x43|C;0x44|D;0x45|E;0x46|F;0x47|G;0x48|H;0x49|I;0x4A|J;0x4B|K;0x4C|L;0x4D|M;0x4E|N;0x4F|O;0x51|Q;0x52|R;0x53|S;0x54|T;0x55|U;0x56|V;0x57|W;0x58|X;0x59|Y;0x5A|Z;0x70|F1;0x71|F2;0x72|F3;0x73|F4;0x74|F5;0x75|F6;0x76|F7;0x77|F8;0x78|F9;0x79|F10;0x7A|F11;0x7B|F12;0xA0|Left Shift;0xA2|Left Ctrl;0x20|Space;0x2D|Insert;0x2E|Delete;0x24|Home;0x21|Page Up;0x22|Page Down;0x60|Num 0;0x6E|Num ,;0x6B|Num +;0x6D|Num -"
 // the photo mode key: without the keys the photo mode itself uses (W A S D, I J K L, Q E, U O, Shift, Ctrl,
 // the default zoom keys 1 2 3)
@@ -70,6 +72,9 @@ static Option kOptions[] = {
     { "Graphics", "Exposure", RANGE, "Exposure", "Brightness of the whole picture. Applies while the game runs.", "1.0", 0, 0.25, 3, 0.05, 2 },
     { "Graphics", "LensFlare", BOOL_OPT, "Lens flares", "Flares of the sun and lights, including the screen space flare.", "1" },
     { "Graphics", "ParticleFlare", BOOL_OPT, "Particle flares", "Flares of sparks, explosions and lights.", "1" },
+    { "Graphics", "HDR", BOOL_OPT, "HDR output", "HDR10 picture for an HDR display (HDR switched on in the Windows display settings). The game then runs in a borderless window over the whole screen.", "0" },
+    { "Graphics", "HDRPeakBrightness", RANGE, "  Peak brightness", "The display's peak brightness in nits (see the display's data or the Windows HDR calibration). The brightest lights go up to this.", "1000", 0, 400, 4000, 50, 0 },
+    { "Graphics", "HDRPaperWhite", RANGE, "  Paper white", "Brightness of the game's white (menus, HUD, a white wall in daylight) in nits. Higher = the whole picture brighter.", "200", 0, 80, 500, 10, 0 },
     { "Graphics", "FixPowerplayIconSize", BOOL_OPT, "Power play icons at console size", "The PC port draws the power play icons and route markers too big above 1280 pixels width (3x at 4K).", "1" },
     // World
     { "World", "StreamPoolMB", CHOICE, "Streaming pool", "Memory for the track's textures and props. Bigger keeps them sharp instead of blurry or grey. Needs SplitSecond.exe with the LAA flag (setlaa.exe).", "512", "0|Stock (57 MB);256|256 MB;512|512 MB;768|768 MB" },
@@ -94,8 +99,15 @@ static Option kOptions[] = {
     { "Gameplay", "UnlockDecals", CHOICE, "Achievements and decals", "Unlocked in the next single player race and saved with the profile (backed up to glimpse_backup first). Unobtainable = the six ranked online ones and the Pure decal.", "0", "0|As the game;2|Unobtainable only;1|All" },
     { "Gameplay", "SkipIntro", CHOICE, "Boot movies", "Skip the movies at every start. The files stay untouched.", "0", "0|Play both;1|Skip the logo;2|Skip logo and intro" },
     { "Gameplay", "WreckTime", CHOICE, "Time until the respot (experimental)", "!Highly experimental: can softlock the game, especially together with the photo mode. How long after a wreck of yours (crashes, takedowns, power plays) the game puts your car back on the track.", "0", "0|As the game;5|5 s;8|8 s;10|10 s;15|15 s;20|20 s;30|30 s;60|60 s" },
-    { "Gameplay", "Boost", BOOL_OPT, "Boost (hold X)", "Your car surges forward while X or the boost key is held, with more motion blur.", "0" },
-    { "Gameplay", "BoostKey", CHOICE, "  Boost key", "Keyboard key held for the boost, like X on the pad. Left Shift is not used by the game.", "0xA0", "0|None;" KEY_CHOICES },
+    { "Gameplay", "Boost", BOOL_OPT, "Boost", "Your car surges forward while the boost button or key is held, with more motion blur.", "0" },
+    { "Gameplay", "BoostButton", CHOICE, "  Boost button", "Pad button held for the boost. X and Y are free while driving; when Y is used, the game's camera change moves to D-pad down.", "X", PAD_CHOICES },
+    { "Gameplay", "BoostKey", CHOICE, "  Boost key", "Keyboard key held for the boost. Left Shift is not used by the game.", "0xA0", "0|None;" KEY_CHOICES },
+    { "Gameplay", "Handbrake", BOOL_OPT, "Handbrake", "The game has none: while the handbrake button or key is held, your car is thrown into a slide. Off in a network race.", "0" },
+    { "Gameplay", "HandbrakeButton", CHOICE, "  Handbrake button", "Pad button held for the handbrake. When Y is used, the game's camera change moves to D-pad down.", "Y", PAD_CHOICES },
+    { "Gameplay", "HandbrakeKey", CHOICE, "  Handbrake key", "Keyboard key held for the handbrake. X is not used by the game.", "0x58", "0|None;" KEY_CHOICES },
+    { "Gameplay", "HandbrakeMode", CHOICE, "  Handbrake type", "Drift: the game's own slide physics, as when a power play blast throws a car sideways. Brake: the brake pedal fully pressed, the game brakes the rear the more you steer (above 30 km/h).", "1", "1|Drift;2|Brake" },
+    { "Gameplay", "HandbrakeStrength", RANGE, "  Handbrake pull", "Drift type: how hard the handbrake slows the car while held, in m/s² (10 = about 1 g). 0 = the slide only.", "15", 0, 0, 40, 1, 0 },
+    { "Gameplay", "HandbrakeDrift", RANGE, "  Handbrake oversteer", "Drift type: how strongly the car oversteers with the handbrake, as its turning rate at full steering in rad/s (2.5 = about 140 degrees a second; higher = the rear swings out further). 0 = no extra oversteer.", "2.5", 0, 0, 5, 0.1, 1 },
     { "Gameplay", "BoostAcceleration", RANGE, "  Boost acceleration", "m/s per second; 15 is about 1.5 g. Also used by the AI boost.", "15", 0, 1, 60, 1, 0 },
     { "Gameplay", "BoostMaxSpeed", RANGE, "  Boost top speed", "No boost above this speed, in m/s (90 m/s = 324 km/h). Also used by the AI boost.", "90", 0, 10, 200, 1, 0 },
     { "Gameplay", "BoostMotionBlur", RANGE, "  Boost motion blur", "Motion blur multiplier at full boost.", "3.0", 0, 1, 5, 0.1, 1 },
@@ -106,12 +118,20 @@ static Option kOptions[] = {
     { "Gameplay", "AIBoostUnlimited", BOOL_OPT, "  Unlimited AI boost", "The AI's boost tank never empties.", "0" },
     { "Gameplay", "AIBoostStraightOnly", BOOL_OPT, "  AI boosts on straights only", "Off = anywhere while driving forward, also in corners.", "1" },
     { "Gameplay", "AIBoostChaos", BOOL_OPT, "  Chaos mode", "Every AI car boosts all the time, everywhere, with an endless tank, a full power play bar and the highest AI skill. Overrides the three settings above.", "0" },
+    // Audio
+    { "Audio", "OpponentEngines", BOOL_OPT, "Opponents' engines", "The opponents' engines can be heard. The PC release loads them into sound bank slots sized for the Xbox 360's smaller banks, where they do not fit.", "1" },
+    { "Audio", "ConsoleReverb", BOOL_OPT, "Console reverb", "The reverb presets of the Xbox 360 release (halls, tunnels, under bridges, the menu). The PC release has one stock preset for almost all of them.", "1" },
+    // Online
+    { "Online", "SteamLAN", BOOL_OPT, "LAN over Steam (prototype)", "PROTOTYPE: the game's LAN mode with the players of a Steam lobby instead of the local network. Needs steam_api.dll next to the game. Without a LobbyName (set in the INI) everybody meets in the public lobby; Steam friends join through \"Join game\". In a LAN session the lobby owner's boost and AI settings apply to all; the photo mode is a free camera there, the race goes on. Presets leave this alone.", "0" },
     // Debug
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
-static const char* const kPages[] = { "Controller", "Graphics", "World", "Camera", "Gameplay", "AI", "Debug" };
-static const int kPageCount = 7;
+static const char* const kPages[] = { "Controller", "Graphics", "World", "Camera", "Gameplay", "AI", "Audio", "Online", "Debug" };
+static const int kPageCount = 9;
+
+// options the presets do not touch
+static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online"); }
 
 // the page an option is shown on: its INI section, except the AI boost options (in [Gameplay])
 static const char* PageOf(const Option& o) { return strncmp(o.key, "AIBoost", 7) ? o.section : "AI"; }
@@ -445,7 +465,8 @@ static void UpdateEnables()
     bool zoom = IsOn("ZoomKeys"), photo = IsOn("PhotoMode");
     struct { const char* key; bool on; } rules[] = {
         { "BloomStrength", bloom }, { "BloomTone", bloom }, { "BloomCurve", bloom },
-        { "BoostMotionBlur", boost }, { "BoostKey", boost }, { "PowerBarFillKey", IsOn("PowerBarFill") },
+        { "BoostMotionBlur", boost }, { "BoostKey", boost }, { "BoostButton", boost },
+        { "HandbrakeButton", IsOn("Handbrake") }, { "HandbrakeKey", IsOn("Handbrake") }, { "HandbrakeMode", IsOn("Handbrake") }, { "HandbrakeStrength", IsOn("Handbrake") }, { "HandbrakeDrift", IsOn("Handbrake") }, { "PowerBarFillKey", IsOn("PowerBarFill") },
         { "ZoomInKey", zoom }, { "ZoomOutKey", zoom }, { "ZoomResetKey", zoom }, { "PhotoModeKey", photo },
         { "AIBoostLevel", ai && !chaos }, { "AIBoostUnlimited", ai && !chaos },
         { "AIBoostStraightOnly", ai && !chaos }, { "AIBoostChaos", ai },
@@ -561,7 +582,7 @@ struct Preset {
 };
 static const Preset kPresets[] = {
     { "Recommended", "Every option at its default: 60 fps and the fixes on, the extras off.", "" },
-    { "Original game", "The game as it was: 30 fps, linear filtering, the stock streaming pool, draw distances and pop-in, all effects on, the stock icon size, shared triggers and no ultrawide fix. The controller support stays.", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;StreamPoolMB=0;LodDistanceScale=1.0;PopInFix=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as it was: 30 fps, linear filtering, the stock streaming pool, draw distances and pop-in, all effects on, the stock icon size, shared triggers and no ultrawide fix. The controller support stays.", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;PopInFix=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Chaos", "Recommended plus everything unlocked, the boost, the power bar fill and the AI boost in chaos mode.", "UnlockAll=1;Boost=1;PowerBarFill=1;AIBoost=1;AIBoostChaos=1" },
 };
 
@@ -579,7 +600,7 @@ static std::string PresetValue(const Preset& p, const Option& o)
 static bool PresetMatches(const Preset& p)
 {
     for (const Option& o : kOptions) {
-        if (!strcmp(o.section, "Debug")) continue;
+        if (OutsidePresets(o)) continue;
         std::string want = PresetValue(p, o), have = GetValue(o);
         if (!_stricmp(want.c_str(), have.c_str())) continue;
         char* end1;
@@ -594,7 +615,7 @@ static bool PresetMatches(const Preset& p)
 static void ApplyPreset(const Preset& p)
 {
     for (Option& o : kOptions) {
-        if (!strcmp(o.section, "Debug")) continue;
+        if (OutsidePresets(o)) continue;
         SetValue(o, PresetValue(p, o));
     }
     LoadControls();

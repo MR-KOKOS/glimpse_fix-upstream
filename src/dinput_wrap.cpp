@@ -311,6 +311,7 @@ public:
         DIJOYSTATE2 js;
         XINPUT_GAMEPAD pad = s_pads[m_slot].state.Gamepad;
         if (CameraBlocksPad()) memset(&pad, 0, sizeof(pad));
+        else if (g_cfg.boost || g_cfg.handbrake) RacePad(m_slot, &pad);
         BuildState(pad, &js);
         memcpy(data, &js, size);
         return DI_OK;

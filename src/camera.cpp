@@ -63,6 +63,7 @@ static float s_photoZoom = 1.0f;  // zoom keys in photo mode
 
 // photo mode
 static bool s_photo;              // on
+static bool s_photoFrozen;        // holding the world still (not in a network race)
 static bool s_photoPose;          // the free pose has been taken from the camera
 static float s_pos[3];
 static float s_axis[3][3];        // left, up, forward (the state's axes)
@@ -301,11 +302,38 @@ static void ChangeState(BYTE* self, bool raceCamera)
     memcpy(r->set, state + kPose, kPoseLen);
 }
 
+// where the game's race camera is (before the photo mode or the FOV change it): it follows this
+// player's car, which tells it among the cars of a network race (boost.cpp)
+static float s_raceCameraPos[3], s_raceCameraFwd[3];
+static DWORD s_raceCameraPosTick;
+static bool s_raceCameraPosSeen;
+static void NoteRaceCamera(BYTE* self)
+{
+    __try {
+        BYTE* state = *(BYTE**)(self + 4);
+        if (!state) return;
+        memcpy(s_raceCameraPos, state + 4, sizeof(s_raceCameraPos));     // +4 position
+        memcpy(s_raceCameraFwd, state + 0x34, sizeof(s_raceCameraFwd));  // +0x34 forward axis
+        s_raceCameraPosTick = GetTickCount();
+        s_raceCameraPosSeen = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+bool RaceCameraPose(float* pos, float* fwd)
+{
+    if (!s_raceCameraPosSeen || GetTickCount() - s_raceCameraPosTick > 500) return false;
+    memcpy(pos, s_raceCameraPos, sizeof(s_raceCameraPos));
+    memcpy(fwd, s_raceCameraFwd, sizeof(s_raceCameraFwd));
+    return true;
+}
+
 static void __fastcall Hook_ChaseUpdate(BYTE* self, void*, void* frame)
 {
     s_raceCamera = s_anyCamera = GetTickCount() | 1;
     RestoreState(self);
     s_origChase(self, frame);
+    NoteRaceCamera(self);
     ChangeState(self, true);
 }
 
@@ -314,6 +342,7 @@ static void __fastcall Hook_BumperUpdate(BYTE* self, void*, void* frame)
     s_raceCamera = s_anyCamera = GetTickCount() | 1;
     RestoreState(self);
     s_origBumper(self, frame);
+    NoteRaceCamera(self);
     ChangeState(self, true);
 }
 
@@ -415,7 +444,7 @@ static void __fastcall Hook_RespotUpdate(BYTE* self, void*, float dt)
     bool human = false;
     int state = RaceState(self, &human);
     if (state == 1 || state == 2) s_wreckSeen = GetTickCount() | 1;
-    if (s_photo) {
+    if (s_photo && s_photoFrozen) {  // in a network race the respot goes on as usual
         static DWORD logged;
         if (GetTickCount() - logged > 5000) Log("photo mode: respot held");
         logged = GetTickCount();
@@ -434,9 +463,10 @@ void PatchCamera()
         else
             Log("respot not recognised");
     }
-    // the race cameras also tell UnlockDecals that a single player race runs (SinglePlayerRace)
+    // the race cameras also tell UnlockDecals that a single player race runs (SinglePlayerRace), and the
+    // boost and handbrake buttons that a race runs (RaceRunning)
     bool race = g_cfg.fov != 1.0f || g_cfg.ultrawideFix || g_cfg.zoomKeys || g_cfg.photoMode || g_cfg.unlockDecals ||
-                g_cfg.cameraShake < 0.999f;
+                g_cfg.cameraShake < 0.999f || g_cfg.boost || g_cfg.handbrake;
     if (race) {
         bool chase = HookSlot(kChaseUpdateSlot, kChaseUpdate, "\x81\xEC\x44\x01\x00\x00", 6, (void*)Hook_ChaseUpdate,
                               (void**)&s_origChase);
@@ -471,6 +501,8 @@ static bool InRace()
 {
     return s_raceCamera && GetTickCount() - (s_raceCamera & ~1u) < 500;
 }
+
+bool RaceRunning() { return InRace(); }
 
 // some camera ran within the last half second while a car is wrecked, within 15 s of a race camera
 // (a crash or takedown camera during the race, not the cameras of the pause menu, the finish or the
@@ -676,10 +708,14 @@ static void LookPhoto(float dt, const XINPUT_GAMEPAD& pad, bool padOk)
     }
 }
 
+// In a network race (SteamLAN session) the world is not held still (s_photoFrozen false): the others
+// race on and this player's simulation has to keep up with them. The photo mode is then a free camera
+// with the HUD hidden, like the game's own pause in an online race; the car rolls on without input.
 static void SetPhoto(bool on, const char* why)
 {
     if (on == s_photo) return;
-    Log("photo mode %s (%s)", on ? "on" : "off", why);
+    if (on) s_photoFrozen = !(g_cfg.steamLan && OnlineSession());
+    Log("photo mode %s (%s)%s", on ? "on" : "off", why, on && !s_photoFrozen ? ", network race: the world keeps running" : "");
     s_photo = on;
     // the look stays for the next photo; outside the photo mode the game's own
     static float look[4] = { 1.0f, 1.0f, 0.0f, 15.0f };
@@ -695,17 +731,21 @@ static void SetPhoto(bool on, const char* why)
         memset(s_otherSeen, 0, sizeof(s_otherSeen));
         s_photoPose = false;
         s_photoZoom = 1.0f;
-        s_slowOn = *kSlowMotionOn;
-        s_slowSpeed = *kSlowMotionSpeed;
-        *kSlowMotionSpeed = 0.000001f;
-        *kSlowMotionOn = 1;
+        if (s_photoFrozen) {
+            s_slowOn = *kSlowMotionOn;
+            s_slowSpeed = *kSlowMotionSpeed;
+            *kSlowMotionSpeed = 0.000001f;
+            *kSlowMotionOn = 1;
+        }
         SetHud(false);
         SetOverlays(false);
-        PauseGameSound(true);
+        if (s_photoFrozen) PauseGameSound(true);
     } else {
-        *kSlowMotionOn = s_slowOn;
-        *kSlowMotionSpeed = s_slowSpeed;
-        PauseGameSound(false);
+        if (s_photoFrozen) {
+            *kSlowMotionOn = s_slowOn;
+            *kSlowMotionSpeed = s_slowSpeed;
+            PauseGameSound(false);
+        }
         s_padHeld = true;
         SetHud(!s_hudHidden);
         SetOverlays(true);

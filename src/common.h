@@ -22,6 +22,8 @@ struct Config {
     int   frameRate;         // 30 (stock) or 60
     int   streamPoolMB;      // sector streaming pool, 0 = stock (57 MB)
     bool  fixIconSize;       // undo the double resolution scaling of the powerplay icons
+    bool  opponentEngines;   // sound bank slots big enough for the PC's opponent engine banks
+    bool  consoleReverb;     // the Xbox 360 release's reverb presets instead of the PC's stock ones
     float motionBlurStrength; // multiplier on top of the 60 fps compensation
     int   anisotropy;        // forced anisotropic filtering, 0/1 = game default
     float lodDistanceScale;  // environment, particle and powerplay draw distances
@@ -29,6 +31,9 @@ struct Config {
     bool  bloom;             // bloom added to the frame (tone mapping stays)
     bool  lensFlare;         // sun, light and screen space lens flares
     bool  particleFlare;     // flares of sparks, explosions and lights
+    bool  hdr;               // HDR10 output through a DXGI swap chain (borderless window)
+    int   hdrPeak;           // nits, the display's peak brightness
+    int   hdrPaperWhite;     // nits, the brightness of the game's white
     int   skipIntro;         // 0 = boot movies as the game, 1 = skip the publisher logo, 2 = also the intro
     bool  popInFix;          // ignore the sectors' precomputed visibility lists (distance and frustum only)
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
@@ -37,6 +42,13 @@ struct Config {
     int   unlockDecals;      // achievement decals: 0 off, 1 all, 2 only the online ones and the Pure decal (saved)
     bool  boost;             // X held: extra acceleration for player 1
     int   boostKey;          // virtual key that works like X for the boost, 0 = none
+    WORD  boostButton;       // pad button (XINPUT_GAMEPAD_*) held for the boost, 0 = none
+    bool  handbrake;         // a held button or key throws the car into a slide (player 1)
+    WORD  handbrakeButton;   // pad button, 0 = none
+    int   handbrakeKey;      // virtual key, 0 = none
+    int   handbrakeMode;     // 1 = the game's forced drift, 2 = the brake pedal (above a minimum speed)
+    float handbrakeStrength; // mode 1: deceleration while held, m/s^2
+    float handbrakeDrift;    // mode 1: yaw rate at full steering while held, rad/s
     float boostAcceleration; // m/s^2
     float boostMaxSpeed;     // m/s, boost only below this speed
     float boostMotionBlur;   // motion blur multiplier at full boost
@@ -58,6 +70,8 @@ struct Config {
     float cameraShake;       // race cameras' shake: 1 = as the game, 0 = their rotation smoothed most
     bool  explosionShakeOff; // no camera shake from explosions and power plays
     bool  gradient;          // keep the cameras' screen gradient (the blue band at the top)
+    bool  steamLan;          // the game's LAN mode over Steam (lobby, relayed P2P), PROTOTYPE
+    char  lobbyName[64];     // players with the same name share a lobby; empty = the public one
     unsigned patchMask;      // PATCH_* bits that may be applied (development, to bisect side effects)
 };
 
@@ -67,6 +81,7 @@ enum PatchBits {
     /* 0x100: was RenderScale, removed */ PATCH_PADNAMES = 0x200, PATCH_LOD = 0x400, PATCH_D3D = 0x800,
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
+    PATCH_ONLINE = 0x400000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -87,7 +102,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "1.8.0"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "1.8.0-lan.5"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -104,7 +119,20 @@ IDirectInput8A* WrapDirectInput8A(IDirectInput8A* real);
 bool PadSlotConnected(int slot);
 
 // diag.cpp
-void InstallD3DHooks();  // device log/capture (Log=1), anisotropic filtering
+void InstallD3DHooks();
+void CheckD3DHooks();     // puts our Present/Reset in front of hooks other modules set later (Steam overlay)  // device log/capture (Log=1), anisotropic filtering
+// hdr.cpp - HDR=1
+struct IDirect3D9;
+struct IDirect3DDevice9;
+struct _D3DPRESENT_PARAMETERS_;
+void HdrPresentParams(IDirect3D9* d3d, UINT adapter, HWND focus, _D3DPRESENT_PARAMETERS_* pp);  // before CreateDevice / Reset
+void HdrDeviceCreated(IDirect3DDevice9* dev);
+void HdrDeviceLost();                                // before Reset
+void HdrDeviceReset(IDirect3DDevice9* dev);          // after a successful Reset
+bool HdrPresent(IDirect3DDevice9* dev, long* result);  // instead of the device's Present; false = not active
+void HdrNoteToneMap();                               // Log=1: right after the game's tone mapping pass
+void SaveStage0Tracking();     // around a pass of our own that sets sampler stage 0
+void RestoreStage0Tracking();
 void BeginEdgeClamp();   // until EndEdgeClamp: texture addressing clamped at the edges (motion blur pass)
 void EndEdgeClamp();
 
@@ -132,7 +160,9 @@ void ApplyLensFlare();  // per frame
 extern float g_photoBloom, g_photoExposure, g_photoDof, g_photoFocus;
 
 // boost.cpp
-void BoostTick();        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
+void BoostTick();
+void RacePad(int slot, XINPUT_GAMEPAD* pad);  // the pad as the game sees it in a race: boost/handbrake buttons, Y on D-pad down
+bool RaceRunning();      // camera.cpp: a race camera ran in the last half second (in a race, not paused)        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
 float BoostBlurScale();  // motion blur multiplier while boosting (1 = none)
 
 // ultrawide.cpp (UltrawideFix=2)
@@ -151,6 +181,8 @@ void CameraTick();       // per input frame: zoom keys, HUD key, photo mode
 void ApplyExplosionShake();  // per input frame: ExplosionShakeOff=1
 bool SinglePlayerRace(); // a race camera runs on a single screen (not paused)
 bool CameraBlocksPad();  // photo mode drives the camera with the pad: the game sees it idle
+bool RaceCameraPose(float* pos, float* fwd);  // the game's race camera, updated in the last half second
+bool OnlineSession();      // SteamLAN: Quazal's LAN mode is in use (online.cpp)
 
 // savediag.cpp
 void WatchSaveFiles();  // Log=1: log every change of the profile files
@@ -186,7 +218,20 @@ typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* r
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
 void* Detour(BYTE* at, int len, void* hook);         // returns the trampoline
 void ApplyGamePatches();
+
+// online.cpp - SteamLAN=1 (PROTOTYPE): the game's LAN mode over Steam. A transport for Quazal's
+// sockets (its SocketDriver interface) carries the packets through Steam to the players of a Steam
+// lobby, each of them under a virtual 10.x.y.z address.
+void OnlineStart();
+void OnlineFrame();                              // game thread, every frame: lobby rules in a LAN session
+struct IDirect3DDevice9;
+void OnlinePresent(IDirect3DDevice9* dev);       // draws the lobby banner before Present
+void OnlineDeviceLost();                         // before Reset
+void OnlineDeviceReset();                        // after a successful Reset
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
+void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's audio system starts
+void CheckOpponentEngineBanks();
+void FixReverbPresets();       // at DLL load: the console's reverb presets (Log=1: logged)
 void PatchPadNames();
 void OnInputFrame();       // called from the virtual device poll, on the game thread
 void NotePadActivity();
