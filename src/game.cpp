@@ -749,6 +749,7 @@ static void WatchVmContexts()
 void OnInputFrame()
 {
     if (g_cfg.profile) ProfilerTick();
+    CheckD3DHooks();
     if (g_cfg.steamLan) OnlineFrame();  // before the extras below read their settings
     if (s_knownBuild && (g_cfg.patchMask & PATCH_LOD)) {
         static unsigned frame;

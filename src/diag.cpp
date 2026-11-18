@@ -493,16 +493,78 @@ static void DumpAtPresent(IDirect3DDevice9* dev)
 // SteamLAN: the banner's font lets go of its device resources around a Reset
 typedef HRESULT(STDMETHODCALLTYPE* Reset_t)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
 static Reset_t s_origReset;
+
+// Another module may put its own hook into the device's vtable after ours: Steam's overlay does so once
+// the game process calls SteamAPI_Init (SteamLAN), and Present then no longer reached us, so the frame
+// pacing stopped and the game ran at half speed. CheckD3DHooks (every input frame) puts ours in front of
+// such a hook again and passes on to it; if that hook calls ours in turn, the nested call goes straight
+// to the device's own function (s_d3dPresent / s_d3dReset), so nothing runs twice and nothing loops.
+static void** s_vt;
+static Present_t s_d3dPresent;
+static Reset_t s_d3dReset;
+static __declspec(thread) int s_presentDepth, s_resetDepth;
+
 static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
 {
+    if (s_resetDepth) return s_d3dReset(dev, pp);  // another hook called ours again
+    s_resetDepth++;
     OnlineDeviceLost();
     HRESULT hr = s_origReset(dev, pp);
     if (SUCCEEDED(hr)) OnlineDeviceReset();
+    s_resetDepth--;
     return hr;
+}
+
+static const char* ModuleOf(const void* p, char* buf, DWORD n)
+{
+    HMODULE mod = NULL;
+    buf[0] = 0;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)p, &mod) && mod && GetModuleFileNameA(mod, buf, n)) {
+        const char* slash = strrchr(buf, '\\');
+        return slash ? slash + 1 : buf;
+    }
+    return "?";
+}
+
+static void SetSlot(int index, void* value)
+{
+    DWORD old;
+    VirtualProtect(&s_vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &old);
+    s_vt[index] = value;
+    VirtualProtect(&s_vt[index], sizeof(void*), old, &old);
+}
+
+static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty);
+
+void CheckD3DHooks()
+{
+    if (!s_vt) return;
+    char buf[MAX_PATH];
+    static int logged;  // the first few times; a module that keeps taking it back would flood the log
+    if (s_d3dPresent && s_vt[17] != (void*)Diag_Present) {
+        void* other = s_vt[17];
+        if (logged++ < 5)
+            Log("Direct3D: Present was taken over by %s, our hook goes in front of it again", ModuleOf(other, buf, sizeof(buf)));
+        s_origPresent = (Present_t)other;
+        SetSlot(17, (void*)Diag_Present);
+    }
+    if (s_d3dReset && s_vt[16] != (void*)Hook_Reset) {
+        void* other = s_vt[16];
+        if (logged++ < 5)
+            Log("Direct3D: Reset was taken over by %s, our hook goes in front of it again", ModuleOf(other, buf, sizeof(buf)));
+        s_origReset = (Reset_t)other;
+        SetSlot(16, (void*)Hook_Reset);
+    }
 }
 
 static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty)
 {
+    if (s_presentDepth) return s_d3dPresent(dev, src, dst, wnd, dirty);  // another hook called ours again
+    s_presentDepth++;
+    struct Leave {
+        ~Leave() { s_presentDepth--; }
+    } leave;
     if (g_cfg.log) DumpAtPresent(dev);
     if (g_cfg.steamLan) OnlinePresent(dev);
     static DWORD frames, since;
@@ -538,8 +600,15 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         Log("available texture memory %u MB", (*out)->GetAvailableTextureMem() >> 20);
         LogForeignModules("after device");
         void** vt = *(void***)*out;
-        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan) PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
-        if (g_cfg.steamLan) PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);  // the banner's font
+        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan) {
+            PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
+            s_d3dPresent = s_origPresent;  // the device's own, for nested calls (CheckD3DHooks)
+        }
+        if (g_cfg.steamLan) {
+            PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);  // the banner's font
+            s_d3dReset = s_origReset;
+        }
+        s_vt = vt;
         s_device = *out;
         if (g_cfg.anisotropy > 1) {
             PatchVtable(vt, 65, (void*)Hook_SetTexture, (void**)&s_origSetTexture);

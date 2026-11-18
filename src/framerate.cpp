@@ -75,6 +75,25 @@ void FramePace()
     *kMaxTicks = ticks;
     *kAccumulator = kGamePeriod * ((ticks + 1) / 2);
     *kTickCounter = 0;
+
+    // Log=1: frames and game ticks per 10 s (60 ticks a second is real time) and the game's slow motion
+    // switches, so a game that runs slow shows whether frames are missing or the simulation is slowed
+    if (g_cfg.log) {
+        static LONGLONG windowStart;
+        static unsigned frames, tickSum;
+        frames++;
+        tickSum += ticks;
+        if (!windowStart) windowStart = now.QuadPart;
+        double secs = (double)(now.QuadPart - windowStart) / freq.QuadPart;
+        if (secs >= 10.0) {
+            BYTE slowOn = *(BYTE*)G(0x00D71208);
+            float slowSpeed = *(float*)G(0x00D113B8);
+            Log("frame pace: %.1f fps, %.1f game ticks/s (%.0f%% of real time), slow motion switch %u (speed %.3f)",
+                frames / secs, tickSum / secs, tickSum / secs / 60.0 * 100.0, slowOn, slowSpeed);
+            windowStart = now.QuadPart;
+            frames = tickSum = 0;
+        }
+    }
 }
 
 typedef void(__thiscall* AiUpdate_t)(void* self, void* a, void* b);

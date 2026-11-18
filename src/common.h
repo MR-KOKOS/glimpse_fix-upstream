@@ -106,7 +106,8 @@ IDirectInput8A* WrapDirectInput8A(IDirectInput8A* real);
 bool PadSlotConnected(int slot);
 
 // diag.cpp
-void InstallD3DHooks();  // device log/capture (Log=1), anisotropic filtering
+void InstallD3DHooks();
+void CheckD3DHooks();     // puts our Present/Reset in front of hooks other modules set later (Steam overlay)  // device log/capture (Log=1), anisotropic filtering
 void BeginEdgeClamp();   // until EndEdgeClamp: texture addressing clamped at the edges (motion blur pass)
 void EndEdgeClamp();
 
