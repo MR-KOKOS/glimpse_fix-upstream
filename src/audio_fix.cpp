@@ -13,8 +13,8 @@
 void FixOpponentEngineBanks()
 {
     if (!g_cfg.opponentEngines) return;
-    if (CurrentBuild() != BUILD_STEAM) {
-        Log("opponent engines: only on the supported build for now");
+    if (CurrentBuild() == BUILD_UNKNOWN) {
+        Log("opponent engines: only on the known Steam builds");
         return;
     }
     DWORD* slot = (DWORD*)G(0x00D3DBC0);
@@ -183,6 +183,6 @@ void FixReverbPresets()
 // later, once the game runs: the value is still ours (nothing set it back while the game started)
 void CheckOpponentEngineBanks()
 {
-    if (!g_cfg.opponentEngines || CurrentBuild() != BUILD_STEAM) return;
+    if (!g_cfg.opponentEngines || CurrentBuild() == BUILD_UNKNOWN) return;
     Log("opponent engines: bank slot size now %lu bytes", *(DWORD*)G(0x00D3DBC0));
 }

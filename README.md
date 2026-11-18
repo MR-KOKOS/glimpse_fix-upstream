@@ -97,8 +97,8 @@ within 15 seconds. A full lobby (8 players) makes the next player open a second 
   The photo mode is a free camera there; the race goes on. The lobby name and the mode are also in
   your Steam status, which your friends can see in your game info.
 
-**Not yet:** the Russian Steam version (planned for the next days) and split screen in an online
-game. Tested so far with two players, in Race and Eliminator.
+Online play runs on the German/English and on the Russian Steam version. **Not yet:** split screen
+in an online game. Tested so far with two players, in Race and Eliminator.
 
 ![The banner in a game's lobby: lobby, players, mode and the host's rules](docs/images/online-lobby.jpg)
 
@@ -138,9 +138,7 @@ Please reproduce problems without such packs before reporting them.
   the photo mode before the crash for a free camera.
 * The full ultrawide mode is experimental; split screen and the online menus are not checked yet.
 * HDR runs the game in a borderless window instead of exclusive fullscreen; the Steam overlay may not
-  show while it is on. A white HUD element over an already white sky is brightened with it. The
-  highlights need the German/English Steam build; on the Russian build HDR shows the picture without
-  them.
+  show while it is on. A white HUD element over an already white sky is brightened with it.
 * With a wheel or another DirectInput device present, the controls screen names inputs generically.
 * `UnlockDecals` works in single player races; finish the race or leave it through the pause menu
   so the profile is saved.

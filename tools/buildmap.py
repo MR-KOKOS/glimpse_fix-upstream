@@ -202,7 +202,9 @@ def main():
             if ty is not None and ty != word_b:
                 same = False
                 note = ' pointer %08X -> %08X, other build holds %08X' % (word_a, ty, word_b)
-        if not same and sec != '.data' and sec != 'Sdata':
+        # an import slot holds the loaded DLL's address, which changes with every boot: it was matched
+        # by DLL and function name above, which is the check
+        if not same and sec != '.data' and sec != 'Sdata' and x not in imp_a:
             bad.append((x, sec, 'bytes differ at the mapped place (%08X)%s' % (y, note)))
             continue
         table[x] = y

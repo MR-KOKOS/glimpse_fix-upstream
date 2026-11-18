@@ -317,9 +317,8 @@ problems without it before reporting them.
 * HDR: the game runs in a borderless window instead of exclusive fullscreen, and the Steam overlay may
   not show while it is on. The HUD is told apart from the picture by comparing it with the copy taken
   before the first menu is drawn, so a white HUD element over a white sky gets the highlight gain too.
-  The highlights need the main Steam build (German/English depots).
-* `SteamLAN` is experimental; it needs `steam_api.dll`, which is not part of this fix, and runs on the
-  main Steam build only for now.
+* `SteamLAN` is experimental; it needs `steam_api.dll`, which is not part of this fix. It runs on both
+  supported builds; on the Russian one it is mapped and checked against a dump, not yet played.
 * Audio: the game forces FMOD to DirectSound in 5.1. The LFE channel stays silent and the pause
   menu is completely silent; both are the game's own mix.
 

@@ -887,11 +887,8 @@ void HdrToneMapped()
 
 // Scaleform's GFxMovieRoot::Display (vtable 0xC41CF4 slot 31): at the first movie after the tone mapper the
 // game's target holds the finished picture without the HUD. Only the vtable slot is swapped; UltrawideFix=2
-// may have put its own hook there before (it calls the game's function), which is called on. Steam build
-// (German/English depots) only, as plain addresses: the Russian build's address table does not have them,
-// and asking it for them (G) at load time would switch every patch off there.
-static void** const kGfxDisplaySlot = (void**)(0x00C41CF4 + 31 * 4);
-static const DWORD kGfxDisplay = 0x00987E60;
+// may have put its own hook there before (it calls the game's function), which is called on. The addresses
+// go through G() when the hook is installed, not at load time.
 typedef void(__thiscall* GfxDisplay_t)(void* self);
 static GfxDisplay_t s_origGfxDisplay;
 
@@ -923,12 +920,13 @@ static bool OwnCode(const void* p)
 void HdrInstallUiHook()
 {
     if (!g_cfg.hdr || s_failed || s_uiHooked) return;
-    if (CurrentBuild() != BUILD_STEAM) {
-        Log("HDR: the HUD is told apart on the main Steam build only; here no light above white");
+    if (CurrentBuild() == BUILD_UNKNOWN) {
+        Log("HDR: the HUD is told apart on the known Steam builds only; here no light above white");
         return;
     }
+    void** const kGfxDisplaySlot = (void**)G(0x00C41CF4) + 31;
     void* cur = IsBadReadPtr(kGfxDisplaySlot, 4) ? NULL : *kGfxDisplaySlot;
-    if (!cur || (cur != (void*)kGfxDisplay && !OwnCode(cur))) {
+    if (!cur || (cur != (void*)G(0x00987E60) && !OwnCode(cur))) {
         Log("HDR: Scaleform movie class not recognised, the HUD is not told apart (no light above white)");
         return;
     }

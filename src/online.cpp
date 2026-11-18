@@ -1454,7 +1454,7 @@ void OnlineFrame()
 
 typedef HRESULT(WINAPI* D3DXCreateFontA_t)(IDirect3DDevice9*, INT, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD, LPCSTR,
                                            void**);
-static void* s_font;  // ID3DXFont: [2] Release, [14] DrawTextA, [16] OnLostDevice, [17] OnResetDevice
+static void* s_font;  // ID3DXFont: [2] Release, [15] DrawTextW, [16] OnLostDevice, [17] OnResetDevice
 static IDirect3DStateBlock9* s_bannerState;  // the device state around the panel; released before a Reset
 static UINT s_fontForHeight;
 
@@ -1483,12 +1483,11 @@ void OnlinePresent(IDirect3DDevice9* dev)
     memcpy(lines, s_bannerLines, sizeof(lines));
     LeaveCriticalSection(&s_showLock);
     if (!count || (int)(GetTickCount() - until) >= 0) return;
-    // the game's own texts (the mode) are UTF-8; the font draws in the Windows code page
-    for (int i = 0; i < count; i++) {
-        WCHAR wide[192];
-        if (MultiByteToWideChar(CP_UTF8, 0, lines[i], -1, wide, 192))
-            WideCharToMultiByte(CP_ACP, 0, wide, -1, lines[i], sizeof(lines[i]), NULL, NULL);
-    }
+    // the game's own texts (the mode) and Steam's lobby names are UTF-8: drawn as UTF-16, so that a
+    // Russian mode name shows on a German Windows too (the Windows code page would turn it into "?")
+    WCHAR wide[4][192];
+    for (int i = 0; i < count; i++)
+        if (!MultiByteToWideChar(CP_UTF8, 0, lines[i], -1, wide[i], 192)) wide[i][0] = 0;
 
     // the game may leave another render target set when it presents: draw on the back buffer and put
     // the game's target and viewport back afterwards
@@ -1540,8 +1539,8 @@ void OnlinePresent(IDirect3DDevice9* dev)
         }
         s_fontForHeight = height;
     }
-    typedef INT(WINAPI* DrawTextA_t)(void*, void*, LPCSTR, INT, RECT*, DWORD, D3DCOLOR);
-    DrawTextA_t draw = (DrawTextA_t)(*(void***)s_font)[14];
+    typedef INT(WINAPI* DrawTextW_t)(void*, void*, LPCWSTR, INT, RECT*, DWORD, D3DCOLOR);
+    DrawTextW_t draw = (DrawTextW_t)(*(void***)s_font)[15];
     D3DVIEWPORT9 full = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
     dev->SetViewport(&full);
     HRESULT begun = dev->BeginScene();
@@ -1556,7 +1555,7 @@ void OnlinePresent(IDirect3DDevice9* dev)
         int width = 0;
         for (int i = 0; i < count; i++) {
             RECT m = { 0, 0, 0, 0 };
-            draw(s_font, NULL, lines[i], -1, &m, DT_CALCRECT | DT_LEFT | DT_TOP | DT_SINGLELINE, 0xFFFFFFFF);
+            draw(s_font, NULL, wide[i], -1, &m, DT_CALCRECT | DT_LEFT | DT_TOP | DT_SINGLELINE, 0xFFFFFFFF);
             if (m.right > width) width = m.right;
         }
         int pad = (int)height / 2, lineStep = (int)(height * 1.25f);
@@ -1603,8 +1602,8 @@ void OnlinePresent(IDirect3DDevice9* dev)
                                                                   : D3DCOLOR_ARGB(255, 235, 235, 238);
             RECT shadow = { x + 2, y + 2, (LONG)desc.Width, y + (int)height * 2 };
             RECT r = { x, y, (LONG)desc.Width, y + (int)height * 2 };
-            draw(s_font, NULL, lines[i], -1, &shadow, DT_NOCLIP | DT_LEFT | DT_TOP, D3DCOLOR_ARGB(200, 0, 0, 0));
-            draw(s_font, NULL, lines[i], -1, &r, DT_NOCLIP | DT_LEFT | DT_TOP, color);
+            draw(s_font, NULL, wide[i], -1, &shadow, DT_NOCLIP | DT_LEFT | DT_TOP, D3DCOLOR_ARGB(200, 0, 0, 0));
+            draw(s_font, NULL, wide[i], -1, &r, DT_NOCLIP | DT_LEFT | DT_TOP, color);
             y += (int)(height * 1.25f);
         }
         dev->EndScene();
@@ -1793,8 +1792,8 @@ static bool __fastcall Hook_GfxInvoke(void* movie, void*, const char* path, GFxV
 
 static void InstallUiHook()
 {
-    void** vt = (void**)0x00C41CF4;
-    if (IsBadReadPtr(vt, 19 * 4) || (DWORD)vt[18] != 0x0098D2E0) {
+    void** vt = (void**)G(0x00C41CF4);
+    if (IsBadReadPtr(vt, 19 * 4) || (DWORD)vt[18] != G(0x0098D2E0)) {
         Log("online: Scaleform movie class not as expected, the game mode is not shown");
         return;
     }
@@ -1806,8 +1805,8 @@ static void InstallUiHook()
 
 void OnlineStart()
 {
-    if (CurrentBuild() != BUILD_STEAM) {
-        Log("online: SteamLAN only on the supported build for now");
+    if (CurrentBuild() == BUILD_UNKNOWN) {
+        Log("online: SteamLAN only on the known Steam builds");
         return;
     }
     InitializeCriticalSection(&s_lock);
