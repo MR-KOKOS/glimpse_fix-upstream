@@ -22,6 +22,8 @@ struct Config {
     int   frameRate;         // 30 (stock) or 60
     int   streamPoolMB;      // sector streaming pool, 0 = stock (57 MB)
     bool  fixIconSize;       // undo the double resolution scaling of the powerplay icons
+    bool  opponentEngines;   // sound bank slots big enough for the PC's opponent engine banks
+    bool  consoleReverb;     // the Xbox 360 release's reverb presets instead of the PC's stock ones
     float motionBlurStrength; // multiplier on top of the 60 fps compensation
     int   anisotropy;        // forced anisotropic filtering, 0/1 = game default
     float lodDistanceScale;  // environment, particle and powerplay draw distances
@@ -29,6 +31,9 @@ struct Config {
     bool  bloom;             // bloom added to the frame (tone mapping stays)
     bool  lensFlare;         // sun, light and screen space lens flares
     bool  particleFlare;     // flares of sparks, explosions and lights
+    bool  hdr;               // HDR10 output through a DXGI swap chain (borderless window)
+    int   hdrPeak;           // nits, the display's peak brightness
+    int   hdrPaperWhite;     // nits, the brightness of the game's white
     int   skipIntro;         // 0 = boot movies as the game, 1 = skip the publisher logo, 2 = also the intro
     bool  popInFix;          // ignore the sectors' precomputed visibility lists (distance and frustum only)
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
@@ -37,6 +42,13 @@ struct Config {
     int   unlockDecals;      // achievement decals: 0 off, 1 all, 2 only the online ones and the Pure decal (saved)
     bool  boost;             // X held: extra acceleration for player 1
     int   boostKey;          // virtual key that works like X for the boost, 0 = none
+    WORD  boostButton;       // pad button (XINPUT_GAMEPAD_*) held for the boost, 0 = none
+    bool  handbrake;         // a held button or key throws the car into a slide (player 1)
+    WORD  handbrakeButton;   // pad button, 0 = none
+    int   handbrakeKey;      // virtual key, 0 = none
+    int   handbrakeMode;     // 1 = the game's forced drift, 2 = the brake pedal (above a minimum speed)
+    float handbrakeStrength; // mode 1: deceleration while held, m/s^2
+    float handbrakeDrift;    // mode 1: yaw rate at full steering while held, rad/s
     float boostAcceleration; // m/s^2
     float boostMaxSpeed;     // m/s, boost only below this speed
     float boostMotionBlur;   // motion blur multiplier at full boost
@@ -108,6 +120,18 @@ bool PadSlotConnected(int slot);
 // diag.cpp
 void InstallD3DHooks();
 void CheckD3DHooks();     // puts our Present/Reset in front of hooks other modules set later (Steam overlay)  // device log/capture (Log=1), anisotropic filtering
+// hdr.cpp - HDR=1
+struct IDirect3D9;
+struct IDirect3DDevice9;
+struct _D3DPRESENT_PARAMETERS_;
+void HdrPresentParams(IDirect3D9* d3d, UINT adapter, HWND focus, _D3DPRESENT_PARAMETERS_* pp);  // before CreateDevice / Reset
+void HdrDeviceCreated(IDirect3DDevice9* dev);
+void HdrDeviceLost();                                // before Reset
+void HdrDeviceReset(IDirect3DDevice9* dev);          // after a successful Reset
+bool HdrPresent(IDirect3DDevice9* dev, long* result);  // instead of the device's Present; false = not active
+void HdrNoteToneMap();                               // Log=1: right after the game's tone mapping pass
+void SaveStage0Tracking();     // around a pass of our own that sets sampler stage 0
+void RestoreStage0Tracking();
 void BeginEdgeClamp();   // until EndEdgeClamp: texture addressing clamped at the edges (motion blur pass)
 void EndEdgeClamp();
 
@@ -135,7 +159,9 @@ void ApplyLensFlare();  // per frame
 extern float g_photoBloom, g_photoExposure, g_photoDof, g_photoFocus;
 
 // boost.cpp
-void BoostTick();        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
+void BoostTick();
+void RacePad(int slot, XINPUT_GAMEPAD* pad);  // the pad as the game sees it in a race: boost/handbrake buttons, Y on D-pad down
+bool RaceRunning();      // camera.cpp: a race camera ran in the last half second (in a race, not paused)        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
 float BoostBlurScale();  // motion blur multiplier while boosting (1 = none)
 
 // camera.cpp
@@ -192,6 +218,9 @@ void OnlinePresent(IDirect3DDevice9* dev);       // draws the lobby banner befor
 void OnlineDeviceLost();                         // before Reset
 void OnlineDeviceReset();                        // after a successful Reset
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
+void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's audio system starts
+void CheckOpponentEngineBanks();
+void FixReverbPresets();       // at DLL load: the console's reverb presets (Log=1: logged)
 void PatchPadNames();
 void OnInputFrame();       // called from the virtual device poll, on the game thread
 void NotePadActivity();

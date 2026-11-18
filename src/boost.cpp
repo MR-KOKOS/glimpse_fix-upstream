@@ -51,14 +51,21 @@ static float* PowerValue(BYTE* player)
     return IsA(out, G(0x00BA8680)) ? (float*)(out + 8) : NULL;
 }
 
-// chassis of car i (the vehicle list holds the cars in player order)
-static BYTE* Chassis(BYTE* player, int i)
+// car i (the vehicle list holds the cars in player order)
+static BYTE* Vehicle(BYTE* player, int i)
 {
     BYTE* state = Field(player, 0xAC);
     if (!IsA(state, G(0x00BA7378))) return NULL;
     BYTE* vehicles = Field(state, 0x40);
     BYTE* vehicle = vehicles ? Field(vehicles, 4 + i * 4) : NULL;
-    BYTE* body = vehicle && !IsBadReadPtr(vehicle, 0x600) ? Field(vehicle, 0x584) : NULL;
+    return vehicle && !IsBadReadPtr(vehicle, 0x700) ? vehicle : NULL;
+}
+
+// its chassis
+static BYTE* Chassis(BYTE* player, int i)
+{
+    BYTE* vehicle = Vehicle(player, i);
+    BYTE* body = vehicle ? Field(vehicle, 0x584) : NULL;
     return IsA(body, G(0x00BE9C90)) && !IsBadWritePtr(body + 0x1A0, 0x20) ? body : NULL;
 }
 
@@ -93,6 +100,9 @@ static WORD PadButtons()
     return buttons;
 }
 
+// two bits XInput leaves unused: the boost and handbrake keys
+static const WORD KEY_BOOST = 0x0400, KEY_HANDBRAKE = 0x0800;
+
 // The keyboard keys count as the pad buttons they stand for, while the game window has the focus.
 // Their defaults, left Shift and left Ctrl, are bound in none of the game's input presets (0xCFABF8).
 static WORD KeyButtons()
@@ -101,7 +111,8 @@ static WORD KeyButtons()
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     if (pid != GetCurrentProcessId()) return 0;
     WORD buttons = 0;
-    if (g_cfg.boostKey && (GetAsyncKeyState(g_cfg.boostKey) & 0x8000)) buttons |= XINPUT_GAMEPAD_X;
+    if (g_cfg.boostKey && (GetAsyncKeyState(g_cfg.boostKey) & 0x8000)) buttons |= KEY_BOOST;
+    if (g_cfg.handbrakeKey && (GetAsyncKeyState(g_cfg.handbrakeKey) & 0x8000)) buttons |= KEY_HANDBRAKE;
     if (g_cfg.powerFillKey && (GetAsyncKeyState(g_cfg.powerFillKey) & 0x8000))
         buttons |= XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
     return buttons;
@@ -254,6 +265,146 @@ static int LocalIndex(BYTE* logic)
     return best;
 }
 
+// ---------------------------------------------------------------- handbrake
+//
+// The game has no handbrake: its input stream reads a handbrake action, but the copy into the car
+// (0xAB8BD0) writes 0 in its place and nothing reads it. Two stand-ins, both on game data or input only:
+//  1 (HandbrakeMode=1): the car's forced drift timer (vehicle+0x64C), which a power play blast sets when it
+//    throws a car sideways. While it is above 0 the game's own drift physics hold the car in a slide; it
+//    runs down by the tick's time, so it is kept at 0.1 s while the button is held and set back to the
+//    game's idle value -1 when it is let go (unless a blast set more meanwhile).
+//  2 (HandbrakeMode=2): the pad the button is on reports the brake trigger fully pressed. The game then
+//    brakes the rear more the more the car is steered and adds its brake turning torque. Only above
+//    8 m/s forward, so the car never starts to reverse.
+// Player 1's car only; the AI cars are not affected.
+static BYTE s_brakeSlots;   // mode 2: pads that report the brake (bit per slot)
+static int s_yawAxis = -1;  // mode 1: which rotation column of the chassis is up (0: +0xE0, 1: +0xF0), -1 = not known
+static int s_yawSign = 1;   // the yaw rate's sign for positive steering
+
+// While the car is driven normally it turns about its up axis, the way the steering points: the column
+// of the chassis' rotation that the angular velocity follows is up, and the sign of steering x yaw rate
+// is the steering's direction. Learnt over the first curves of the session.
+static void YawLearn(BYTE* vehicle, BYTE* body)
+{
+    static float along[2], sign[2];
+    float steer = *(float*)(vehicle + 0x500);
+    const float* w = (const float*)(body + 0x1B0);
+    if (fabsf(steer) < 0.3f || Dot(w, w) < 0.04f) return;
+    for (int c = 0; c < 2; c++) {
+        float d = Dot(w, (const float*)(body + (c ? 0xF0 : 0xE0)));
+        along[c] += fabsf(d);
+        sign[c] += steer * d;
+    }
+    int best = along[1] > along[0] ? 1 : 0;
+    if (along[best] > 20.0f && along[best] > 3.0f * along[!best]) {  // clearly one axis
+        int sgn = sign[best] >= 0 ? 1 : -1;
+        if (best != s_yawAxis || sgn != s_yawSign) Log("handbrake: up axis %s, steering turns %s", best ? "+0xF0" : "+0xE0", sgn > 0 ? "with" : "against");
+        s_yawAxis = best;
+        s_yawSign = sgn;
+    }
+}
+static bool s_driftSet;     // mode 1: the timer is ours
+
+static void Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, float dt)
+{
+    if (g_cfg.steamLan && OnlineSession()) {  // not part of the lobby rules yet: off in a network race
+        s_brakeSlots = 0;
+        return;
+    }
+    float forward = 0;
+    if (body) forward = Dot((float*)(body + 0x1A0), (float*)(body + 0x100));
+    if (g_cfg.handbrakeMode == 2) {
+        BYTE slots = 0;
+        XINPUT_STATE st;
+        if (forward > 8.0f && g_cfg.handbrakeButton)
+            for (DWORD i = 0; i < XUSER_MAX_COUNT && pXInputGetState; i++)
+                if (PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS &&
+                    (st.Gamepad.wButtons & g_cfg.handbrakeButton))
+                    slots |= 1 << i;
+        if (forward > 8.0f && (buttons & KEY_HANDBRAKE)) slots |= 1;  // the keyboard: the first pad
+        s_brakeSlots = slots;
+        return;
+    }
+    if (!vehicle || IsBadWritePtr(vehicle + 0x64C, 4)) return;
+    float* timer = (float*)(vehicle + 0x64C);
+    bool held = (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE)) != 0;
+    if (!held && body && forward > 10.0f) YawLearn(vehicle, body);
+    if (held && forward > 5.0f) {
+        if (*timer < 0.1f) *timer = 0.1f;
+        // the forced drift keeps the car's speed: the locked rear wheels' pull is added on the chassis,
+        // HandbrakeStrength m/s^2 against the direction of travel, down to 5 m/s
+        float* vel = (float*)(body + 0x1A0);
+        float speed = sqrtf(Dot(vel, vel));
+        float slower = speed - g_cfg.handbrakeStrength * dt;
+        if (slower < 5.0f) slower = 5.0f;
+        if (speed > slower && !IsBadWritePtr(vel, 12)) {
+            float k = slower / speed;
+            vel[0] *= k;
+            vel[1] *= k;
+            vel[2] *= k;
+        }
+        // The game's drift only sets a target angle (vehicle+0x138, at its limit at once); the tyres keep the
+        // car in line. So the chassis is turned itself, as the boost pushes it: its yaw rate (angular
+        // velocity about the car's up axis) is raised towards steering x HandbrakeDrift rad/s, while its
+        // momentum carries it on: the car slides. Which axis is up and which way the steering turns are
+        // learnt from normal driving (YawLearn), so nothing about the axes is assumed.
+        float steer = *(float*)(vehicle + 0x500);
+        int up = s_yawAxis;
+        if (up >= 0 && g_cfg.handbrakeDrift > 0 && !IsBadWritePtr(body + 0x1B0, 12)) {
+            const float* axis = (const float*)(body + (up ? 0xF0 : 0xE0));
+            float* w = (float*)(body + 0x1B0);
+            float cur = Dot(w, axis);
+            float target = s_yawSign * steer * g_cfg.handbrakeDrift;
+            // The tyres and the game's drift guidance take much of a turn back within the physics step, so
+            // the turn rate is set straight to the target each frame rather than eased towards it.
+            static float lastSet;  // what we set the frame before, to see what the physics kept of it
+            static unsigned n;
+            if (g_cfg.log && n++ % 10 == 0)
+                Log("handbrake: yaw rate %.2f (we set %.2f the frame before), target %.2f, steer %.2f, %.0f km/h", cur,
+                    lastSet, target, steer, forward * 3.6f);
+            lastSet = cur;
+            if (fabsf(target) > fabsf(cur) || target * cur < 0) {
+                float add = target - cur;
+                w[0] += axis[0] * add;
+                w[1] += axis[1] * add;
+                w[2] += axis[2] * add;
+                lastSet = target;
+            }
+        }
+        static bool logged;
+        if (!logged) {
+            logged = true;
+            Log("handbrake: yaw axis %s, steering sign %+d, steer %.2f", up < 0 ? "not learnt yet (drive a few curves)" : up ? "+0xF0" : "+0xE0",
+                s_yawSign, steer);
+        }
+        if (!s_driftSet) Log("handbrake: forced drift on (%.0f km/h)", forward * 3.6f);
+        s_driftSet = true;
+    } else if (s_driftSet) {
+        if (*timer <= 0.1f) *timer = -1.0f;
+        s_driftSet = false;
+    }
+}
+
+// The pad as the game sees it in a race (dinput_wrap.cpp, every poll): the buttons the boost and the
+// handbrake use are taken away from the game, and when one of them is Y, the game's Y (the camera
+// change) moves to D-pad down, which the game does not use while driving. Mode 2 presses the brake.
+void RacePad(int slot, XINPUT_GAMEPAD* pad)
+{
+    if (!RaceRunning()) {
+        s_brakeSlots = 0;
+        return;
+    }
+    WORD used = (g_cfg.boost ? g_cfg.boostButton : 0) | (g_cfg.handbrake ? g_cfg.handbrakeButton : 0);
+    WORD keep = pad->wButtons;
+    pad->wButtons &= ~used;
+    if (used & XINPUT_GAMEPAD_Y) {
+        pad->wButtons &= ~XINPUT_GAMEPAD_DPAD_DOWN;
+        if (keep & XINPUT_GAMEPAD_DPAD_DOWN) pad->wButtons |= XINPUT_GAMEPAD_Y;
+    }
+    if (g_cfg.handbrake && g_cfg.handbrakeMode == 2 && slot >= 0 && slot < 8 && (s_brakeSlots & (1 << slot)))
+        pad->bLeftTrigger = 255;
+}
+
 void BoostTick()
 {
     static DWORD lastTick;
@@ -287,8 +438,9 @@ void BoostTick()
                 float* pos = (float*)(body + 0x110);
                 bool moved = pos[0] != lastPos[0] || pos[1] != lastPos[1] || pos[2] != lastPos[2];
                 memcpy(lastPos, pos, sizeof(lastPos));
-                if ((buttons & XINPUT_GAMEPAD_X) && moved) boosting = Push(body, g_cfg.boostAcceleration, dt);
+                if ((buttons & (g_cfg.boostButton | KEY_BOOST)) && moved) boosting = Push(body, g_cfg.boostAcceleration, dt);
             }
+            if (g_cfg.handbrake) Handbrake(Vehicle(player, me), body, buttons, dt);
             if (g_cfg.aiBoost && (g_cfg.patchMask & PATCH_AIBOOST)) AiBoost(logic, player, body, dt);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {

@@ -69,6 +69,12 @@ static HRESULT STDMETHODCALLTYPE Hook_SetTexture(IDirect3DDevice9* dev, DWORD st
     return hr;
 }
 
+// A pass of our own (HDR) sets stage 0 through the device and then puts the game's state back with a
+// state block, past these hooks: what they noted of stage 0 is kept around it.
+static StageState s_savedStage0;
+void SaveStage0Tracking() { s_savedStage0 = s_stages[0]; }
+void RestoreStage0Tracking() { s_stages[0] = s_savedStage0; }
+
 // The motion blur pass samples along the motion; at speed (and more so with the doubled blur at 60 fps
 // and the boost) the samples near the bottom edge reach past the picture and bring in a thin line from
 // outside it. While the pass runs, U and V addressing of the first stages is clamped to the edge. What
@@ -509,8 +515,13 @@ static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PA
     if (s_resetDepth) return s_d3dReset(dev, pp);  // another hook called ours again
     s_resetDepth++;
     OnlineDeviceLost();
+    HdrDeviceLost();
+    HdrPresentParams(NULL, 0, NULL, pp);  // keeps the device windowed for the HDR swap chain
     HRESULT hr = s_origReset(dev, pp);
-    if (SUCCEEDED(hr)) OnlineDeviceReset();
+    if (SUCCEEDED(hr)) {
+        OnlineDeviceReset();
+        HdrDeviceReset(dev);
+    }
     s_resetDepth--;
     return hr;
 }
@@ -582,7 +593,8 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
             feed->shotRequest = 0;
         }
     }
-    HRESULT hr = s_origPresent(dev, src, dst, wnd, dirty);
+    HRESULT hr;
+    if (!HdrPresent(dev, &hr)) hr = s_origPresent(dev, src, dst, wnd, dirty);
     FramePace();
     return hr;
 }
@@ -594,20 +606,22 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         adapter, type, focus, GetForegroundWindow(), flags, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
         pp ? pp->BackBufferFormat : 0, pp ? pp->Windowed : -1, pp ? pp->FullScreen_RefreshRateInHz : 0,
         pp ? pp->PresentationInterval : 0);
+    HdrPresentParams(d3d, adapter, focus, pp);
     HRESULT hr = s_origCreateDevice(d3d, adapter, type, focus, flags, pp, out);
     Log("CreateDevice -> %08lx", hr);
     if (SUCCEEDED(hr) && out && *out) {
         Log("available texture memory %u MB", (*out)->GetAvailableTextureMem() >> 20);
         LogForeignModules("after device");
         void** vt = *(void***)*out;
-        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan) {
+        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan || g_cfg.hdr) {
             PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
             s_d3dPresent = s_origPresent;  // the device's own, for nested calls (CheckD3DHooks)
         }
-        if (g_cfg.steamLan) {
-            PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);  // the banner's font
+        if (g_cfg.steamLan || g_cfg.hdr) {
+            PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);  // the banner's font, the HDR targets
             s_d3dReset = s_origReset;
         }
+        HdrDeviceCreated(*out);
         s_vt = vt;
         s_device = *out;
         if (g_cfg.anisotropy > 1) {

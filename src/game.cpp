@@ -770,7 +770,7 @@ void OnInputFrame()
     if (s_knownBuild && (g_cfg.patchMask & PATCH_UNLOCK)) ApplyUnlocks();
     if (s_knownBuild && (g_cfg.patchMask & PATCH_FLARES)) ApplyLensFlare();
     if (s_knownBuild && g_cfg.explosionShakeOff && (g_cfg.patchMask & PATCH_CAMERA)) ApplyExplosionShake();
-    if (s_knownBuild && (g_cfg.boost || g_cfg.powerFill || g_cfg.aiBoost) && (g_cfg.patchMask & PATCH_BOOST)) BoostTick();
+    if (s_knownBuild && (g_cfg.boost || g_cfg.powerFill || g_cfg.aiBoost || g_cfg.handbrake) && (g_cfg.patchMask & PATCH_BOOST)) BoostTick();
     if (s_knownBuild && (g_cfg.zoomKeys || g_cfg.photoMode || g_cfg.hudKey) && (g_cfg.patchMask & PATCH_CAMERA)) CameraTick();
     if (g_cfg.log && s_knownBuild && CurrentBuild() == BUILD_STEAM) WatchVmContexts();
     if (g_cfg.log && (g_cfg.patchMask & PATCH_SAVEDIAG)) WatchSaveFiles();
@@ -854,5 +854,6 @@ void ApplyGamePatches()
     if (mask & PATCH_CAMERA) PatchDepthOfField();
     if (g_cfg.profile && CurrentBuild() == BUILD_STEAM) InstallProfiler();  // research tool, made on this build
     if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
+    CheckOpponentEngineBanks();
     if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
 }
