@@ -331,6 +331,8 @@ static int WindowDpi(HWND wnd)
 
 // layout, in 96 dpi pixels
 static const int kWidth = 880, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100;
+// the sidebar: the pages from 96 on, 42 apart, then the presets' heading and buttons below the last page
+static const int kPresetLabel = 96 + kPageCount * 42 + 12, kPresetTop = kPresetLabel + 24;
 
 // the client height: the longest page above the help area, and the sidebar's pages and presets
 static int kHeight = 700;
@@ -343,7 +345,7 @@ static void FitHeight()
         if (++rows[page] > most) most = rows[page];
     }
     int content = kRowTop + most * kRowH + 8 + 130;  // the rows, a gap, help text and buttons
-    int side = 448 + 3 * 40 + 24;                     // the presets end there
+    int side = kPresetTop + 3 * 40 + 24;              // the presets end there
     kHeight = 700;
     if (content > kHeight) kHeight = content;
     if (side > kHeight) kHeight = side;
@@ -644,9 +646,9 @@ static void CreateControls()
     for (int i = 0; i < kPageCount; i++)
         s_nav[i] = Child("BUTTON", kPages[i], WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, S(96) + i * S(42), S(kSideW),
                          S(40), ID_NAV0 + i, R_NAV, s_font);
-    Child("STATIC", "PRESETS", WS_VISIBLE | SS_LEFT, S(22), S(424), S(160), S(18), 0, R_SIDEDIM, s_fontSmall);
+    Child("STATIC", "PRESETS", WS_VISIBLE | SS_LEFT, S(22), S(kPresetLabel), S(160), S(18), 0, R_SIDEDIM, s_fontSmall);
     for (int i = 0; i < 3; i++)
-        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(448) + i * S(40),
+        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(kPresetTop) + i * S(40),
                             S(174), S(32), ID_PRESET0 + i, R_PRESET, s_font);
 
     s_title = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(26), S(600), S(36), 0, R_TITLE, s_fontTitle);
