@@ -100,6 +100,8 @@ within 15 seconds. A full lobby (8 players) makes the next player open a second 
 **Not yet:** the Russian Steam version (planned for the next days) and split screen in an online
 game. Tested so far with two players, in Race and Eliminator.
 
+![The banner in a game's lobby: lobby, players, mode and the host's rules](docs/images/online-lobby.jpg)
+
 ## Settings
 
 `glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic, a help line for the
