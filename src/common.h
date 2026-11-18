@@ -48,7 +48,8 @@ struct Config {
     bool  aiBoostStraightOnly; // only on straights at speed
     bool  aiBoostChaos;      // hard, unlimited, anywhere, also when far ahead (overrides the three above)
     float fov;               // field of view factor of the race cameras
-    bool  ultrawideFix;      // wider screens than 16:9 keep the vertical field of view of 16:9
+    int   ultrawideFix;      // wider than 16:9: 0 stock, 1 race cameras keep the 16:9 picture height (camera.cpp),
+                             // 2 experimental: the game's aspect, menus and HUD at 16:9 (ultrawide.cpp)
     bool  zoomKeys;          // zoom in/out while a key is held, and reset
     int   zoomInKey, zoomOutKey, zoomResetKey;  // virtual key codes
     bool  photoMode;         // free camera during a race, world held still and HUD hidden
@@ -133,6 +134,16 @@ extern float g_photoBloom, g_photoExposure, g_photoDof, g_photoFocus;
 // boost.cpp
 void BoostTick();        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
 float BoostBlurScale();  // motion blur multiplier while boosting (1 = none)
+
+// ultrawide.cpp (UltrawideFix=2)
+struct IDirect3DDevice9;
+struct _D3DPRESENT_PARAMETERS_;
+void UltrawideDeviceCreated(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp, HWND focus);
+void UltrawidePresent(IDirect3DDevice9* dev);   // diag.cpp's Present hook, before the device's Present
+void UltrawideDeviceLost();                     // diag.cpp's Reset hook, before Reset
+void UltrawideDeviceReset(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp);  // after a successful Reset
+bool UltrawideBinkHook(const void* fn);         // fn is one of its Bink import hooks
+bool IntroSkipBinkHook(const void* fn);         // game.cpp: fn is one of the intro skip's Bink import hooks
 
 // camera.cpp
 void PatchCamera();

@@ -185,8 +185,19 @@ draw at once.
   bottom of the picture looks down at the road right below the camera and would see through it, so
   the near plane moves closer by the same ratio (the camera state's own near plane setting).
 * **Ultrawide:** the game keeps the horizontal field of view, so screens wider than 16:9 lose
-  picture at the top and bottom. `UltrawideFix` widens the view until the vertical one matches
-  16:9 again (single screen only).
+  picture at the top and bottom. `UltrawideFix=1` widens the race cameras' view until the vertical
+  one matches 16:9 again (single screen only).
+* **Full ultrawide (experimental):** `UltrawideFix=2` corrects the game instead. Every camera takes
+  its horizontal field of view from one 16/9 constant (`0x00BAA9DC`); the screen's real aspect there
+  gives every camera the 16:9 picture height: menus, power plays, crash cameras, split screen. The
+  Scaleform movies get a centred 16:9 viewport, so menus, HUD, cards and result screens keep their
+  proportions; their full-width bands and backgrounds are stretched to the screen edges (renderer
+  hooks, a table of shapes the automatic rule gets wrong), the loading screen is zoomed with black
+  sides, the split screen HUD is drawn once per half. Bink cinematics keep their aspect with black
+  sides, the 3D player tags their proportions, the pause and intro letterbox is off, and the last
+  pixel column (wrong in the stock game above 16:9) is copied from its neighbour. Tested at 32:9
+  (5120x1440, 3840x1080), 24:9 (3840x1440), 21:9 (3440x1440, 2560x1080) and 16:9 (unchanged).
+  Steam build only; elsewhere it falls back to 1.
 * **Zoom keys:** hold a key to zoom the race camera closer or wider, another one resets it.
 * **Photo mode:** during a race, a key or the pad's Back button holds the world still (the game's
   own slow motion at 0.000001), hides the HUD and the on-screen messages (the power play icons in
@@ -340,7 +351,7 @@ The file is split into sections. INIs from older versions with everything under 
 | Key | Default | Meaning |
 |---|---|---|
 | `FOV` | 1.0 | Field of view of the race cameras as a factor of the game's own (0.3–2.5). |
-| `UltrawideFix` | 1 | Screens wider than 16:9 keep the picture height of 16:9. 0 = stock. |
+| `UltrawideFix` | 1 | Screens wider than 16:9: 1 = the race cameras keep the picture height of 16:9, 2 = experimental full ultrawide (all cameras, menus and HUD at 16:9 in the centre), 0 = stock. |
 | `ZoomKeys` | 0 | 1 = zoom the race camera while `ZoomInKey` / `ZoomOutKey` is held, `ZoomResetKey` back to `FOV`. |
 | `ZoomInKey`, `ZoomOutKey`, `ZoomResetKey` | 0x31, 0x32, 0x33 | Virtual key codes (1, 2, 3 on the top row). |
 | `PhotoMode` | 0 | 1 = photo mode with `PhotoModeKey` or the pad's Back button during a race. |
@@ -388,6 +399,10 @@ The file is split into sections. INIs from older versions with everything under 
 * Boost, the power bar fill, the photo mode and the HUD key work for player 1 only; the photo mode
   only on a single screen.
 * With `VirtualPads=0` the per-frame extras do not run (see `VirtualPads`).
+* `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race
+  cards, pause and result screens at 32:9 and 21:9; menus, cards and races at 24:9. Not checked yet:
+  split screen, online and LAN menus, power play close-ups, the end-of-season cutscene. A screen whose
+  band stops at the 16:9 edge or stretches oddly needs an entry in the shape table in `src/ultrawide.cpp`.
 * Photo mode on crashes: once your car is wrecked, the game's crash sequence decides the view.
   On a crash on the road (walls, other cars, power plays) the photo camera stays tied to the car
   and is not fully free. After leaving the track (falls) the game holds a waiting view that no
@@ -473,6 +488,14 @@ the Russian build's place from `src/build_ru.inc`.
 | `0x00D71954`, `0x00D11B6C` | "Anchovies/UnlockAnchovy", "UnlockAnchovieID", read by the race update `0x4BF180` |
 | `0x00D64E6C` | HasPureSave (decal id 47); decal table `0x00D6FABC` (id, title), 48 entries |
 | `0x00B9B43C` | Import table: FMOD `Event::start` |
+| `0x00BAA9DC` | 16/9 aspect constant (.rdata) of every camera: FOV conversion `0xA59A51`, aspect getter `0x794390`, frustum size `0x451680`, tripod cameras `0xAAB02D` |
+| `0x00C41CF4` | `GFxMovieRoot` vtable: slot 20 `SetViewport` (`0x98CDF0`, viewport at +0x38), 31 `Display` (`0x987E60`); +0x28 movie definition (vtable `0xC3D5CC`), +0x80 scale mode, +0x88 visible frame |
+| `0x00BC93DC` | Scaleform renderer vtable: slots 7 `SetMatrix`, 14 `SetVertexData`, 17 `DrawIndexedTriList`, 18 `DrawLineStrip`, 26–28 mask begin/end/disable |
+| `0x00D66000` | Viewport manager: +0 screen viewports (1 = one player), +8 forced viewport (−1 = none) |
+| `0x00D36F54` | Tweakable "LetterBox/LetterBox Amount" (0.118) |
+| `0x00D1DB68`, `0x00D1DB78`, `0x00D1DB88` | 3D player tag name width, icon width, icon offset x (per viewport width) |
+| `0x00D714D0` | Split screen HUDs: `[+0xCC+4i]` player HUD, +0x12C power bar, +0x128 info bar → +8 dial → +0x78 quad corners at +0x2C |
+| `0x00B9B388` | Import table: `BinkClose` |
 | `0x008674F0` | FMOD init: DirectSound, `setSpeakerMode(5POINT1)` |
 
 Actions: `0x29` throttle, `0x2A` brake, `0x1D`–`0x2C` the 16 console buttons, `0x03`–`0x06` menu
