@@ -139,6 +139,11 @@ float BoostBlurScale();  // motion blur multiplier while boosting (1 = none)
 struct IDirect3DDevice9;
 struct _D3DPRESENT_PARAMETERS_;
 void UltrawideDeviceCreated(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp, HWND focus);
+void UltrawidePresent(IDirect3DDevice9* dev);   // diag.cpp's Present hook, before the device's Present
+void UltrawideDeviceLost();                     // diag.cpp's Reset hook, before Reset
+void UltrawideDeviceReset(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp);  // after a successful Reset
+bool UltrawideBinkHook(const void* fn);         // fn is one of its Bink import hooks
+bool IntroSkipBinkHook(const void* fn);         // game.cpp: fn is one of the intro skip's Bink import hooks
 
 // camera.cpp
 void PatchCamera();

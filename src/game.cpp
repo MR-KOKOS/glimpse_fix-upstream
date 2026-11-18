@@ -486,19 +486,27 @@ static void* __stdcall Hook_BinkOpen(const char* name, unsigned flags)
     return bink;
 }
 
+bool IntroSkipBinkHook(const void* fn)
+{
+    return fn == (void*)Hook_BinkOpen || fn == (void*)Hook_BinkWait || fn == (void*)Hook_BinkDoFrame;
+}
+
 static void HookIntroSkip()
 {
     HMODULE bink = GetModuleHandleA("binkw32.dll");
     void* open = bink ? (void*)GetProcAddress(bink, "_BinkOpen@8") : NULL;
     void* wait = bink ? (void*)GetProcAddress(bink, "_BinkWait@4") : NULL;
     void* doFrame = bink ? (void*)GetProcAddress(bink, "_BinkDoFrame@4") : NULL;
-    if (!open || !wait || !doFrame || *kIatBinkOpen != open || *kIatBinkWait != wait || *kIatBinkDoFrame != doFrame) {
+    // UltrawideFix=2 may have put its own hooks there first (it hooks at device creation): they call on to
+    // Bink, so the intro skip goes in front of them
+    if (!open || !wait || !doFrame || (*kIatBinkOpen != open && !UltrawideBinkHook(*kIatBinkOpen)) ||
+        *kIatBinkWait != wait || (*kIatBinkDoFrame != doFrame && !UltrawideBinkHook(*kIatBinkDoFrame))) {
         Log("Bink imports not where expected, intro left as is");
         return;
     }
-    s_binkOpen = (BinkOpen_t)open;
+    s_binkOpen = (BinkOpen_t)*kIatBinkOpen;
     s_binkWait = (BinkWait_t)wait;
-    s_binkDoFrame = (BinkDoFrame_t)doFrame;
+    s_binkDoFrame = (BinkDoFrame_t)*kIatBinkDoFrame;
     void* hook = (void*)Hook_BinkOpen;
     WriteMemory(kIatBinkOpen, &hook, sizeof(hook));
     hook = (void*)Hook_BinkWait;

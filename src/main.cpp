@@ -136,6 +136,7 @@ static void LoadConfig()
     g_cfg.fov = IniFloat("Camera", "FOV", 1.0f, 0.3f, 2.5f);
     g_cfg.ultrawideFix = IniInt("Camera", "UltrawideFix", 1);
     if (g_cfg.ultrawideFix < 0 || g_cfg.ultrawideFix > 2) g_cfg.ultrawideFix = 1;
+    if (g_cfg.ultrawideFix == 2 && !(g_cfg.patchMask & PATCH_D3D)) g_cfg.ultrawideFix = 1;  // needs the device hooks
     g_cfg.zoomKeys = IniBool("Camera", "ZoomKeys", false);
     g_cfg.zoomInKey = IniInt("Camera", "ZoomInKey", '1');
     g_cfg.zoomOutKey = IniInt("Camera", "ZoomOutKey", '2');

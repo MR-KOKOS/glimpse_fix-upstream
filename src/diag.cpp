@@ -508,8 +508,21 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
             feed->shotRequest = 0;
         }
     }
+    if (g_cfg.ultrawideFix == 2) UltrawidePresent(dev);
     HRESULT hr = s_origPresent(dev, src, dst, wnd, dirty);
     FramePace();
+    return hr;
+}
+
+// UltrawideFix=2: its surfaces let go of before a Reset, the aspect applied after it
+typedef HRESULT(STDMETHODCALLTYPE* Reset_t)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+static Reset_t s_origReset;
+
+static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
+{
+    UltrawideDeviceLost();
+    HRESULT hr = s_origReset(dev, pp);
+    if (SUCCEEDED(hr)) UltrawideDeviceReset(dev, pp);
     return hr;
 }
 
@@ -526,7 +539,9 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         Log("available texture memory %u MB", (*out)->GetAvailableTextureMem() >> 20);
         LogForeignModules("after device");
         void** vt = *(void***)*out;
-        if (g_cfg.log || g_cfg.frameRate == 60) PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
+        if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.ultrawideFix == 2)
+            PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
+        if (g_cfg.ultrawideFix == 2) PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);
         s_device = *out;
         if (g_cfg.ultrawideFix == 2) UltrawideDeviceCreated(*out, pp, focus);
         if (g_cfg.anisotropy > 1) {

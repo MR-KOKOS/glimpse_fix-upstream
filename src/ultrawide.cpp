@@ -18,7 +18,17 @@
 //
 // Only data changes: vtable and import slots, the .rdata constant, three .data tweakables. No game code is
 // patched; every slot and value is checked before it is changed, and anything not recognised stays stock.
-// Made on the Steam build (4BE13C66) only; the other builds keep UltrawideFix=1.
+// Made on the Steam build (4BE13C66) only; the other builds keep UltrawideFix=1. The addresses below are that
+// build's, written as plain literals (not through G()): CheckExe turns the mode off on any other build before
+// one of them is used.
+//
+// The aspect constant has nine readers in the game's code. Four are checked (kSigs) and are what this mode is
+// for; the others read it as well and so follow the screen's aspect too: 0x4AFBA8 (a field of view / size
+// division), 0x4B45E6 and 0x4B4C25 (two camera setups), 0x794A8D (an argument of 0x50B180) and 0xA9F3AB (a
+// screen space distance check). One more reason the mode is marked experimental.
+//
+// Threading: the device is created multithreaded, but the movie and renderer hooks run on the render thread
+// only (Scaleform's SetViewport and Display, the renderer's draws); their state is kept without locks.
 #include "common.h"
 #include <d3d9.h>
 #include <math.h>
@@ -787,6 +797,12 @@ static void __stdcall Hook_BinkClose(void* h)
     s_binkClose(h);
 }
 
+// the intro skip (game.cpp) hooks the same imports, after this module or before it
+bool UltrawideBinkHook(const void* fn)
+{
+    return fn == (void*)Hook_BinkOpen || fn == (void*)Hook_BinkDoFrame || fn == (void*)Hook_BinkClose;
+}
+
 static int VbVtIndex(IDirect3DVertexBuffer9* vb)
 {
     void** vt = *(void***)vb;
@@ -869,7 +885,11 @@ static void InstallBinkHooks(IDirect3DDevice9* dev)
     void** close = (void**)0x00B9B388;
     void** doFrame = (void**)0x00B9B380;
     HMODULE bink = GetModuleHandleA("binkw32.dll");
-    if (!bink || !Readable(doFrame, 0x20) || GetProcAddress(bink, "_BinkClose@4") != *close) {
+    // each import holds Bink's function, or the intro skip's hook (game.cpp), which calls on to it: the
+    // hook here then goes in front of that one
+    if (!bink || !Readable(doFrame, 0x20) || GetProcAddress(bink, "_BinkClose@4") != *close ||
+        (GetProcAddress(bink, "_BinkOpen@8") != *open && !IntroSkipBinkHook(*open)) ||
+        (GetProcAddress(bink, "_BinkDoFrame@4") != *doFrame && !IntroSkipBinkHook(*doFrame))) {
         Log("ultrawide: Bink imports not recognised, cinematics left as is");
         return;
     }
@@ -881,10 +901,7 @@ static void InstallBinkHooks(IDirect3DDevice9* dev)
 
 // ---------------------------------------------------------------- device hooks
 
-typedef HRESULT(STDMETHODCALLTYPE* Present_t)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
-typedef HRESULT(STDMETHODCALLTYPE* Reset_t)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
-static Present_t s_origPresent;
-static Reset_t s_origReset;
+// Present and Reset come from diag.cpp's hooks (one hook per slot for the whole fix)
 static IDirect3DSurface9 *s_edgeCol, *s_binkTmp;  // default pool: released before Reset
 
 static void ClearSides(IDirect3DDevice9* dev, IDirect3DSurface9* bb, LONG l, LONG r, LONG w, LONG h)
@@ -893,9 +910,10 @@ static void ClearSides(IDirect3DDevice9* dev, IDirect3DSurface9* bb, LONG l, LON
     if (r < w) { RECT b = { r, 0, w, h }; dev->ColorFill(bb, &b, D3DCOLOR_XRGB(0, 0, 0)); }
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_Present(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND wnd,
-                                              const RGNDATA* dirty)
+// before the device's Present
+void UltrawidePresent(IDirect3DDevice9* dev)
 {
+    if (s_state <= 0 || dev != s_dev) return;
     LONG f = InterlockedIncrement(&s_frame);
     IDirect3DSurface9* bb = NULL;
     if (s_state > 0 && SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
@@ -945,7 +963,6 @@ static HRESULT STDMETHODCALLTYPE Hook_Present(IDirect3DDevice9* dev, const RECT*
         }
         bb->Release();
     }
-    return s_origPresent(dev, src, dst, wnd, dirty);
 }
 
 static void Apply(UINT w, UINT h, HWND wnd)
@@ -964,18 +981,25 @@ static void Apply(UINT w, UINT h, HWND wnd)
     Log("ultrawide: %ux%u, aspect %.4f%s", w, h, aspect, target > stock ? ", Hor+ with the UI at 16:9" : " (stock)");
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
+static void DropSurfaces()
 {
-    // D3D9 Reset fails while default pool surfaces exist
     if (s_binkTmp) { s_binkTmp->Release(); s_binkTmp = NULL; }
     if (s_edgeCol) { s_edgeCol->Release(); s_edgeCol = NULL; }
-    HRESULT hr = s_origReset(dev, pp);
-    if (SUCCEEDED(hr) && pp) {
-        D3DDEVICE_CREATION_PARAMETERS cp = {};
-        dev->GetCreationParameters(&cp);
-        Apply(pp->BackBufferWidth, pp->BackBufferHeight, pp->hDeviceWindow ? pp->hDeviceWindow : cp.hFocusWindow);
-    }
-    return hr;
+}
+
+// before Reset: D3D9 Reset fails while default pool surfaces exist
+void UltrawideDeviceLost()
+{
+    DropSurfaces();
+}
+
+// after a successful Reset
+void UltrawideDeviceReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
+{
+    if (s_state <= 0 || dev != s_dev || !pp) return;
+    D3DDEVICE_CREATION_PARAMETERS cp = {};
+    dev->GetCreationParameters(&cp);
+    Apply(pp->BackBufferWidth, pp->BackBufferHeight, pp->hDeviceWindow ? pp->hDeviceWindow : cp.hFocusWindow);
 }
 
 void UltrawideDeviceCreated(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp, HWND focus)
@@ -993,8 +1017,7 @@ void UltrawideDeviceCreated(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp, HW
         LetterboxOff();
     }
     if (s_state < 0) return;
+    if (s_dev && dev != s_dev) DropSurfaces();  // a new device: the old one's surfaces go with it
     s_dev = dev;
-    if (!s_origReset) s_origReset = (Reset_t)HookSlot(dev, 16, (void*)Hook_Reset);
-    if (!s_origPresent) s_origPresent = (Present_t)HookSlot(dev, 17, (void*)Hook_Present);
     if (pp) Apply(pp->BackBufferWidth, pp->BackBufferHeight, pp->hDeviceWindow ? pp->hDeviceWindow : focus);
 }
