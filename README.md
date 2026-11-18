@@ -66,12 +66,16 @@ needs testing: please try it and report what you find in the
 [issues](https://github.com/frankyfife/glimpse_fix/issues), with `SplitSecondPad.log` (`Log=1`) from
 every PC involved.**
 
+> **Important: online play needs one file that is NOT in the download.** Copying the fix is not
+> enough: put `steam_api.dll` (32 bit) next to `SplitSecond.exe` yourself. It comes with Valve's
+> Steamworks SDK (free download after signing in at partner.steamgames.com), file
+> `sdk/redistributable_bin/steam_api.dll` (not the 64 bit `steam_api64.dll`). Without it the game runs
+> as before, but online play stays off and the log says `steam_api.dll not found`.
+
 **What you need**
 
+* **`steam_api.dll` next to `SplitSecond.exe`** (see above).
 * `SteamLAN=1` (settings program, page *Online*) on every PC, all with the same version of the fix.
-* `steam_api.dll` (32 bit) next to `SplitSecond.exe`. It is not part of this fix: it comes with the
-  Steamworks SDK (free download after signing in at partner.steamgames.com), file
-  `sdk/redistributable_bin/steam_api.dll`.
 * The game started through Steam.
 
 **Where you land** when the game starts
