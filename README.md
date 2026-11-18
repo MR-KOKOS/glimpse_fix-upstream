@@ -17,6 +17,10 @@ adds what the port never had:
   the quality option
 * **Camera:** field of view, the correct view on ultrawide screens, zoom keys, a **photo mode**
   with a free camera and a key to switch the HUD off
+* **HDR output** for HDR displays (first stage: the game's picture in an HDR10 signal with an
+  adjustable paper white)
+* **Sound as on the console:** the opponents' engines are audible again, and the reverb presets of
+  the Xbox 360 release replace the PC's stock ones
 * **Extras nobody else has** (off by default) — see below
 * **A settings program** (`glimpse_config.exe`) instead of editing the INI by hand
 
@@ -31,8 +35,9 @@ Split/Second never had a boost. Now it does — and it feels like it belongs the
 
 | | What it does | INI |
 |---|---|---|
-| **Boost** | Hold **X** (keyboard: **left Shift**) and your car surges forward along its heading, up to 324 km/h. The motion blur swells with it (3× by default) and eases off when you let go, so speed *feels* like speed. Works only while driving forward, never in the pause menu. | `Boost=1` |
+| **Boost** | Hold **X** (keyboard: **left Shift**; both can be changed) and your car surges forward along its heading, up to 324 km/h. The motion blur swells with it (3× by default) and eases off when you let go, so speed *feels* like speed. Works only while driving forward, never in the pause menu. | `Boost=1` |
 | **AI boost** *(experimental)* | The AI cars boost too, in bursts while they are behind you or not far ahead, so the field stays tight. Three levels from *easy* to *hard*, on the straights only or everywhere, and a **chaos mode** (`AIBoostChaos=1`) where every AI car boosts all the time, always has a full power play bar and drives at its highest skill. Turn it off with one line if it misbehaves. | `AIBoost=1` |
+| **Handbrake** | The game has none. Hold **Y** (keyboard: **X**; both can be changed) and your car brakes and swings into a slide with the steering, donuts included. How hard it pulls and how far the rear comes round are adjustable. When the boost or the handbrake uses Y, the game's camera change moves to D-pad down during a race. | `Handbrake=1` |
 | **Full Power Play bar** | Press **LS + RS** (both sticks; keyboard: **left Ctrl**) and the power play bar is full: drop a building on the leader whenever you like. | `PowerBarFill=1` |
 | **Everything unlocked** | All tracks, events, episodes, game modes and cars selectable from the start, using the game's own switches. Your profile is not changed; set it back to 0 and everything is as you earned it. | `UnlockAll=1` |
 | **Bonus content** | The extras the PC version hid behind cheat codes: the **Expressway** track, the Cobretti SlipStream, the retailer branded cars and the Euro livery pack. | `BonusContent=1` |
@@ -40,8 +45,9 @@ Split/Second never had a boost. Now it does — and it feels like it belongs the
 | **Skip the intro** | Skip the publisher logo, or the logo and the intro, at every start. The movie files stay untouched. | `SkipIntro=1` / `2` |
 
 All of them can be switched in `glimpse_config.exe` (*Gameplay*), the AI boost under *AI*, the photo
-mode under *Camera*. Both keys can be changed (`BoostKey`, `PowerBarFillKey`); the defaults are bound
-in none of the game's own keyboard layouts. Tune the boost with
+mode under *Camera*. The keys and pad buttons can be changed (`BoostKey`, `BoostButton`, `HandbrakeKey`,
+`HandbrakeButton`, `PowerBarFillKey`); the defaults are bound in none of the game's own layouts while
+driving. Tune the boost with
 `BoostAcceleration` (m/s², default 15 ≈ 1.5 g), `BoostMaxSpeed` (m/s, default 90) and
 `BoostMotionBlur` (1–5), the AI boost with `AIBoostLevel`, `AIBoostUnlimited`, `AIBoostStraightOnly`
 or simply `AIBoostChaos`. Like everything else here, the extras only change game data, never game
@@ -172,11 +178,31 @@ draw at once.
   tuned live (`BloomStrength`, `BloomTone`, `BloomCurve`, `Exposure`). Bloom is cleared from the
   tone mapping pass's shader choice, the particle flare pass from its own state flag (both through
   their vtable slots), the lens flares through the game's two enable tweakables.
+* **HDR output** (`HDR=1`): Direct3D 9 has no way to an HDR10 display on Windows. The game's device
+  is made windowed (a borderless window over the whole screen) and its frames go out through a
+  Direct3D 11 swap chain of the fix with the HDR10 colour space: at Present the back buffer is
+  converted to linear light at the paper white level (`HDRPaperWhite`), BT.2020 and the PQ curve,
+  read back one frame later and presented. This first stage shows the game's own picture in HDR;
+  the light above white from the game's floating point image (up to `HDRPeakBrightness`) is the
+  next step. The output costs about 1.5 ms a frame at 4K and adds one frame of delay.
 * **Anisotropic filtering:** the game filters all textures linearly; mipmapped textures that are
   not render targets get anisotropic filtering.
 * **Graphics quality:** "Very High" is exactly "High" plus 2x supersampling: of all places in the
   game that read the quality level, only the supersampling ones tell Very High from High. To render
   at screen resolution, pick "High" in the game; nothing else changes.
+
+### Audio
+
+* **Opponents' engines:** every opponent's engine is a sound bank of its own, loaded into one of seven
+  slots that the audio system makes with the Xbox 360's size (about 100 KB). The PC's banks are larger,
+  the loader refuses them and the opponents race without an engine sound. The slot size is plain data
+  in the exe and is raised to 256 KB before the audio system starts (`OpponentEngines`). Found by the
+  [Back on Air](https://github.com/xenophobentx/back-on-air) project and checked against this build.
+* **Reverb:** in the PC release six of the seven reverb presets (halls, tunnels, under bridges, the
+  menu) hold FMOD's stock "Generic" values and the seventh the stock "Bathroom". The Xbox 360
+  release's copy of the same event file holds the presets the sound designers set: more reverb and a
+  longer decay where it belongs. FMOD's preset lookup in `fmod_event.dll` is wrapped and hands the game
+  the console's values (`ConsoleReverb`), read from the Xbox 360 disc.
 
 ### Camera
 
@@ -337,6 +363,9 @@ The file is split into sections. INIs from older versions with everything under 
 | `LensFlare` | 1 | 0 = no sun, light or screen space lens flares. |
 | `ParticleFlare` | 1 | 0 = no flares from sparks, explosions and lights. |
 | `FixPowerplayIconSize` | 1 | Powerplay icons and route change markers at console size at every resolution. 0 = stock. |
+| `HDR` | 0 | 1 = HDR10 output for an HDR display (HDR switched on in the Windows display settings); the game runs in a borderless window. |
+| `HDRPeakBrightness` | 1000 | The display's peak brightness in nits (400–10000), as the Windows HDR Calibration app finds it. |
+| `HDRPaperWhite` | 200 | Brightness of the game's white in nits (80–500). |
 
 **[World]**
 
@@ -370,17 +399,38 @@ The file is split into sections. INIs from older versions with everything under 
 | `WreckTime` | 0 | **Highly experimental: can softlock the game, especially together with the photo mode.** Seconds from a wreck of your car to the respot (about 4 s in the game; 0 = as the game): the game's respot logic is left out until then, the crash camera keeps showing the wreck. The photo mode holds the respot of all cars while it is on. |
 | `UnlockDecals` | 0 | Achievements and their decals: 1 = all, 2 = only the unobtainable ones (achievements 41–46 from ranked online races and the Pure decal; the "all achievements" decal follows once the rest is earned). Unlocked in the next single player race and saved with the profile, so they stay when set back to 0; the Pure decal shows while this is set. The `.sav` files are copied to `glimpse_backup` before the first unlock. |
 | `Boost` | 0 | 1 = X held gives player 1 extra speed along the car's heading. |
-| `BoostKey` | 0xA0 | Keyboard key that works like X for the boost, a virtual key code (0xA0 = left Shift). 0 = pad only. |
+| `BoostKey` | 0xA0 | Keyboard key for the boost, a virtual key code (0xA0 = left Shift). 0 = pad only. |
+| `BoostButton` | X | Pad button for the boost: `X`, `Y`, `LS`, `RS` (stick clicks) or `None`. |
 | `BoostAcceleration` | 15 | Boost in m/s² (1–100). |
 | `BoostMaxSpeed` | 90 | No boost above this speed, m/s (10–200; 90 = 324 km/h). |
 | `BoostMotionBlur` | 3.0 | Motion blur multiplier at full boost (1–5). |
 | `PowerBarFill` | 0 | 1 = LS+RS (both sticks pressed) fills player 1's power play bar. |
 | `PowerBarFillKey` | 0xA2 | Keyboard key that works like LS+RS (0xA2 = left Ctrl). 0 = pad only. |
+| `Handbrake` | 0 | 1 = handbrake for player 1 while `HandbrakeButton` or `HandbrakeKey` is held (off in a network race). |
+| `HandbrakeButton` | Y | Pad button: `X`, `Y`, `LS`, `RS` or `None`. When the boost or the handbrake uses Y, the game's camera change moves to D-pad down during a race. |
+| `HandbrakeKey` | 0x58 | Keyboard key, a virtual key code (0x58 = X). 0 = none. |
+| `HandbrakeMode` | 1 | 1 = drift: the game's own slide physics (as when a power play blast throws a car sideways) with the pull and turn below. 2 = brake: the brake pedal fully pressed above 30 km/h. |
+| `HandbrakeStrength` | 15 | Drift type: how hard the handbrake slows the car, m/s² (0–40). |
+| `HandbrakeDrift` | 2.5 | Drift type: how fast the car turns into the slide at full steering, rad/s (0–5; 2.5 ≈ 140° a second). |
 | `AIBoost` | 0 | Experimental: 1 = AI cars boost in bursts while behind player 1 or not far ahead. |
 | `AIBoostLevel` | 2 | 1 easy (0.8× your boost, 3 s tank, up to 30 m ahead), 2 normal (1×, 5 s, about once a second, 60 m), 3 hard (1.3×, 8 s, almost constantly, 150 m). |
 | `AIBoostUnlimited` | 0 | 1 = the AI's boost tank never empties. |
 | `AIBoostStraightOnly` | 1 | 1 = AI boosts only on straights at speed, 0 = anywhere while driving forward. |
 | `AIBoostChaos` | 0 | 1 = chaos mode: level 3, endless tank, anywhere, also far ahead of you, the AI's power play bar is always full and the AI drives at its highest skill (no slowing down when ahead). Overrides the three keys above while set. |
+
+**[Audio]**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `OpponentEngines` | 1 | 1 = sound bank slots big enough for the PC's opponent engine banks. 0 = stock (silent opponents). |
+| `ConsoleReverb` | 1 | 1 = the Xbox 360 release's reverb presets. 0 = the PC's stock ones. |
+
+**[Online]** (prototype)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `SteamLAN` | 0 | Prototype: the game's LAN mode with the players of a Steam lobby instead of the local network, through Steam (no ports to open). Needs `steam_api.dll` from the Steamworks SDK next to the game and the game started through Steam. Steam friends join through "Join game". In a LAN session the lobby owner's boost and AI settings apply to everybody. Still in development. |
+| `LobbyName` | (empty) | Players with the same name meet in one lobby; empty = the public lobby. |
 
 **[Debug]**
 
@@ -414,6 +464,11 @@ The file is split into sections. INIs from older versions with everything under 
   decal is reset by the game whenever it looks for Pure saves, so it is shown only while the
   option is set.
 * `PopInFix=1` draws somewhat more per frame than the stock visibility lists allow.
+* HDR: first stage only (the game's picture at the paper white level, no light above it yet); the
+  game runs in a borderless window instead of exclusive fullscreen, and the Steam overlay may not
+  show while it is on.
+* The handbrake works for player 1 and is off in network races.
+* `SteamLAN` is a prototype in development; it needs `steam_api.dll`, which is not part of this fix.
 * Audio: the game forces FMOD to DirectSound in 5.1. The LFE channel stays silent and the pause
   menu is completely silent; both are the game's own mix.
 
