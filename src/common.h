@@ -45,6 +45,7 @@ struct Config {
     WORD  boostButton;       // pad button (XINPUT_GAMEPAD_*) held for the boost, 0 = none
     bool  handbrake;         // a held button or key throws the car into a slide (player 1)
     WORD  handbrakeButton;   // pad button, 0 = none
+    WORD  handbrakeButtonIni;  // as in the INI, before the clash with the boost button is resolved
     int   handbrakeKey;      // virtual key, 0 = none
     int   handbrakeMode;     // 1 = the game's forced drift, 2 = the brake pedal (above a minimum speed)
     float handbrakeStrength; // mode 1: deceleration while held, m/s^2
@@ -72,6 +73,7 @@ struct Config {
     bool  gradient;          // keep the cameras' screen gradient (the blue band at the top)
     bool  steamLan;          // the game's LAN mode over Steam (lobby, relayed P2P), PROTOTYPE
     char  lobbyName[64];     // players with the same name share a lobby; empty = the public one
+    bool  friendsOnly;       // the lobby is open to Steam friends only; a friend's lobby is joined, the name not used
     unsigned patchMask;      // PATCH_* bits that may be applied (development, to bisect side effects)
 };
 
@@ -102,7 +104,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "1.9.0"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "2.0.0"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -130,7 +132,9 @@ void HdrDeviceCreated(IDirect3DDevice9* dev);
 void HdrDeviceLost();                                // before Reset
 void HdrDeviceReset(IDirect3DDevice9* dev);          // after a successful Reset
 bool HdrPresent(IDirect3DDevice9* dev, long* result);  // instead of the device's Present; false = not active
-void HdrNoteToneMap();                               // Log=1: right after the game's tone mapping pass
+extern volatile DWORD g_lastPresent;                 // diag.cpp: GetTickCount of the last Present
+void HdrToneMapped();                                // right after the game's tone mapping pass: the gain (stage 2)
+void HdrInstallUiHook();                             // after UltrawideDeviceCreated: Scaleform hook for the HUD copy
 void SaveStage0Tracking();     // around a pass of our own that sets sampler stage 0
 void RestoreStage0Tracking();
 void BeginEdgeClamp();   // until EndEdgeClamp: texture addressing clamped at the edges (motion blur pass)

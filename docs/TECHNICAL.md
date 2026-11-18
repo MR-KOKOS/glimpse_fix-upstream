@@ -33,7 +33,7 @@ PS3 icons.
 * LT and RT get their own axes; the 360 preset is adjusted (throttle RT, brake LT).
 * The virtual pads come first in the device list, so the game's joystick index matches the
   XInput slot it rumbles.
-* The prompt bar shows Ⓐ Ⓑ Ⓧ Ⓨ Start (or ○ □ △) while the pad is the device in use and
+* The prompt bar shows A, B, X, Y, Start (or Circle, Square, Triangle) while the pad is the device in use and
   switches back to key captions as soon as a key is pressed. The title screen reads
   "Press START" instead of "Press ENTER" (any language). The controls screen names pad inputs
   A/B/X/Y/LB/RB/LT/RT/LS…/RS… instead of "Button 1" or "Z rotation".
@@ -115,9 +115,16 @@ draw at once.
   is made windowed (a borderless window over the whole screen) and its frames go out through a
   Direct3D 11 swap chain of the fix with the HDR10 colour space: at Present the back buffer is
   converted to linear light at the paper white level (`HDRPaperWhite`), BT.2020 and the PQ curve,
-  read back one frame later and presented. This first stage shows the game's own picture in HDR;
-  the light above white from the game's floating point image (up to `HDRPeakBrightness`) is the
-  next step. The output costs about 1.5 ms a frame at 4K and adds one frame of delay.
+  read back one frame later and presented. The light above white comes from the game's own half
+  float image: its filmic tone mapper (the last draw of the bloom pass, vtable slot `0xBB3678`)
+  squeezes it into 8 bits with `T(L) = k L^p / (L^p + q)`. Right after that pass, with the game's
+  textures and constants still bound (read from the shader's constant table), one more pass of the fix
+  runs the same curve twice per pixel, as the game does and opened up above a knee (same value and
+  slope there, then rising towards `HDRPeakBrightness`), and keeps the ratio as a gain per pixel. When
+  the first Scaleform movie of the frame is drawn (`GFxMovieRoot::Display`, vtable `0xC41CF4` slot 31),
+  the game's target is copied: the picture without the HUD. At Present every pixel that still equals
+  that copy gets the gain, so the HUD and menus stay at paper white. The output costs about 1.6 ms a
+  frame at 4K and adds one frame of delay.
 * **Anisotropic filtering:** the game filters all textures linearly; mipmapped textures that are
   not render targets get anisotropic filtering.
 * **Graphics quality:** "Very High" is exactly "High" plus 2x supersampling: of all places in the
@@ -129,8 +136,9 @@ draw at once.
 * **Opponents' engines:** every opponent's engine is a sound bank of its own, loaded into one of seven
   slots that the audio system makes with the Xbox 360's size (about 100 KB). The PC's banks are larger,
   the loader refuses them and the opponents race without an engine sound. The slot size is plain data
-  in the exe and is raised to 256 KB before the audio system starts (`OpponentEngines`). Found by the
-  [Back on Air](https://github.com/xenophobentx/back-on-air) project and checked against this build.
+  in the exe and is raised to 256 KB before the audio system starts (`OpponentEngines`). Pointed out by
+  the [Back on Air](https://github.com/xenophobentx/back-on-air) project (an inspiration only; no code
+  was taken) and checked against this build.
 * **Reverb:** in the PC release six of the seven reverb presets (halls, tunnels, under bridges, the
   menu) hold FMOD's stock "Generic" values and the seventh the stock "Bathroom". The Xbox 360
   release's copy of the same event file holds the presets the sound designers set: more reverb and a
@@ -174,6 +182,30 @@ draw at once.
   the shake from explosions and power plays, both against motion sickness.
 * **HUD key:** switches the power bar and the info bar off and on during a race.
 
+## Online over Steam
+
+The game's network code is Quazal's Net-Z over PRUDP. In LAN mode the host answers search broadcasts
+on UDP port 9100 and the players connect to its game port. Quazal's sockets go through a replaceable
+transport, its SocketDriver (`[0xD77734]`, taken when its network starts); the fix puts a driver
+there that carries the datagrams through `ISteamNetworkingMessages` to the members of a Steam lobby
+(every player gets a virtual address 10.x.y.z from the Steam account, a broadcast goes to every
+member) and answers Quazal's interface list query with that address through the `WSAIoctl` import
+slot. A data write, two import slots (`WSAIoctl`, and `OutputDebugStringA` for the game's debug text
+in the log) and the Scaleform movie's `Invoke` vtable slot; no game code.
+
+* **Lobbies:** public lobbies are found by their name (`glimpse_name`, the oldest one wins); friends
+  only lobbies through the friends' current game (`GetFriendGamePlayed`). A lobby that Steam no longer
+  reports is noticed after 3 s and found or made again; a switch joins the new lobby before it leaves
+  the old one.
+* **Session rules:** every member publishes its own settings and whether it hosts (lobby member
+  data). The host is the player that creates a game (a game port open without a connection to a host)
+  or answers a search; a guest's host is the first player it connects to. Until a host is known, the
+  Steam lobby owner's settings stand in. The extras follow the host's
+  settings; until a guest has them, they are off.
+* **Game mode:** the game's lobby screen sets its title to "LOBBY - <mode>" in the game's language;
+  the fix reads it from the Scaleform calls (`GFxMovieRoot` vtable slot 18, `Invoke`) and the host
+  publishes it for the others in the Steam lobby.
+
 ## Copy protection in detail
 
 The Steam executable is protected with SecuROM, which decrypts the game at runtime and runs parts
@@ -198,7 +230,9 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   loop's accumulator, the power bar, the AI skill and the cars' chassis velocity,
 * swapped vtable slots (motion blur, grading, bloom, depth of field and particle flare passes, AI
   player update, chase and bumper camera update, with the photo mode the other camera classes'
-  update, the respot logic's update with the photo mode or `WreckTime`),
+  update, the respot logic's update with the photo mode or `WreckTime`, the Scaleform movie's
+  `Display` with `HDR=1` and `UltrawideFix=2`, its `SetViewport` with `UltrawideFix=2` and its `Invoke`
+  with `SteamLAN=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
   `Event::start`), read-only
   strings and constants (prompt bar icon paths, route marker size),
@@ -280,11 +314,12 @@ problems without it before reporting them.
   decal is reset by the game whenever it looks for Pure saves, so it is shown only while the
   option is set.
 * `PopInFix=1` draws somewhat more per frame than the stock visibility lists allow.
-* HDR: first stage only (the game's picture at the paper white level, no light above it yet); the
-  game runs in a borderless window instead of exclusive fullscreen, and the Steam overlay may not
-  show while it is on.
-* The handbrake works for player 1 and is off in network races.
-* `SteamLAN` is a prototype in development; it needs `steam_api.dll`, which is not part of this fix.
+* HDR: the game runs in a borderless window instead of exclusive fullscreen, and the Steam overlay may
+  not show while it is on. The HUD is told apart from the picture by comparing it with the copy taken
+  before the first menu is drawn, so a white HUD element over a white sky gets the highlight gain too.
+  The highlights need the main Steam build (German/English depots).
+* `SteamLAN` is experimental; it needs `steam_api.dll`, which is not part of this fix, and runs on the
+  main Steam build only for now.
 * Audio: the game forces FMOD to DirectSound in 5.1. The LFE channel stays silent and the pause
   menu is completely silent; both are the game's own mix.
 

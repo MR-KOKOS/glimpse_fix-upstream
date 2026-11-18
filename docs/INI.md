@@ -1,6 +1,6 @@
 # SplitSecondPad.ini reference
 
-Every key of `SplitSecondPad.ini`. `glimpse_config.exe` sets all of them except the development keys in `[Debug]` and `LobbyName`; this is the reference for editing the file by hand.
+Every key of `SplitSecondPad.ini`. `glimpse_config.exe` sets all of them except the development keys in `[Debug]`; this is the reference for editing the file by hand.
 
 The file is split into sections. INIs from older versions with everything under `[Game]` are still read.
 
@@ -31,7 +31,7 @@ The file is split into sections. INIs from older versions with everything under 
 | `ParticleFlare` | 1 | 0 = no flares from sparks, explosions and lights. |
 | `FixPowerplayIconSize` | 1 | Powerplay icons and route change markers at console size at every resolution. 0 = stock. |
 | `HDR` | 0 | 1 = HDR10 output for an HDR display (HDR switched on in the Windows display settings); the game runs in a borderless window. |
-| `HDRPeakBrightness` | 1000 | The display's peak brightness in nits (400–10000), as the Windows HDR Calibration app finds it. |
+| `HDRPeakBrightness` | 1000 | The display's peak brightness in nits (400–10000), as the Windows HDR Calibration app finds it. The highlights of the game's HDR image go up to this. |
 | `HDRPaperWhite` | 200 | Brightness of the game's white in nits (80–500). |
 
 **[World]**
@@ -73,7 +73,7 @@ The file is split into sections. INIs from older versions with everything under 
 | `BoostMotionBlur` | 3.0 | Motion blur multiplier at full boost (1–5). |
 | `PowerBarFill` | 0 | 1 = LS+RS (both sticks pressed) fills player 1's power play bar. |
 | `PowerBarFillKey` | 0xA2 | Keyboard key that works like LS+RS (0xA2 = left Ctrl). 0 = pad only. |
-| `Handbrake` | 0 | 1 = handbrake for player 1 while `HandbrakeButton` or `HandbrakeKey` is held (off in a network race). |
+| `Handbrake` | 0 | 1 = handbrake for player 1 while `HandbrakeButton` or `HandbrakeKey` is held (in a network race the host's setting applies to everybody). |
 | `HandbrakeButton` | Y | Pad button: `X`, `Y`, `LS`, `RS` or `None`. When the boost or the handbrake uses Y, the game's camera change moves to D-pad down during a race. |
 | `HandbrakeKey` | 0x58 | Keyboard key, a virtual key code (0x58 = X). 0 = none. |
 | `HandbrakeMode` | 1 | 1 = drift: the game's own slide physics (as when a power play blast throws a car sideways) with the pull and turn below. 2 = brake: the brake pedal fully pressed above 30 km/h. |
@@ -92,12 +92,13 @@ The file is split into sections. INIs from older versions with everything under 
 | `OpponentEngines` | 1 | 1 = sound bank slots big enough for the PC's opponent engine banks. 0 = stock (silent opponents). |
 | `ConsoleReverb` | 1 | 1 = the Xbox 360 release's reverb presets. 0 = the PC's stock ones. |
 
-**[Online]** (prototype)
+**[Online]** (experimental, see the [README](../README.md#online-over-steam-experimental))
 
 | Key | Default | Meaning |
 |---|---|---|
-| `SteamLAN` | 0 | Prototype: the game's LAN mode with the players of a Steam lobby instead of the local network, through Steam (no ports to open). Needs `steam_api.dll` from the Steamworks SDK next to the game and the game started through Steam. Steam friends join through "Join game". In a LAN session the lobby owner's boost and AI settings apply to everybody. Still in development. |
-| `LobbyName` | (empty) | Players with the same name meet in one lobby; empty = the public lobby. |
+| `SteamLAN` | 0 | The game's LAN mode with the players of a Steam lobby instead of the local network, through Steam (no ports to open). Needs `steam_api.dll` from the Steamworks SDK next to the game and the game started through Steam. Steam friends join through "Join game". In a LAN game the settings of its host (the player who created it) for boost, handbrake, power bar fill, AI boost and respot time (`WreckTime`) apply to everybody, with each player's own buttons and keys. |
+| `FriendsOnly` | 0 | 1 = the lobby is open to your Steam friends only and not listed for anybody else; when a friend is already in one, you join theirs. `LobbyName` is not used then. |
+| `LobbyName` | (empty) | Players with the same name meet in one lobby (letters, digits, `-` and `_`; Steam friends of a member can still join through "Join game"); empty = the public lobby. The name shows in your Steam status. |
 
 **[Debug]**
 

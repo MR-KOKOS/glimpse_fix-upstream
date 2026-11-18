@@ -23,11 +23,11 @@ that adds what the port never had, with a settings program instead of hand-editi
   anisotropic filtering, no stray line at the bottom at Very High, vignette, gradient, bloom and
   flares switchable.
 * **Sound as on the console:** the opponents' engines are audible again, and the Xbox 360 release's
-  reverb presets replace the PC's stock ones.
+  reverb presets replace the PC's stock ones (see [Credits](#credits)).
 * **Ultrawide:** the race cameras keep the 16:9 picture height; an experimental full mode widens
   every camera and keeps menus and HUD at 16:9 in the centre.
-* **HDR output** for HDR displays, with an adjustable paper white (first stage: the game's picture in
-  an HDR10 signal; the light above white follows).
+* **HDR output** for HDR displays: the game's picture at an adjustable paper white, and the highlights
+  of the game's own HDR image (sun, sky, lights, explosions) up to the display's peak brightness.
 
 **Extras** (all off by default)
 
@@ -42,7 +42,7 @@ that adds what the port never had, with a settings program instead of hand-editi
 | **Achievements and decals** | All of them, or only the ones nobody can earn any more (ranked online, Pure). |
 | **Camera** | Field of view, zoom keys, less camera shake, a HUD key and a **photo mode** with a free camera, depth of field, bloom and exposure. |
 | **Skip the intro** | No boot movies at start. |
-| **Online over Steam** *(prototype)* | The game's LAN mode with the players of a Steam lobby, no server and no ports to open. In development. |
+| **Online over Steam** *(experimental)* | The game's LAN mode over the internet with the players of a Steam lobby: no server, no ports to open. See [Online over Steam](#online-over-steam-experimental). |
 
 All buttons and keys can be changed. Details on every feature are in the
 [technical notes](docs/TECHNICAL.md).
@@ -57,6 +57,48 @@ All buttons and keys can be changed. Details on every feature are in the
 3. Run `glimpse_config.exe` to change the settings.
 
 Uninstall: delete the three files and rename `SplitSecond.exe.orig` back.
+
+## Online over Steam (experimental)
+
+The game's own LAN mode, played over the internet with the players of a Steam lobby: no server, no
+sign-up, no ports to open. Steam carries the data, directly or through its relays. **This is new and
+needs testing: please try it and report what you find in the
+[issues](https://github.com/frankyfife/glimpse_fix/issues), with `SplitSecondPad.log` (`Log=1`) from
+every PC involved.**
+
+**What you need**
+
+* `SteamLAN=1` (settings program, page *Online*) on every PC, all with the same version of the fix.
+* `steam_api.dll` (32 bit) next to `SplitSecond.exe`. It is not part of this fix: it comes with the
+  Steamworks SDK (free download after signing in at partner.steamgames.com), file
+  `sdk/redistributable_bin/steam_api.dll`.
+* The game started through Steam.
+
+**Where you land** when the game starts
+
+| Setting | You meet |
+|---|---|
+| Lobby name empty | everybody else with an empty name, in the public lobby "glimpse" |
+| A lobby name | everybody with the same name (letters, digits, `-` and `_`); Steam friends of a member can still join through "Join game" |
+| *Friends only* | your Steam friends: you join a friend's lobby if one is playing, otherwise you open one that only your friends can find |
+| Steam's "Join game" on a friend | that friend's lobby, also when your game is not running yet |
+
+Two players who open a lobby of the same name at the same moment end up together in the older one
+within 15 seconds. A full lobby (8 players) makes the next player open a second one.
+
+**Playing**
+
+* In the game choose *LAN*, then create a game or search for one. Several games can run in one lobby.
+* The player who creates a game is its host: the host's mode and track apply, and so do the host's
+  settings for boost, handbrake, power bar fill, AI boost and respot time (`WreckTime`), for everyone
+  in that game. A guest uses its own buttons and keys for them, also when it has them off itself; when
+  the boost or handbrake button is Y, the game's camera change moves to D-pad down.
+* A banner at the top left shows the lobby, the players (2/8), the game mode and whose rules apply.
+  The photo mode is a free camera there; the race goes on. The lobby name and the mode are also in
+  your Steam status, which your friends can see in your game info.
+
+**Not yet:** the Russian Steam version (planned for the next days) and split screen in an online
+game. Tested so far with two players, in Race and Eliminator.
 
 ## Settings
 
@@ -73,7 +115,7 @@ it, and it does not change any game code.** SecuROM checks the game code at fixe
 a changed instruction makes the game hang minutes later, typically after the finish line. That is
 also the likely reason why earlier 60 fps patches got a reputation for breaking the game. glimpse_fix
 works only through the game's data, swapped function pointers and calls into the game's own
-functions, after checking the expected bytes. How, in detail:
+functions, after checking the expected bytes. The copy protection stays intact. How, in detail:
 [Copy protection in detail](docs/TECHNICAL.md#copy-protection-in-detail).
 
 **The "elysium" Xbox content pack (`Xenon.dll`) is not supported.** It replaces `SplitSecond.exe`
@@ -89,20 +131,29 @@ Please reproduce problems without such packs before reporting them.
 * 60 fps: races, AI and physics were checked; not every power play and cutscene was. Set
   `FrameRate=30` if something looks off.
 * Boost, handbrake, power bar fill, photo mode and HUD key work for player 1 only; the photo mode
-  only on a single screen. The handbrake is off in network races.
+  only on a single screen.
 * Photo mode on crashes: once your car is wrecked, the game's crash sequence decides the view. Enter
   the photo mode before the crash for a free camera.
 * The full ultrawide mode is experimental; split screen and the online menus are not checked yet.
 * HDR runs the game in a borderless window instead of exclusive fullscreen; the Steam overlay may not
-  show while it is on.
+  show while it is on. A white HUD element over an already white sky is brightened with it. The
+  highlights need the German/English Steam build; on the Russian build HDR shows the picture without
+  them.
 * With a wheel or another DirectInput device present, the controls screen names inputs generically.
 * `UnlockDecals` works in single player races; finish the race or leave it through the pause menu
   so the profile is saved.
-* The online prototype needs `steam_api.dll` from the Steamworks SDK, which is not part of this fix.
+* Online over Steam is experimental, see [above](#online-over-steam-experimental).
 * Audio: the game forces FMOD to DirectSound 5.1; the LFE channel and the pause menu are silent in
   the game's own mix.
 
 Bug reports: set `Log=1` (settings program, *Debug*) and attach `SplitSecondPad.log`.
+
+## Credits
+
+* [Back on Air](https://github.com/xenophobentx/back-on-air) by xenophobentx was the inspiration for the
+  opponent engine fix: its notes pointed out that the opponents race without an engine sound on PC,
+  which I had never noticed. The fix here was worked out and written independently; no code was taken.
+* MR-KOKOS: the full ultrawide mode (`UltrawideFix=2`).
 
 ## Building
 

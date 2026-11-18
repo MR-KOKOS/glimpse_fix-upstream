@@ -798,6 +798,27 @@ void OnInputFrame()
         }
     }
     if (g_cfg.log) AudioDiagTick();
+    // Log=1: the game polls its input but presents no frames (window in the background, device lost, a hang
+    // in the drawing): when that starts and ends, with the foreground window's owner
+    if (g_cfg.log && g_lastPresent) {
+        static bool stopped;
+        DWORD since = GetTickCount() - g_lastPresent;
+        if (!stopped && since > 2000) {
+            stopped = true;
+            DWORD pid = 0;
+            HWND fg = GetForegroundWindow();
+            GetWindowThreadProcessId(fg, &pid);
+            char title[64] = "";
+            // another program's window only: GetWindowText on a window of this process sends it a message and
+            // would wait for the very thread that may hang
+            if (pid != GetCurrentProcessId()) GetWindowTextA(fg, title, sizeof(title));
+            Log("no frame for %lu ms while the game runs; foreground window: %s ('%s')", since,
+                pid == GetCurrentProcessId() ? "the game" : "another program", title);
+        } else if (stopped && since < 500) {
+            stopped = false;
+            Log("frames again");
+        }
+    }
     if (g_cfg.glyphs == GLYPHS_KEYBOARD) return;
 
     // a controller that is already connected counts as the active device until a key is pressed

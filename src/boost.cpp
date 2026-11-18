@@ -307,10 +307,6 @@ static bool s_driftSet;     // mode 1: the timer is ours
 
 static void Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, float dt)
 {
-    if (g_cfg.steamLan && OnlineSession()) {  // not part of the lobby rules yet: off in a network race
-        s_brakeSlots = 0;
-        return;
-    }
     float forward = 0;
     if (body) forward = Dot((float*)(body + 0x1A0), (float*)(body + 0x100));
     if (g_cfg.handbrakeMode == 2) {
@@ -445,6 +441,26 @@ void BoostTick()
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         boosting = false;
+    }
+
+    // Log=1: every start and end of a boost or handbrake pull with what held it (pad buttons, keys), so a
+    // stuck key or pad shows (a remote desktop may leave Shift held down); the first 40 of each
+    if (g_cfg.log) {
+        static bool wasBoost, wasBrake;
+        static int boostLogs, brakeLogs;
+        bool brake = g_cfg.handbrake && (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE));
+        if (boosting != wasBoost && boostLogs < 40) {
+            boostLogs++;
+            Log("boost %s (pad buttons %04X, boost key %s)", boosting ? "starts" : "ends", PadButtons(),
+                (buttons & KEY_BOOST) ? "held" : "up");
+        }
+        if (brake != wasBrake && brakeLogs < 40) {
+            brakeLogs++;
+            Log("handbrake %s (pad buttons %04X, handbrake key %s)", brake ? "pulled" : "released", PadButtons(),
+                (buttons & KEY_HANDBRAKE) ? "held" : "up");
+        }
+        wasBoost = boosting;
+        wasBrake = brake;
     }
 
     // blur reaches full strength in 0.25 s and fades out over 0.5 s

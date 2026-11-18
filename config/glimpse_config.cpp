@@ -26,7 +26,7 @@
 
 // ---------------------------------------------------------------- options
 
-enum Kind { BOOL_OPT, CHOICE, RANGE };
+enum Kind { BOOL_OPT, CHOICE, RANGE, TEXT };  // TEXT: a line of text, at most 32 characters
 
 struct Option {
     const char* section;
@@ -102,15 +102,15 @@ static Option kOptions[] = {
     { "Gameplay", "Boost", BOOL_OPT, "Boost", "Your car surges forward while the boost button or key is held, with more motion blur.", "0" },
     { "Gameplay", "BoostButton", CHOICE, "  Boost button", "Pad button held for the boost. X and Y are free while driving; when Y is used, the game's camera change moves to D-pad down.", "X", PAD_CHOICES },
     { "Gameplay", "BoostKey", CHOICE, "  Boost key", "Keyboard key held for the boost. Left Shift is not used by the game.", "0xA0", "0|None;" KEY_CHOICES },
-    { "Gameplay", "Handbrake", BOOL_OPT, "Handbrake", "The game has none: while the handbrake button or key is held, your car is thrown into a slide. Off in a network race.", "0" },
+    { "Gameplay", "BoostAcceleration", RANGE, "  Boost acceleration", "m/s per second; 15 is about 1.5 g. Also used by the AI boost.", "15", 0, 1, 60, 1, 0 },
+    { "Gameplay", "BoostMaxSpeed", RANGE, "  Boost top speed", "No boost above this speed, in m/s (90 m/s = 324 km/h). Also used by the AI boost.", "90", 0, 10, 200, 1, 0 },
+    { "Gameplay", "BoostMotionBlur", RANGE, "  Boost motion blur", "Motion blur multiplier at full boost.", "3.0", 0, 1, 5, 0.1, 1 },
+    { "Gameplay", "Handbrake", BOOL_OPT, "Handbrake", "The game has none: while the handbrake button or key is held, your car is thrown into a slide. In a network race the host's handbrake setting applies to everybody.", "0" },
     { "Gameplay", "HandbrakeButton", CHOICE, "  Handbrake button", "Pad button held for the handbrake. When Y is used, the game's camera change moves to D-pad down.", "Y", PAD_CHOICES },
     { "Gameplay", "HandbrakeKey", CHOICE, "  Handbrake key", "Keyboard key held for the handbrake. X is not used by the game.", "0x58", "0|None;" KEY_CHOICES },
     { "Gameplay", "HandbrakeMode", CHOICE, "  Handbrake type", "Drift: the game's own slide physics, as when a power play blast throws a car sideways. Brake: the brake pedal fully pressed, the game brakes the rear the more you steer (above 30 km/h).", "1", "1|Drift;2|Brake" },
     { "Gameplay", "HandbrakeStrength", RANGE, "  Handbrake pull", "Drift type: how hard the handbrake slows the car while held, in m/s² (10 = about 1 g). 0 = the slide only.", "15", 0, 0, 40, 1, 0 },
     { "Gameplay", "HandbrakeDrift", RANGE, "  Handbrake oversteer", "Drift type: how strongly the car oversteers with the handbrake, as its turning rate at full steering in rad/s (2.5 = about 140 degrees a second; higher = the rear swings out further). 0 = no extra oversteer.", "2.5", 0, 0, 5, 0.1, 1 },
-    { "Gameplay", "BoostAcceleration", RANGE, "  Boost acceleration", "m/s per second; 15 is about 1.5 g. Also used by the AI boost.", "15", 0, 1, 60, 1, 0 },
-    { "Gameplay", "BoostMaxSpeed", RANGE, "  Boost top speed", "No boost above this speed, in m/s (90 m/s = 324 km/h). Also used by the AI boost.", "90", 0, 10, 200, 1, 0 },
-    { "Gameplay", "BoostMotionBlur", RANGE, "  Boost motion blur", "Motion blur multiplier at full boost.", "3.0", 0, 1, 5, 0.1, 1 },
     { "Gameplay", "PowerBarFill", BOOL_OPT, "Full power play bar (LS+RS)", "Press both sticks or the power bar key to fill your power play bar.", "0" },
     { "Gameplay", "PowerBarFillKey", CHOICE, "  Power bar key", "Keyboard key that fills the power play bar, like LS+RS on the pad. Left Ctrl is not used by the game.", "0xA2", "0|None;" KEY_CHOICES },
     { "Gameplay", "AIBoost", BOOL_OPT, "AI boost (experimental)", "The AI cars boost too, while they are behind you or not far ahead.", "0" },
@@ -122,19 +122,38 @@ static Option kOptions[] = {
     { "Audio", "OpponentEngines", BOOL_OPT, "Opponents' engines", "The opponents' engines can be heard. The PC release loads them into sound bank slots sized for the Xbox 360's smaller banks, where they do not fit.", "1" },
     { "Audio", "ConsoleReverb", BOOL_OPT, "Console reverb", "The reverb presets of the Xbox 360 release (halls, tunnels, under bridges, the menu). The PC release has one stock preset for almost all of them.", "1" },
     // Online
-    { "Online", "SteamLAN", BOOL_OPT, "LAN over Steam (prototype)", "PROTOTYPE: the game's LAN mode with the players of a Steam lobby instead of the local network. Needs steam_api.dll next to the game. Without a LobbyName (set in the INI) everybody meets in the public lobby; Steam friends join through \"Join game\". In a LAN session the lobby owner's boost and AI settings apply to all; the photo mode is a free camera there, the race goes on. Presets leave this alone.", "0" },
+    { "Online", "SteamLAN", BOOL_OPT, "Online over Steam (experimental)", "EXPERIMENTAL: the game's LAN mode with the players of a Steam lobby instead of the local network. Needs steam_api.dll next to the game. Steam friends join through \"Join game\". In a LAN game the host's boost, handbrake and AI settings apply to all; the photo mode is a free camera there, the race goes on. Presets leave this page alone.", "0" },
+    { "Online", "FriendsOnly", BOOL_OPT, "  Friends only", "Your lobby is open to your Steam friends only and not listed for anybody else. When a friend is already in one, you join theirs. The lobby name is not used then.", "0" },
+    { "Online", "LobbyName", TEXT, "  Lobby name", "Players with the same name meet in one lobby, like a password: pick an unusual one to stay among yourselves. Empty = the public lobby, where everybody with the fix meets. Letters, digits, - and _.", "" },
     // Debug
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
-static const char* const kPages[] = { "Controller", "Graphics", "World", "Camera", "Gameplay", "AI", "Audio", "Online", "Debug" };
-static const int kPageCount = 9;
+// the pages in the sidebar; an option's page is its INI section, split up where a section is long (PageOf)
+static const char* const kPages[] = { "Controller", "Display",     "Effects", "World",  "Camera",
+                                      "Gameplay",   "Boost and handbrake", "AI", "Audio", "Online", "Debug" };
+static const int kPageCount = sizeof(kPages) / sizeof(kPages[0]);
 
 // options the presets do not touch
 static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online"); }
 
-// the page an option is shown on: its INI section, except the AI boost options (in [Gameplay])
-static const char* PageOf(const Option& o) { return strncmp(o.key, "AIBoost", 7) ? o.section : "AI"; }
+// the page an option is shown on: its INI section; [Graphics] is split into the display and the effects,
+// [Gameplay] into the game, the boost and handbrake, and the AI boost
+static const char* PageOf(const Option& o)
+{
+    if (!strcmp(o.section, "Graphics")) {
+        static const char* const effects[] = { "MotionBlurStrength", "Vignette", "Gradient", "Bloom", "Exposure",
+                                               "LensFlare", "ParticleFlare" };
+        for (const char* e : effects)
+            if (!strncmp(o.key, e, strlen(e))) return "Effects";
+        return "Display";
+    }
+    if (!strcmp(o.section, "Gameplay")) {
+        if (!strncmp(o.key, "AIBoost", 7)) return "AI";
+        if (!strncmp(o.key, "Boost", 5) || !strncmp(o.key, "Handbrake", 9)) return "Boost and handbrake";
+    }
+    return o.section;
+}
 
 // ---------------------------------------------------------------- INI file, edited in place
 
@@ -331,8 +350,9 @@ static int WindowDpi(HWND wnd)
 
 // layout, in 96 dpi pixels
 static const int kWidth = 880, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100;
-// the sidebar: the pages from 96 on, 42 apart, then the presets' heading and buttons below the last page
-static const int kPresetLabel = 96 + kPageCount * 42 + 12, kPresetTop = kPresetLabel + 24;
+// the sidebar: the pages from 90 on, kNavStep apart, then the presets' heading and buttons below the last page
+static const int kNavTop = 90, kNavStep = 36, kNavH = 34, kPresetStep = 36;
+static const int kPresetLabel = kNavTop + kPageCount * kNavStep + 14, kPresetTop = kPresetLabel + 22;
 
 // the client height: the longest page above the help area, and the sidebar's pages and presets
 static int kHeight = 700;
@@ -345,8 +365,8 @@ static void FitHeight()
         if (++rows[page] > most) most = rows[page];
     }
     int content = kRowTop + most * kRowH + 8 + 130;  // the rows, a gap, help text and buttons
-    int side = kPresetTop + 3 * 40 + 24;              // the presets end there
-    kHeight = 700;
+    int side = kPresetTop + 3 * kPresetStep + 16;     // the presets end there
+    kHeight = 600;
     if (content > kHeight) kHeight = content;
     if (side > kHeight) kHeight = side;
 }
@@ -448,12 +468,17 @@ static void ShowValue(Option& o, double v)
     std::string text = FormatRange(o, v);
     if (!strcmp(o.key, "CameraShake")) text = std::to_string((int)(v * 100 + 0.5)) + " %";
     else if (!strcmp(o.key, "BoostMaxSpeed")) text += " m/s  " + std::to_string((int)(v * 3.6 + 0.5)) + " km/h";
-    else if (!strcmp(o.key, "BoostAcceleration")) text += " m/s per s";
+    else if (!strcmp(o.key, "BoostAcceleration") || !strcmp(o.key, "HandbrakeStrength")) text += " m/s per s";
+    else if (!strcmp(o.key, "HandbrakeDrift")) text += " rad/s  " + std::to_string((int)(v * 57.29578 + 0.5)) + " deg/s";
+    else if (!strcmp(o.key, "HDRPeakBrightness") || !strcmp(o.key, "HDRPaperWhite")) text += " nits";
     else if (strstr(o.key, "Strength") || strstr(o.key, "Blur") || strstr(o.key, "Bloom") || strstr(o.key, "Scale") ||
              !strcmp(o.key, "Exposure") || !strcmp(o.key, "FOV"))
         text += "x";
     SetWindowTextA(o.value, text.c_str());
 }
+
+// TEXT: what may be typed (the INI and Steam's lobby filter take it as it is)
+static bool TextCharOk(char c) { return isalnum((unsigned char)c) || c == '-' || c == '_'; }
 
 static bool IsOn(const char* key)
 {
@@ -472,6 +497,7 @@ static void UpdateEnables()
         { "ZoomInKey", zoom }, { "ZoomOutKey", zoom }, { "ZoomResetKey", zoom }, { "PhotoModeKey", photo },
         { "AIBoostLevel", ai && !chaos }, { "AIBoostUnlimited", ai && !chaos },
         { "AIBoostStraightOnly", ai && !chaos }, { "AIBoostChaos", ai },
+        { "FriendsOnly", IsOn("SteamLAN") }, { "LobbyName", IsOn("SteamLAN") && !IsOn("FriendsOnly") },
     };
     for (auto& r : rules) {
         Option* o = Find(r.key);
@@ -502,6 +528,11 @@ static void LoadControls()
         if (o.kind == BOOL_OPT) {
             s_toggle[IndexOf(o)] = atoi(v.c_str()) != 0;
             InvalidateRect(o.ctrl, NULL, TRUE);
+        } else if (o.kind == TEXT) {
+            std::string t;
+            for (char c : v)
+                if (TextCharOk(c) && t.size() < 32) t += c;
+            SetWindowTextA(o.ctrl, t.c_str());
         } else if (o.kind == CHOICE) {
             auto items = Choices(o);
             int sel = -1;
@@ -530,6 +561,10 @@ static void Changed(Option& o)
     std::string v;
     if (o.kind == BOOL_OPT) {
         v = s_toggle[IndexOf(o)] ? "1" : "0";
+    } else if (o.kind == TEXT) {
+        char buf[64];
+        GetWindowTextA(o.ctrl, buf, sizeof(buf));
+        v = buf;
     } else if (o.kind == CHOICE) {
         int sel = s_choice[IndexOf(o)];
         auto items = Choices(o);
@@ -550,13 +585,17 @@ static void Changed(Option& o)
     Status(msg);
 }
 
-static const char* const kPageText[] = {
+static const char* const kPageText[kPageCount] = {
     "Pads, triggers and button prompts.",
-    "Frame rate, image quality and effects. Bloom and exposure apply while the game runs.",
+    "Frame rate, texture filtering, HDR output and the icon size.",
+    "Motion blur, bloom, flares and the screen overlays. Bloom and exposure apply while the game runs.",
     "Streaming, draw distance and pop-in.",
-    "Field of view, zoom and photo mode.",
-    "Unlocks, boost and the power play bar.",
+    "Field of view, ultrawide screens, camera shake, zoom, photo mode and the HUD key.",
+    "Unlocks, boot movies, respot time and the power play bar.",
+    "Boost and handbrake for your car, with their buttons and keys.",
     "Boost for the AI cars (experimental).",
+    "The opponents' engines and the console's reverb.",
+    "Online play over Steam (experimental). Presets leave this page alone.",
     "For bug reports.",
 };
 
@@ -575,6 +614,7 @@ static void ShowPage(int page)
     SetWindowTextA(s_info, "Point at an option to see what it does. Every change is saved at once.");
     InvalidateRect(s_info, NULL, TRUE);
     for (int i = 0; i < kPageCount; i++) InvalidateRect(s_nav[i], NULL, TRUE);
+    InvalidateRect(s_wnd, NULL, TRUE);  // the text fields are painted by the window
 }
 
 struct Preset {
@@ -644,11 +684,11 @@ static void CreateControls()
     Child("STATIC", "glimpse_fix", WS_VISIBLE | SS_LEFT, S(22), S(22), S(180), S(30), 0, R_BRAND, s_fontBrand);
     Child("STATIC", "Split/Second PC fix", WS_VISIBLE | SS_LEFT, S(23), S(54), S(180), S(20), 0, R_SIDEDIM, s_fontSmall);
     for (int i = 0; i < kPageCount; i++)
-        s_nav[i] = Child("BUTTON", kPages[i], WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, S(96) + i * S(42), S(kSideW),
-                         S(40), ID_NAV0 + i, R_NAV, s_font);
+        s_nav[i] = Child("BUTTON", kPages[i], WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, S(kNavTop) + i * S(kNavStep),
+                         S(kSideW), S(kNavH), ID_NAV0 + i, R_NAV, s_font);
     Child("STATIC", "PRESETS", WS_VISIBLE | SS_LEFT, S(22), S(kPresetLabel), S(160), S(18), 0, R_SIDEDIM, s_fontSmall);
     for (int i = 0; i < 3; i++)
-        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(kPresetTop) + i * S(40),
+        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(kPresetTop) + i * S(kPresetStep),
                             S(174), S(32), ID_PRESET0 + i, R_PRESET, s_font);
 
     s_title = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(26), S(600), S(36), 0, R_TITLE, s_fontTitle);
@@ -668,6 +708,10 @@ static void CreateControls()
                         S(26), 0, R_LABEL, s_font);
         if (o.kind == BOOL_OPT) {
             o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y + S(2), S(46), S(22), id, R_TOGGLE, s_font);
+        } else if (o.kind == TEXT) {
+            // a borderless edit inside a field the window paints (WM_ERASEBKGND), like the lists' fields
+            o.ctrl = Child("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, S(ctrlX) + S(12), y + S(5), S(226), S(20), id, R_NONE, s_font);
+            SendMessageA(o.ctrl, EM_LIMITTEXT, 32, 0);
         } else if (o.kind == CHOICE) {
             o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y, S(250), S(28), id, R_SELECT, s_font);
         } else {
@@ -1013,6 +1057,15 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         HBRUSH b = CreateSolidBrush(kBorder);
         FillRect((HDC)wp, &sep, b);
         DeleteObject(b);
+        for (int i = 0; i < kOptionCount; i++) {  // the fields of the text options on this page
+            const Option& o = kOptions[i];
+            if (o.kind != TEXT || !o.ctrl || !IsWindowVisible(o.ctrl)) continue;
+            RECT f;
+            GetWindowRect(o.ctrl, &f);
+            MapWindowPoints(NULL, wnd, (POINT*)&f, 2);
+            InflateRect(&f, S(12), S(5));
+            RoundRect((HDC)wp, f, S(6), kField, kBorder);
+        }
         return 1;
     }
     case WM_DRAWITEM:
@@ -1048,7 +1101,26 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                     Changed(o);
                 }
             }
-            if (code == BN_SETFOCUS) ShowHelpFor(o.ctrl);
+            if (o.kind == TEXT && code == EN_CHANGE && !s_loading) {
+                // only the characters a lobby name may have; the rest is dropped as it is typed
+                char buf[64], clean[64];
+                GetWindowTextA(o.ctrl, buf, sizeof(buf));
+                int n = 0;
+                for (const char* c = buf; *c; c++)
+                    if (TextCharOk(*c)) clean[n++] = *c;
+                clean[n] = 0;
+                if (strcmp(buf, clean)) {
+                    DWORD at = 0;
+                    SendMessageA(o.ctrl, EM_GETSEL, (WPARAM)&at, 0);
+                    s_loading = true;
+                    SetWindowTextA(o.ctrl, clean);
+                    s_loading = false;
+                    int back = (int)strlen(buf) - n;
+                    SendMessageA(o.ctrl, EM_SETSEL, at > (DWORD)back ? at - back : 0, at > (DWORD)back ? at - back : 0);
+                }
+                Changed(o);
+            }
+            if (code == BN_SETFOCUS || (o.kind == TEXT && code == EN_SETFOCUS)) ShowHelpFor(o.ctrl);
         } else if (id >= ID_PRESET0 && id < ID_PRESET0 + 3 && code == BN_SETFOCUS) {
             ShowHelpFor(s_preset[id - ID_PRESET0]);
         } else if (id >= ID_NAV0 && id < ID_NAV0 + kPageCount) {
@@ -1075,9 +1147,21 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                 ShowHelpFor(o.ctrl);
             }
         return 0;
+    case WM_CTLCOLOREDIT: {
+        HDC dc = (HDC)wp;
+        SetTextColor(dc, kText);
+        SetBkColor(dc, kField);
+        return (LRESULT)s_fieldBrush;
+    }
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wp;
         HWND c = (HWND)lp;
+        char cls[16];
+        if (GetClassNameA(c, cls, sizeof(cls)) && !_stricmp(cls, "EDIT")) {  // a disabled text field
+            SetTextColor(dc, kOff);
+            SetBkColor(dc, kField);
+            return (LRESULT)s_fieldBrush;
+        }
         Role role = (Role)GetWindowLongPtrA(c, GWLP_USERDATA);
         bool side = role == R_BRAND || role == R_SIDEDIM;
         SetBkMode(dc, TRANSPARENT);

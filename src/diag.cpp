@@ -519,6 +519,8 @@ static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PA
     UltrawideDeviceLost();
     HdrPresentParams(NULL, 0, NULL, pp);  // keeps the device windowed for the HDR swap chain
     HRESULT hr = s_origReset(dev, pp);
+    if (g_cfg.log) Log("Direct3D: Reset %ux%u windowed %d -> %08lX", pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
+                       pp ? pp->Windowed : -1, (unsigned long)hr);
     if (SUCCEEDED(hr)) {
         OnlineDeviceReset();
         HdrDeviceReset(dev);
@@ -571,6 +573,8 @@ void CheckD3DHooks()
     }
 }
 
+volatile DWORD g_lastPresent;  // GetTickCount of the last Present (OnInputFrame notices when it stops)
+
 static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty)
 {
     if (s_presentDepth) return s_d3dPresent(dev, src, dst, wnd, dirty);  // another hook called ours again
@@ -598,6 +602,19 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
     if (g_cfg.ultrawideFix == 2) UltrawidePresent(dev);  // its last touches to the back buffer, before HDR reads it
     HRESULT hr;
     if (!HdrPresent(dev, &hr)) hr = s_origPresent(dev, src, dst, wnd, dirty);
+    if (g_cfg.log) {  // the device lost and back, the game window in the foreground or not
+        static HRESULT lastHr = D3D_OK;
+        static int lastFg = -1;
+        if ((hr == D3DERR_DEVICELOST) != (lastHr == D3DERR_DEVICELOST))
+            Log("Direct3D: Present %s", hr == D3DERR_DEVICELOST ? "reports the device lost" : "works again");
+        lastHr = hr;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+        int fg = pid == GetCurrentProcessId();
+        if (fg != lastFg && lastFg >= 0) Log("window: the game %s the foreground", fg ? "has" : "lost");
+        lastFg = fg;
+    }
+    g_lastPresent = GetTickCount();
     FramePace();
     return hr;
 }
@@ -630,6 +647,7 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         s_vt = vt;
         s_device = *out;
         if (g_cfg.ultrawideFix == 2) UltrawideDeviceCreated(*out, pp, focus);
+        HdrInstallUiHook();
         if (g_cfg.anisotropy > 1) {
             PatchVtable(vt, 65, (void*)Hook_SetTexture, (void**)&s_origSetTexture);
             Log("anisotropic filtering %dx", g_cfg.anisotropy);

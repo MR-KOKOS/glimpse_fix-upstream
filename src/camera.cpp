@@ -464,9 +464,9 @@ void PatchCamera()
             Log("respot not recognised");
     }
     // the race cameras also tell UnlockDecals that a single player race runs (SinglePlayerRace), and the
-    // boost and handbrake buttons that a race runs (RaceRunning)
+    // boost and handbrake buttons that a race runs (RaceRunning); with SteamLAN a host may allow them
     bool race = g_cfg.fov != 1.0f || g_cfg.ultrawideFix || g_cfg.zoomKeys || g_cfg.photoMode || g_cfg.unlockDecals ||
-                g_cfg.cameraShake < 0.999f || g_cfg.boost || g_cfg.handbrake;
+                g_cfg.cameraShake < 0.999f || g_cfg.boost || g_cfg.handbrake || g_cfg.steamLan;
     if (race) {
         bool chase = HookSlot(kChaseUpdateSlot, kChaseUpdate, "\x81\xEC\x44\x01\x00\x00", 6, (void*)Hook_ChaseUpdate,
                               (void**)&s_origChase);

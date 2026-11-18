@@ -21,6 +21,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <string.h>
 #include <deque>
 #include <string>
@@ -156,6 +157,9 @@ static struct {
     const char* (__cdecl* GetMemberData)(void*, uint64_t, uint64_t, const char*);
     bool (__cdecl* SetJoinable)(void*, uint64_t, bool);
     void* (__cdecl* Friends)();
+    int (__cdecl* FriendCount)(void*, int);
+    uint64_t (__cdecl* FriendByIndex)(void*, int, int);
+    bool (__cdecl* FriendGamePlayed)(void*, uint64_t, void*);
     bool (__cdecl* SetRichPresence)(void*, const char*, const char*);
     void (__cdecl* InviteDialog)(void*, uint64_t);
     void (__cdecl* RegisterCallback)(void* callback, int id);
@@ -206,7 +210,7 @@ static std::vector<Peer> s_peers;        // the other lobby members
 
 static const uint32_t kMagic = 0x314C4C47;  // "GLL1"
 static const int kSendFlags = 1 | 32;       // unreliable without Nagle delay, restart broken sessions
-static const char kLobbyVersion[] = "2";     // players of other versions do not meet (lobby rules came in 2)
+static const char kLobbyVersion[] = "3";     // players of other versions do not meet (lobby rules 2, host rules 3)
 static const char kDefaultLobby[] = "glimpse";  // the public lobby when LobbyName is empty
 
 #pragma pack(push, 1)
@@ -287,6 +291,13 @@ static bool LoadSteam()
     if (!ok) {
         Log("online: this steam_api.dll is too old (needs SteamNetworkingMessages002), SteamLAN off");
         return false;
+    }
+    S.FriendCount = (int(__cdecl*)(void*, int))GetProcAddress(dll, "SteamAPI_ISteamFriends_GetFriendCount");
+    S.FriendByIndex = (uint64_t(__cdecl*)(void*, int, int))GetProcAddress(dll, "SteamAPI_ISteamFriends_GetFriendByIndex");
+    S.FriendGamePlayed = (bool(__cdecl*)(void*, uint64_t, void*))GetProcAddress(dll, "SteamAPI_ISteamFriends_GetFriendGamePlayed");
+    if (g_cfg.friendsOnly && !(S.FriendCount && S.FriendByIndex && S.FriendGamePlayed)) {
+        Log("online: this steam_api.dll cannot list friends' games, FriendsOnly needs a newer one; the lobby name is used");
+        g_cfg.friendsOnly = false;
     }
     char app[16];
     if (!GetEnvironmentVariableA("SteamAppId", app, sizeof(app))) SetEnvironmentVariableA("SteamAppId", "297860");
@@ -405,9 +416,36 @@ static void SendWire(const SteamNetworkingIdentity* to, uint32_t toIp, uint16_t 
     }
 }
 
+// This player hosts the game's LAN session: it answered a session discovery broadcast, which the host
+// does with a datagram straight to the searcher's discovery port (players looking for a game only
+// broadcast there). Cleared when the LAN mode ends (OnlineFrame).
+static volatile bool s_hosting;
+static const uint16_t kDiscoveryPort = 9100;
+// The host of the LAN game this player joined: a guest connects to the host first, so the first player it
+// sends a datagram to outside the discovery port is the host (several games may run in one lobby).
+static volatile uint32_t s_sessionHost;
+// When Quazal bound a game port (besides the discovery port): a player that created a LAN game does so and
+// then waits, a guest connects to its host in the same moment. A game port open for 1.5 s without a
+// connection to a host means this player created the game (SyncRules).
+static volatile DWORD s_gamePortSince;
+
 static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data, int size)
 {
     bool broadcast = to->ip == 0xFFFFFFFF || (to->ip & 0xFF) == 0xFF;
+    // the host's answer to a search carries the game's description (320 bytes seen), a search itself is short
+    // (35 bytes); a player that joined a game is not a host
+    if (!broadcast && to->port == kDiscoveryPort && size >= 100 && to->ip != s_myIp && (to->ip >> 24) != 127 &&
+        !s_hosting && !s_sessionHost) {
+        s_hosting = true;
+        Log("online: this player answered a session search: it hosts the LAN game");
+    }
+    if (!broadcast && to->port != kDiscoveryPort && !s_hosting && !s_sessionHost && to->ip != s_myIp &&
+        (to->ip >> 24) != 127) {
+        s_sessionHost = to->ip;
+        char h[20];
+        IpText(to->ip, h, sizeof(h));
+        Log("online: this player joined the LAN game of %s", h);
+    }
     if (broadcast) InterlockedIncrement(&s_sentBroadcast);
     if (broadcast || to->ip == s_myIp || (to->ip >> 24) == 127) {
         if (!broadcast) InterlockedIncrement(&s_sentLocal);
@@ -515,6 +553,7 @@ bool QSocket::Bind(unsigned wanted)
     }
     bool ok = !SocketOnPort(p);
     if (ok) port = p;
+    if (ok && wanted && p != kDiscoveryPort && !s_gamePortSince) s_gamePortSince = GetTickCount() | 1;
     LeaveCriticalSection(&s_lock);
     if (wanted) Log(ok ? "online: socket bound to port %u" : "online: port %u already in use", p);
     else Log("online: socket bound to free port %u", p);
@@ -572,7 +611,16 @@ QSocket* QSocket::Destroy(unsigned flags)
             s_sockets.erase(s_sockets.begin() + i);
             break;
         }
+    bool none = s_sockets.empty();
     LeaveCriticalSection(&s_lock);
+    // the last socket gone: this player left the LAN game, so it neither hosts nor is a guest any more
+    // (otherwise a guest that hosts its own game right after would keep its old host)
+    if (none) s_gamePortSince = 0;
+    if (none && (s_hosting || s_sessionHost)) {
+        s_hosting = false;
+        s_sessionHost = 0;
+        Log("online: Quazal closed its last socket, the LAN game role ends");
+    }
     if (flags & 1) {
         delete this;
         return NULL;
@@ -629,8 +677,53 @@ static void LobbyKeys(char* name, size_t n)
     name[i] = 0;
 }
 
+// FriendsOnly: the lobbies Steam friends of this player are in while they play Split/Second; the oldest one,
+// so friends who start at the same time end up together (it is checked to be a glimpse_fix lobby on joining)
+#pragma pack(push, 8)
+struct FriendGameInfo_t { uint64_t game; uint32_t ip; uint16_t gamePort, queryPort; uint64_t lobby; };
+#pragma pack(pop)
+// lobbies that are gone, full or of another version: not tried again for 5 minutes (a join that only timed
+// out is tried again)
+static std::vector<std::pair<uint64_t, DWORD>> s_badLobbies;
+static void NoteBadLobby(uint64_t id)
+{
+    for (auto& b : s_badLobbies)
+        if (b.first == id) {
+            b.second = GetTickCount();
+            return;
+        }
+    if (s_badLobbies.size() < 64) s_badLobbies.push_back(std::make_pair(id, GetTickCount()));
+}
+static bool BadLobby(uint64_t id)
+{
+    for (size_t i = 0; i < s_badLobbies.size(); i++)
+        if (s_badLobbies[i].first == id) {
+            if (GetTickCount() - s_badLobbies[i].second < 300000) return true;
+            s_badLobbies.erase(s_badLobbies.begin() + i);
+            return false;
+        }
+    return false;
+}
+
+static uint64_t FindFriendLobby()
+{
+    void* friends = S.Friends();
+    const int kImmediate = 4;  // k_EFriendFlagImmediate: real friends
+    int n = friends ? S.FriendCount(friends, kImmediate) : 0;
+    uint64_t best = 0;
+    for (int i = 0; i < n; i++) {
+        uint64_t id = S.FriendByIndex(friends, i, kImmediate);
+        FriendGameInfo_t g = {};
+        if (!id || !S.FriendGamePlayed(friends, id, &g)) continue;
+        if ((g.game & 0xFFFFFF) != 297860 || !g.lobby || g.lobby == s_lobby || BadLobby(g.lobby)) continue;
+        if (!best || g.lobby < best) best = g.lobby;
+    }
+    return best;
+}
+
 static uint64_t FindLobby()
 {
+    if (g_cfg.friendsOnly) return FindFriendLobby();
     char name[64];
     LobbyKeys(name, sizeof(name));
     S.StringFilter(s_mm, "glimpse_lan", kLobbyVersion, 0);
@@ -642,7 +735,7 @@ static uint64_t FindLobby()
     uint64_t best = 0;
     for (uint32_t i = 0; i < list.count; i++) {
         uint64_t id = S.LobbyByIndex(s_mm, (int)i);
-        if (id && id != s_lobby && (!best || id < best)) best = id;  // the oldest one, so everybody picks the same
+        if (id && id != s_lobby && !BadLobby(id) && (!best || id < best)) best = id;  // the oldest, everybody picks the same
     }
     return best;
 }
@@ -652,6 +745,7 @@ static bool Join(uint64_t lobby)
     LobbyEnter_t entered = {};
     if (!Wait(S.JoinLobby(s_mm, lobby), &entered, sizeof(entered), 504) || entered.response != 1) {
         Log("online: could not join lobby %llu (response %u)", (unsigned long long)lobby, entered.response);
+        if (entered.response == 2 || entered.response == 4) NoteBadLobby(lobby);  // does not exist, full
         return false;
     }
     s_lobby = lobby;
@@ -662,7 +756,9 @@ static bool Join(uint64_t lobby)
 static bool Create()
 {
     LobbyCreated_t created = {};
-    if (!Wait(S.CreateLobby(s_mm, 2 /* public */, 8), &created, sizeof(created), 513) || created.result != 1) {
+    // public: found by its name; friends only: not listed, reached through friends (FindFriendLobby, "Join game")
+    int type = g_cfg.friendsOnly ? 1 : 2;
+    if (!Wait(S.CreateLobby(s_mm, type, 8), &created, sizeof(created), 513) || created.result != 1) {
         Log("online: could not create a lobby (result %d)", created.result);
         return false;
     }
@@ -672,37 +768,48 @@ static bool Create()
     S.SetLobbyData(s_mm, s_lobby, "glimpse_lan", kLobbyVersion);
     S.SetLobbyData(s_mm, s_lobby, "glimpse_name", name);
     S.SetJoinable(s_mm, s_lobby, true);  // Steam friends see "Join game"
-    Log("online: created lobby %llu ('%s'), waiting for players", (unsigned long long)s_lobby, name);
+    if (g_cfg.friendsOnly) S.SetLobbyData(s_mm, s_lobby, "glimpse_name", "friends");
+    Log("online: created %s lobby %llu ('%s'), waiting for players", g_cfg.friendsOnly ? "a friends only" : "a public",
+        (unsigned long long)s_lobby, g_cfg.friendsOnly ? "friends" : name);
     return true;
 }
 
-// ---------------------------------------------------------------- lobby rules for the extras
+// ---------------------------------------------------------------- session rules for the extras
 //
-// In a LAN session the extras that change the race (boost, power bar fill, AI boost, wreck time)
-// follow the rules of the lobby, set by its owner from the owner's own INI: everybody has the same,
-// what the lobby does not allow is off for all. The photo mode is a free camera in a session and does
-// not hold the world still (camera.cpp), since the others race on. Outside a session the own INI applies.
+// In a LAN session the extras that change the race (boost, handbrake, power bar fill, AI boost, wreck time)
+// follow the rules of the player who hosts the game's LAN session, from the host's own INI: everybody
+// has the same, what the host does not allow is off for all. Every member publishes its own rules and
+// whether it hosts; until a host is known, the Steam lobby owner's rules stand in. The photo mode is a
+// free camera in a session and does not hold the world still (camera.cpp), since the others race on.
+// Outside a session the own INI applies.
 
 struct Rules {
     bool boost = false, powerFill = false, aiBoost = false, aiUnlimited = false, aiStraight = true, aiChaos = false;
-    int aiLevel = 2;
-    float boostAccel = 15, boostMax = 90, wreckTime = 0;
+    bool handbrake = false;
+    int aiLevel = 2, handbrakeMode = 1;
+    float boostAccel = 15, boostMax = 90, wreckTime = 0, handbrakeStrength = 15, handbrakeDrift = 2.5f;
 };
 
 static void Encode(const Rules& r, char* out, size_t n)
 {
-    _snprintf_s(out, n, _TRUNCATE, "b=%d;ba=%g;bm=%g;p=%d;a=%d;al=%d;au=%d;as=%d;ac=%d;w=%g", r.boost, r.boostAccel,
-                r.boostMax, r.powerFill, r.aiBoost, r.aiLevel, r.aiUnlimited, r.aiStraight, r.aiChaos, r.wreckTime);
+    _snprintf_s(out, n, _TRUNCATE, "b=%d;ba=%g;bm=%g;p=%d;a=%d;al=%d;au=%d;as=%d;ac=%d;w=%g;h=%d;hm=%d;hs=%g;hd=%g", r.boost,
+                r.boostAccel, r.boostMax, r.powerFill, r.aiBoost, r.aiLevel, r.aiUnlimited, r.aiStraight, r.aiChaos, r.wreckTime,
+                r.handbrake, r.handbrakeMode, r.handbrakeStrength, r.handbrakeDrift);
 }
 
 static bool Decode(const char* s, Rules* r)
 {
     if (!s || !*s) return false;
     Rules x;
-    int b, p, a, au, as, ac;
-    if (sscanf_s(s, "b=%d;ba=%g;bm=%g;p=%d;a=%d;al=%d;au=%d;as=%d;ac=%d;w=%g", &b, &x.boostAccel, &x.boostMax, &p, &a,
-                 &x.aiLevel, &au, &as, &ac, &x.wreckTime) != 10)
+    int b, p, a, au, as, ac, h;
+    if (sscanf_s(s, "b=%d;ba=%g;bm=%g;p=%d;a=%d;al=%d;au=%d;as=%d;ac=%d;w=%g;h=%d;hm=%d;hs=%g;hd=%g", &b, &x.boostAccel,
+                 &x.boostMax, &p, &a, &x.aiLevel, &au, &as, &ac, &x.wreckTime, &h, &x.handbrakeMode, &x.handbrakeStrength,
+                 &x.handbrakeDrift) != 14)
         return false;
+    x.handbrake = h != 0;
+    if (x.handbrakeMode != 2) x.handbrakeMode = 1;
+    x.handbrakeStrength = x.handbrakeStrength < 0 ? 0 : x.handbrakeStrength > 40 ? 40 : x.handbrakeStrength;
+    x.handbrakeDrift = x.handbrakeDrift < 0 ? 0 : x.handbrakeDrift > 5 ? 5 : x.handbrakeDrift;
     x.boost = b != 0;
     x.powerFill = p != 0;
     x.aiBoost = a != 0;
@@ -724,8 +831,9 @@ static void Describe(const Rules& r, char* out, size_t n)
     }
     char wreck[24] = "as the game";
     if (r.wreckTime > 0) _snprintf_s(wreck, _TRUNCATE, "%.0f s", r.wreckTime);
-    _snprintf_s(out, n, _TRUNCATE, "Boost %s, power bar fill %s, AI boost %s, wreck time %s",
-                r.boost ? "ON" : "off", r.powerFill ? "ON" : "off", ai, wreck);
+    _snprintf_s(out, n, _TRUNCATE, "Boost %s, handbrake %s, power bar fill %s, AI boost %s, wreck time %s",
+                r.boost ? "ON" : "off", r.handbrake ? (r.handbrakeMode == 2 ? "ON (brake)" : "ON") : "off",
+                r.powerFill ? "ON" : "off", ai, wreck);
 }
 
 static Rules OwnRules()
@@ -741,13 +849,19 @@ static Rules OwnRules()
     r.aiStraight = g_cfg.aiBoostStraightOnly;
     r.aiChaos = g_cfg.aiBoostChaos;
     r.wreckTime = g_cfg.wreckTime;
+    r.handbrake = g_cfg.handbrake;
+    r.handbrakeMode = g_cfg.handbrakeMode;
+    r.handbrakeStrength = g_cfg.handbrakeStrength;
+    r.handbrakeDrift = g_cfg.handbrakeDrift;
     return r;
 }
 
 static Rules s_own;                 // from this player's INI, taken at start
 static bool s_ownPhotoMode;
-static Rules s_lobbyRules;          // the lobby owner's, read on the online thread
+static WORD s_ownHandbrakeButton;    // from the INI; ApplyRules clears it when it clashes with the boost
+static Rules s_lobbyRules;          // the session's: the host's, else the lobby owner's (online thread)
 static bool s_lobbyRulesKnown;
+static char s_rulesFrom[48];        // whose they are, for the log and the banner
 static char s_lobbyName[64];        // shown name of the lobby we are in
 
 static void ApplyRules(const Rules& r, bool photoMode)
@@ -762,6 +876,13 @@ static void ApplyRules(const Rules& r, bool photoMode)
     g_cfg.aiBoostStraightOnly = r.aiStraight;
     g_cfg.aiBoostChaos = r.aiChaos;
     g_cfg.wreckTime = r.wreckTime;
+    g_cfg.handbrake = r.handbrake;
+    g_cfg.handbrakeMode = r.handbrakeMode;
+    g_cfg.handbrakeStrength = r.handbrakeStrength;
+    g_cfg.handbrakeDrift = r.handbrakeDrift;
+    // this player's own buttons: when the host allows both and they are the same, the handbrake gets none
+    // (as at the start, main.cpp)
+    g_cfg.handbrakeButton = r.boost && r.handbrake && s_ownHandbrakeButton == g_cfg.boostButton ? 0 : s_ownHandbrakeButton;
     g_cfg.photoMode = photoMode;
 }
 
@@ -1027,6 +1148,9 @@ static char s_appliedText[170];      // "S|" or "M|" (in a LAN session or not) a
 static bool s_inSession;
 static char s_warning[160];          // a player with other rules or another version
 static char s_presence[128];         // Steam status text
+static unsigned s_presencePlayers;   // players in the lobby, for Steam's player group
+static char s_mode[48];              // the LAN game's mode as the game's lobby screen names it (UTF-8), "" = none yet
+static char s_lobbyMode[48];         // the mode of a game hosted in this Steam lobby, from its host's member data
 static bool s_noLaa;                 // 2 GB address space only: Steam's libraries make running out likelier
 
 static void ShowBanner(DWORD ms)
@@ -1038,17 +1162,24 @@ static void ShowBanner(DWORD ms)
     Rules shown = s_inSession ? (s_lobbyRulesKnown ? s_lobbyRules : Rules()) : s_own;
     char rules[160];
     Describe(shown, rules, sizeof(rules));
-    _snprintf_s(s_bannerLines[0], _TRUNCATE, "glimpse_fix LAN over Steam  -  lobby \"%s\", %u player%s", s_lobbyName,
-                (unsigned)players, players == 1 ? "" : "s");
-    _snprintf_s(s_bannerLines[1], _TRUNCATE, "%s: %s", s_inSession ? "Rules of this lobby, for everybody" : "Your settings (no LAN session)",
-                rules);
+    char mode[64] = "";
+    if (s_inSession) _snprintf_s(mode, _TRUNCATE, ", mode: %s", s_mode[0] ? s_mode : "not chosen yet");
+    else if (s_lobbyMode[0]) _snprintf_s(mode, _TRUNCATE, ", game open: %s", s_lobbyMode);
+    _snprintf_s(s_bannerLines[0], _TRUNCATE, "glimpse_fix online  -  lobby \"%s\", %u/8 players%s", s_lobbyName,
+                (unsigned)players, mode);
+    char whose[80];
+    _snprintf_s(whose, _TRUNCATE, "Rules from %s, for everybody", s_rulesFrom[0] ? s_rulesFrom : "the host");
+    _snprintf_s(s_bannerLines[1], _TRUNCATE, "%s: %s", s_inSession ? whose : "Your settings (no LAN session)", rules);
     s_bannerCount = 2;
     if (s_inSession && s_ownPhotoMode)
         strcpy_s(s_bannerLines[s_bannerCount++], "Photo mode: free camera only, the race goes on");
     if (s_warning[0]) strcpy_s(s_bannerLines[s_bannerCount++], s_warning);
     else if (s_noLaa) strcpy_s(s_bannerLines[s_bannerCount++], "WARNING: SplitSecond.exe without LAA flag - run setlaa.exe, the game may run out of memory");
     s_bannerUntil = GetTickCount() + ms;
-    _snprintf_s(s_presence, _TRUNCATE, "LAN over Steam: %s (%u/8)", s_lobbyName, (unsigned)players);
+    const char* shownMode = s_inSession ? s_mode : s_lobbyMode;
+    _snprintf_s(s_presence, _TRUNCATE, "Lobby %s (%u/8)%s%s", s_lobbyName, (unsigned)players, shownMode[0] ? " - " : "",
+                shownMode);
+    s_presencePlayers = (unsigned)players;
     LeaveCriticalSection(&s_showLock);
 }
 
@@ -1064,9 +1195,25 @@ static void UpdatePresence()
         S.SetRichPresence(S.Friends(), "status", text);
         strcpy_s(set, text);
     }
+    // Steam shows friends with the same player group together in the friends list, with the group's size
+    static uint64_t groupSet;
+    static unsigned sizeSet;
+    EnterCriticalSection(&s_showLock);
+    unsigned players = s_presencePlayers;
+    LeaveCriticalSection(&s_showLock);
+    if (S.Friends && s_lobby && (groupSet != s_lobby || sizeSet != players) && players) {
+        char group[24], size[8];
+        _snprintf_s(group, _TRUNCATE, "%llu", (unsigned long long)s_lobby);
+        _snprintf_s(size, _TRUNCATE, "%u", players);
+        S.SetRichPresence(S.Friends(), "steam_player_group", group);
+        S.SetRichPresence(S.Friends(), "steam_player_group_size", size);
+        groupSet = s_lobby;
+        sizeSet = players;
+    }
 }
 
-// the lobby owner publishes its rules, everybody reads them, reports its version and what it applies,
+// every member publishes its own rules and whether it hosts the LAN session; the session's rules are the
+// host's (the lobby owner's until a host is known); everybody reports its version and what it applies,
 // and the others' reports are compared (online thread, every second)
 static void SyncRules()
 {
@@ -1077,32 +1224,106 @@ static void SyncRules()
     const char* current = S.GetLobbyData(s_mm, s_lobby, "glimpse_rules");
     if (owner == s_mySteamID && (!current || strcmp(current, mine))) S.SetLobbyData(s_mm, s_lobby, "glimpse_rules", mine);
 
+    EnterCriticalSection(&s_lock);
+    std::vector<Peer> peers = s_peers;
+    LeaveCriticalSection(&s_lock);
+    EnterCriticalSection(&s_showLock);
+    bool inSession = s_inSession;
+    LeaveCriticalSection(&s_showLock);
+    DWORD portSince = s_gamePortSince;
+    if (inSession && portSince && !s_hosting && !s_sessionHost && GetTickCount() - portSince >= 1500) {
+        s_hosting = true;
+        Log("online: this player created the LAN game: it hosts");
+    }
+    bool hosting = s_hosting && inSession;
+
+    // whose rules: this player's when it hosts, else those of the host of the game it joined, else the owner's
     Rules r;
-    bool known = Decode(S.GetLobbyData(s_mm, s_lobby, "glimpse_rules"), &r);
+    bool known = false;
+    char from[48] = "the lobby owner";
+    if (hosting) {
+        r = s_own;
+        known = true;
+        strcpy_s(from, "this player, the host");
+    }
+    for (size_t i = 0; i < peers.size() && !known; i++) {
+        const char* host = S.GetMemberData(s_mm, s_lobby, peers[i].steamID, "glimpse_host");
+        const char* applied = S.GetMemberData(s_mm, s_lobby, peers[i].steamID, "glimpse_applied");
+        if (peers[i].ip == s_sessionHost && host && !strcmp(host, "1") && applied && applied[0] == 'S' &&
+            Decode(S.GetMemberData(s_mm, s_lobby, peers[i].steamID, "glimpse_own"), &r)) {
+            known = true;
+            char t[20];
+            IpText(peers[i].ip, t, sizeof(t));
+            _snprintf_s(from, _TRUNCATE, "the host %s", t);
+        }
+    }
+    if (!known && inSession && s_sessionHost) {
+        // a guest whose host's rules have not come yet: everything off until they do (not the lobby owner's,
+        // who may be in another game)
+        char t[20];
+        IpText(s_sessionHost, t, sizeof(t));
+        _snprintf_s(from, _TRUNCATE, "the host %s (waiting)", t);
+    } else if (!known) {
+        known = Decode(S.GetLobbyData(s_mm, s_lobby, "glimpse_rules"), &r);
+        if (owner == s_mySteamID) strcpy_s(from, "this player, the lobby owner");
+    }
     char now[160] = "", before[160] = "";
     if (known) Encode(r, now, sizeof(now));
     EnterCriticalSection(&s_showLock);
     if (s_lobbyRulesKnown) Encode(s_lobbyRules, before, sizeof(before));
+    bool fromChanged = strcmp(from, s_rulesFrom) != 0;
     s_lobbyRules = r;
     s_lobbyRulesKnown = known;
+    strcpy_s(s_rulesFrom, from);
     char applied[170];
     strcpy_s(applied, s_appliedText);
     LeaveCriticalSection(&s_showLock);
-    if (strcmp(now, before)) {
+    if (strcmp(now, before) || fromChanged) {
         char d[160];
         Describe(r, d, sizeof(d));
-        Log("online: lobby rules%s: %s", owner == s_mySteamID ? " (this player owns the lobby)" : "", known ? d : "none yet");
+        Log("online: session rules from %s: %s", from, known ? d : "none yet");
         ShowBanner(10000);
     }
 
     // own report
     static uint64_t reportedLobby;
-    static char reported[170];
+    static char reported[170], reportedOwn[160];
+    static int reportedHost = -1;
     if (reportedLobby != s_lobby) {
         S.SetMemberData(s_mm, s_lobby, "glimpse_ver", GLIMPSE_VERSION);
         reportedLobby = s_lobby;
-        reported[0] = 0;
+        reported[0] = reportedOwn[0] = 0;
+        reportedHost = -1;
     }
+    if (strcmp(reportedOwn, mine)) {
+        S.SetMemberData(s_mm, s_lobby, "glimpse_own", mine);
+        strcpy_s(reportedOwn, mine);
+    }
+    if (reportedHost != (int)hosting) {
+        S.SetMemberData(s_mm, s_lobby, "glimpse_host", hosting ? "1" : "0");
+        reportedHost = hosting;
+    }
+    // the host's mode, so the others in the Steam lobby see which game is open
+    static char reportedMode[48] = "-";
+    char myMode[48];
+    EnterCriticalSection(&s_showLock);
+    strcpy_s(myMode, hosting ? s_mode : "");
+    LeaveCriticalSection(&s_showLock);
+    if (strcmp(reportedMode, myMode)) {
+        S.SetMemberData(s_mm, s_lobby, "glimpse_mode", myMode);
+        strcpy_s(reportedMode, myMode);
+    }
+    char lobbyMode[48] = "";
+    for (const Peer& p : peers) {
+        const char* host = S.GetMemberData(s_mm, s_lobby, p.steamID, "glimpse_host");
+        const char* m = S.GetMemberData(s_mm, s_lobby, p.steamID, "glimpse_mode");
+        if (host && !strcmp(host, "1") && m && *m) strcpy_s(lobbyMode, m);
+    }
+    EnterCriticalSection(&s_showLock);
+    bool modeChanged = strcmp(lobbyMode, s_lobbyMode) != 0;
+    strcpy_s(s_lobbyMode, lobbyMode);
+    LeaveCriticalSection(&s_showLock);
+    if (modeChanged) ShowBanner(6000);
     if (strcmp(reported, applied)) {
         S.SetMemberData(s_mm, s_lobby, "glimpse_applied", applied);
         strcpy_s(reported, applied);
@@ -1110,9 +1331,6 @@ static void SyncRules()
 
     // the others' reports
     char warning[160] = "";
-    EnterCriticalSection(&s_lock);
-    std::vector<Peer> peers = s_peers;
-    LeaveCriticalSection(&s_lock);
     for (const Peer& p : peers) {
         char t[20];
         IpText(p.ip, t, sizeof(t));
@@ -1142,7 +1360,18 @@ static void SyncRules()
             if (!listed) last.push_back(std::make_pair(p.steamID, std::string(theirs)));
             Log("online: player %s %s: %s", t, theirSession ? "in the LAN session" : "not in a LAN session", d);
         }
-        if (theirSession && known && strcmp(theirRules, now))
+        // a guest takes the host's rules a few seconds after it joined: only a difference that lasts is shown
+        static std::vector<std::pair<uint64_t, DWORD>> differs;
+        bool differ = theirSession && known && strcmp(theirRules, now);
+        DWORD since = 0;
+        for (size_t k = 0; k < differs.size(); k++)
+            if (differs[k].first == p.steamID) {
+                if (!differ) differs.erase(differs.begin() + k);
+                else since = differs[k].second;
+                break;
+            }
+        if (differ && !since) differs.push_back(std::make_pair(p.steamID, since = GetTickCount()));
+        if (differ && GetTickCount() - since >= 8000)
             _snprintf_s(warning, _TRUNCATE, "WARNING: player %s plays with other settings: %s", t, d);
     }
     EnterCriticalSection(&s_showLock);
@@ -1178,6 +1407,11 @@ void OnlineFrame()
     }
     bool active = hadSockets && GetTickCount() - lastSockets < 3000;
     LeaveCriticalSection(&s_lock);
+    if (!active && (s_hosting || s_sessionHost)) {
+        s_hosting = false;
+        s_sessionHost = 0;
+        Log("online: the LAN game ended");
+    }
     EnterCriticalSection(&s_showLock);
     Rules target = active ? (s_lobbyRulesKnown ? s_lobbyRules : Rules()) : s_own;  // all off until the rules are known
     bool wasActive = s_inSession;
@@ -1192,7 +1426,7 @@ void OnlineFrame()
         ApplyRules(target, photo);
         char d[160];
         Describe(target, d, sizeof(d));
-        Log("online: %s: %s%s", active ? "LAN session, the lobby rules apply" : "no LAN session, own settings apply", d,
+        Log("online: %s: %s%s", active ? "LAN session, the session rules apply" : "no LAN session, own settings apply", d,
             active && s_ownPhotoMode ? "; photo mode as a free camera, the world keeps running" : "");
         strcpy_s(applied, enc);
         appliedPhoto = photo;
@@ -1204,6 +1438,11 @@ void OnlineFrame()
     EnterCriticalSection(&s_showLock);
     strcpy_s(s_appliedText, report);
     LeaveCriticalSection(&s_showLock);
+    if (active != wasActive && !active) {
+        EnterCriticalSection(&s_showLock);
+        s_mode[0] = 0;
+        LeaveCriticalSection(&s_showLock);
+    }
     if (active != wasActive && active) ShowBanner(10000);
 }
 
@@ -1216,6 +1455,7 @@ void OnlineFrame()
 typedef HRESULT(WINAPI* D3DXCreateFontA_t)(IDirect3DDevice9*, INT, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD, LPCSTR,
                                            void**);
 static void* s_font;  // ID3DXFont: [2] Release, [14] DrawTextA, [16] OnLostDevice, [17] OnResetDevice
+static IDirect3DStateBlock9* s_bannerState;  // the device state around the panel; released before a Reset
 static UINT s_fontForHeight;
 
 static void FontCall(int slot)
@@ -1223,7 +1463,12 @@ static void FontCall(int slot)
     if (s_font) ((HRESULT(WINAPI*)(void*))(*(void***)s_font)[slot])(s_font);
 }
 
-void OnlineDeviceLost() { FontCall(16); }
+void OnlineDeviceLost()
+{
+    FontCall(16);
+    if (s_bannerState) s_bannerState->Release();
+    s_bannerState = NULL;
+}
 void OnlineDeviceReset() { FontCall(17); }
 
 void OnlinePresent(IDirect3DDevice9* dev)
@@ -1238,6 +1483,12 @@ void OnlinePresent(IDirect3DDevice9* dev)
     memcpy(lines, s_bannerLines, sizeof(lines));
     LeaveCriticalSection(&s_showLock);
     if (!count || (int)(GetTickCount() - until) >= 0) return;
+    // the game's own texts (the mode) are UTF-8; the font draws in the Windows code page
+    for (int i = 0; i < count; i++) {
+        WCHAR wide[192];
+        if (MultiByteToWideChar(CP_UTF8, 0, lines[i], -1, wide, 192))
+            WideCharToMultiByte(CP_ACP, 0, wide, -1, lines[i], sizeof(lines[i]), NULL, NULL);
+    }
 
     // the game may leave another render target set when it presents: draw on the back buffer and put
     // the game's target and viewport back afterwards
@@ -1301,6 +1552,51 @@ void OnlinePresent(IDirect3DDevice9* dev)
     }
     if (SUCCEEDED(begun)) {
         int x = (int)desc.Height / 30, y = (int)desc.Height / 30;
+        // a dark panel behind the lines, so the game's picture does not show through the text
+        int width = 0;
+        for (int i = 0; i < count; i++) {
+            RECT m = { 0, 0, 0, 0 };
+            draw(s_font, NULL, lines[i], -1, &m, DT_CALCRECT | DT_LEFT | DT_TOP | DT_SINGLELINE, 0xFFFFFFFF);
+            if (m.right > width) width = m.right;
+        }
+        int pad = (int)height / 2, lineStep = (int)(height * 1.25f);
+        float l = (float)(x - pad), t = (float)(y - pad), rt_ = (float)(x + width + pad),
+              b = (float)(y + (count - 1) * lineStep + (int)height + pad);
+        if (!s_bannerState) dev->CreateStateBlock(D3DSBT_ALL, &s_bannerState);
+        IDirect3DStateBlock9* saved = s_bannerState;
+        if (saved && SUCCEEDED(saved->Capture())) {
+            SaveStage0Tracking();
+            struct V { float x, y, z, w; D3DCOLOR c; };
+            const D3DCOLOR panel = D3DCOLOR_ARGB(200, 12, 12, 16);
+            V quad[4] = { { l - 0.5f, t - 0.5f, 0, 1, panel }, { rt_ - 0.5f, t - 0.5f, 0, 1, panel },
+                          { l - 0.5f, b - 0.5f, 0, 1, panel }, { rt_ - 0.5f, b - 0.5f, 0, 1, panel } };
+            dev->SetPixelShader(NULL);
+            dev->SetVertexShader(NULL);
+            dev->SetTexture(0, NULL);
+            dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
+            dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+            dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+            dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+            dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+            dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+            dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+            dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+            dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+            dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+            dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+            dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+            dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+            dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+            dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+            dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+            dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+            dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+            dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(quad[0]));
+            saved->Apply();
+            RestoreStage0Tracking();
+        }
         for (int i = 0; i < count; i++) {
             D3DCOLOR color = i == 0 ? D3DCOLOR_ARGB(255, 255, 120, 20)
                              : !strncmp(lines[i], "WARNING", 7) ? D3DCOLOR_ARGB(255, 255, 85, 75)
@@ -1356,18 +1652,21 @@ static void NoteLobbyName()
     LeaveCriticalSection(&s_showLock);
 }
 
+// a friend's lobby: joined first, and only then the one this player was in is left, so a failed join does
+// not cost the own lobby (Steam ends a lobby when its last member leaves)
 static bool JoinFriendLobby(uint64_t lobby)
 {
-    if (s_lobby) S.LeaveLobby(s_mm, s_lobby);
-    s_lobby = 0;
-    if (!Join(lobby)) return false;
+    uint64_t old = s_lobby;
+    if (!Join(lobby)) return false;  // s_lobby stays the old one
     const char* ver = S.GetLobbyData(s_mm, lobby, "glimpse_lan");
     if (!ver || strcmp(ver, kLobbyVersion)) {
         Log("online: the friend's lobby is not a glimpse_fix LAN lobby of this version (%s), left again", ver && *ver ? ver : "none");
         S.LeaveLobby(s_mm, lobby);
-        s_lobby = 0;
+        NoteBadLobby(lobby);
+        s_lobby = old;
         return false;
     }
+    if (old && old != lobby) S.LeaveLobby(s_mm, old);
     Log("online: joined a friend's lobby through Steam");
     return true;
 }
@@ -1379,7 +1678,7 @@ static DWORD WINAPI OnlineThread(void*)
     bool in = invited && JoinFriendLobby(invited);
     if (!in) {
         uint64_t lobby = FindLobby();
-        in = (lobby && Join(lobby)) || Create();
+        in = (lobby && (g_cfg.friendsOnly ? JoinFriendLobby(lobby) : Join(lobby))) || Create();
     }
     if (!in) {
         Log("online: no lobby, SteamLAN stays local");
@@ -1395,8 +1694,7 @@ static DWORD WINAPI OnlineThread(void*)
             s_joinRequest = 0;
             if (req != s_lobby) {
                 Log("online: a friend's Join game, switching lobbies");
-                uint64_t mine = s_lobby;
-                if (!JoinFriendLobby(req) && !Join(mine)) Create();
+                if (!JoinFriendLobby(req) && !s_lobby) Create();
                 NoteLobbyName();
                 ShowBanner(10000);
             }
@@ -1404,6 +1702,25 @@ static DWORD WINAPI OnlineThread(void*)
         DWORD now = GetTickCount();
         if (now - lastMembers >= 1000) {
             lastMembers = now;
+            static int lostFor;
+            if (!s_lobby || S.LobbyOwner(s_mm, s_lobby) == 0) {
+                if (++lostFor >= 3) {
+                    if (s_lobby) {
+                        Log("online: Steam no longer has this player in lobby %llu, looking for a lobby again",
+                            (unsigned long long)s_lobby);
+                        S.LeaveLobby(s_mm, s_lobby);
+                        s_lobby = 0;
+                    }
+                    uint64_t lobby = FindLobby();
+                    if (!(lobby && (g_cfg.friendsOnly ? JoinFriendLobby(lobby) : Join(lobby))) && !Create())
+                        Log("online: no lobby for now, trying again");
+                    NoteLobbyName();
+                    ShowBanner(10000);
+                    lostFor = 0;
+                }
+            } else {
+                lostFor = 0;
+            }
             size_t before = s_peers.size();
             RefreshMembers();
             PeerConnections(false);
@@ -1426,14 +1743,65 @@ static DWORD WINAPI OnlineThread(void*)
                 uint64_t other = FindLobby();
                 if (other && other < s_lobby) {
                     uint64_t mine = s_lobby;
-                    S.LeaveLobby(s_mm, mine);
-                    if (!Join(other) && !Join(mine)) Create();
+                    if (g_cfg.friendsOnly) {
+                        JoinFriendLobby(other);
+                    } else if (Join(other)) {  // joined first, the own lobby left only then
+                        S.LeaveLobby(s_mm, mine);
+                    }
                     NoteLobbyName();
                 }
             }
         }
         Sleep(1);
     }
+}
+
+// The game's calls into its Scaleform menus (GFxMovieRoot vtable 0xC41CF4, slot 18 Invoke): the lobby
+// screen's title gives the game mode (NoteTitle). Only the vtable slot is swapped, no game code.
+typedef bool(__fastcall* GfxInvokeHook_t)(void* movie, void*, const char* path, GFxValue* result, const GFxValue* args,
+                                          unsigned count);
+static GFxInvoke_t s_origInvoke;
+
+// The game's lobby screen of a LAN game sets its title to "LOBBY - <mode>" in the game's language (seen on
+// the host and the guests alike); the part after the last " - " is the mode, kept until the LAN game ends.
+static void NoteTitle(const char* path, const GFxValue* args, unsigned count)
+{
+    if (!path || strcmp(path, "main.SetTitleText") || !args || count < 1 || args[0].type != GFX_STRING || !args[0].str ||
+        IsBadStringPtrA(args[0].str, 128) || !OnlineSession())
+        return;
+    const char* dash = NULL;
+    for (const char* t = args[0].str; (t = strstr(t, " - ")) != NULL; t += 3) dash = t;
+    if (!dash || !dash[3]) return;
+    char mode[48];
+    strncpy_s(mode, dash + 3, _TRUNCATE);
+    EnterCriticalSection(&s_showLock);
+    bool changed = strcmp(mode, s_mode) != 0;
+    if (changed) strcpy_s(s_mode, mode);
+    LeaveCriticalSection(&s_showLock);
+    if (changed) {
+        Log("online: game mode %s", mode);
+        ShowBanner(6000);
+    }
+}
+
+static bool __fastcall Hook_GfxInvoke(void* movie, void*, const char* path, GFxValue* result, const GFxValue* args,
+                                      unsigned count)
+{
+    NoteTitle(path, args, count);
+    return s_origInvoke(movie, path, result, args, count);
+}
+
+static void InstallUiHook()
+{
+    void** vt = (void**)0x00C41CF4;
+    if (IsBadReadPtr(vt, 19 * 4) || (DWORD)vt[18] != 0x0098D2E0) {
+        Log("online: Scaleform movie class not as expected, the game mode is not shown");
+        return;
+    }
+    s_origInvoke = (GFxInvoke_t)vt[18];
+    void* hook = (void*)Hook_GfxInvoke;
+    WriteMemory(&vt[18], &hook, sizeof(hook));
+    Log("online: the game mode is read from the lobby screen");
 }
 
 void OnlineStart()
@@ -1447,7 +1815,9 @@ void OnlineStart()
     InitializeCriticalSection(&s_diagLock);
     InitializeCriticalSection(&s_showLock);
     s_arrived = CreateEventA(NULL, FALSE, FALSE, NULL);
+    InstallUiHook();
     s_own = OwnRules();
+    s_ownHandbrakeButton = g_cfg.handbrakeButtonIni;
     s_ownPhotoMode = g_cfg.photoMode;
     // the transport Network takes when it starts (it has not yet in the main menu)
     QDriver** setting = (QDriver**)G(0x00D77734);

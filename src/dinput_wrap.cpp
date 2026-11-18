@@ -64,11 +64,27 @@ static void RefreshSlot(int slot)
         if (was != p.connected) Log("pad %d %s (test feed)", slot, p.connected ? "connected" : "disconnected");
         return;
     }
+    // Log=1, once: which of the four XInput slots hold a pad (VirtualPads may show the game fewer)
+    static bool scanned;
+    if (g_cfg.log && !scanned) {
+        scanned = true;
+        for (DWORD i = 0; i < XUSER_MAX_COUNT; i++) {
+            XINPUT_STATE s0 = {};
+            DWORD r = pXInputGetState(i, &s0);
+            Log("XInput slot %lu: %s%s", i, r == ERROR_SUCCESS ? "pad connected" : "empty",
+                (int)i < g_cfg.virtualPads ? "" : " (not shown to the game, VirtualPads)");
+        }
+    }
     // XInputGetState on an empty slot is slow; probe those only twice a second
     if (!p.connected && p.lastCheck && now - p.lastCheck < 500) return;
     XINPUT_STATE st = {};
     p.connected = pXInputGetState((DWORD)slot, &st) == ERROR_SUCCESS;
     p.lastCheck = now;
+    // Log=1: the first 30 button changes of each slot, so it shows whether a pad's input arrives at all
+    if (g_cfg.log && p.connected && st.Gamepad.wButtons != p.state.Gamepad.wButtons) {
+        static int changes[XUSER_MAX_COUNT];
+        if (changes[slot]++ < 30) Log("pad %d buttons %04X", slot, st.Gamepad.wButtons);
+    }
     if (p.connected) p.state = st;
     else memset(&p.state, 0, sizeof(p.state));
     if (was != p.connected) Log("pad %d %s", slot, p.connected ? "connected" : "disconnected");

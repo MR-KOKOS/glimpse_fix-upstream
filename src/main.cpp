@@ -1,6 +1,7 @@
 // Split/Second controller fix - dinput8.dll proxy entry points, config and logging
 #include "common.h"
 #include <stdio.h>
+#include <ctype.h>
 #include <share.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -170,6 +171,13 @@ static void LoadConfig()
     g_cfg.explosionShakeOff = IniBool("Camera", "ExplosionShakeOff", false);
     g_cfg.steamLan = IniBool("Online", "SteamLAN", false);
     IniString("Online", "LobbyName", "", g_cfg.lobbyName, sizeof(g_cfg.lobbyName));
+    {  // only letters, digits, - and _ (as glimpse_config.exe lets you type), at most 32
+        char* w = g_cfg.lobbyName;
+        for (const char* r = g_cfg.lobbyName; *r && w - g_cfg.lobbyName < 32; r++)
+            if (isalnum((unsigned char)*r) || *r == '-' || *r == '_') *w++ = *r;
+        *w = 0;
+    }
+    g_cfg.friendsOnly = IniBool("Online", "FriendsOnly", false);
 
     // [Gameplay]
     g_cfg.unlockAll = IniBool("Gameplay", "UnlockAll", false);
@@ -183,6 +191,7 @@ static void LoadConfig()
     g_cfg.boostButton = IniButton("Gameplay", "BoostButton", XINPUT_GAMEPAD_X);
     g_cfg.handbrake = IniBool("Gameplay", "Handbrake", false);
     g_cfg.handbrakeButton = IniButton("Gameplay", "HandbrakeButton", XINPUT_GAMEPAD_Y);
+    g_cfg.handbrakeButtonIni = g_cfg.handbrakeButton;  // before the clash check: SteamLAN rules decide again
     g_cfg.handbrakeKey = IniInt("Gameplay", "HandbrakeKey", 'X');
     g_cfg.handbrakeMode = IniInt("Gameplay", "HandbrakeMode", 1) == 2 ? 2 : 1;
     g_cfg.handbrakeStrength = IniFloat("Gameplay", "HandbrakeStrength", 15.0f, 0.0f, 40.0f);

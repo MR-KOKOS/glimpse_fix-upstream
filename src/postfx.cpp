@@ -179,7 +179,7 @@ static void __fastcall Hook_BloomRender(BYTE* self, void*, void* a, void* b, voi
     else if (g_photoBloom != 1.0f) params[0x38] = 1;
     DumpMark("bloom and tone mapping begin");
     s_origBloom(self, a, b, c, d, e);
-    HdrNoteToneMap();
+    HdrToneMapped();
     DumpMark("bloom and tone mapping end");
     for (int i = 0; i < 4; i++) *(float*)(params + kBloomOffsets[i]) = stock[i];
     params[0x38] = add;
