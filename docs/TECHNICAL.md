@@ -86,6 +86,23 @@ distances, particle and debris distances and the per-level powerplay asset dista
 hand-over to each level's backdrop models stays as the level sets it, since moving it makes both
 draw at once.
 
+**Opponent cars.** The PC release loads the PS3's car detail settings
+(`Generic/Params/PlayerLOD_ps3.params`): at most 3 opponents get the mid detail level, all others
+the far one, and every opponent switches to the far level at 100 m, so cars visibly change their
+model during a race. The Xbox 360's file in the same archive (`PlayerLOD_xenon.params`) allows 31
+opponents at the mid level up to 200 m. `CarDetail=1` writes those numbers into the tweakables
+(`PlayerLOD/02;MaxAIMidLODs`, `PlayerLOD/04;AIMidToFar`); `CarDetail=2` also gives all opponents
+the near level up to 40 m (`MaxAINearLODs`, `AINearToMid`, stock 2 and 20 m). The game reads them
+every frame as a budget per level (0x7B0A2A), not as array sizes; they are written again whenever
+a level loads the file. On the Russian build the addresses are mapped and checked against a dump,
+not yet played (as for `ShadowDistance`).
+
+**Shadows.** At the High and Very High quality levels in single player the game takes its sun
+shadow cascades from the global `Lighting/CSM_Max` settings (chosen at 0x88A3E0, copied at
+0x894B60): three cascades up to 300 m, faded out over the last 100 m. `ShadowDistance` multiplies
+both. The three cascades then cover a longer distance, so close shadows get a little softer. Split
+screen and the Low and Medium levels keep their per-level settings.
+
 ### Other image fixes
 
 * **Powerplay icons:** the port multiplies their scale by width / 1280 on top of the renderer's
@@ -181,6 +198,28 @@ draw at once.
 * **Camera shake:** a slider for the race cameras' shake on bumps and hits, and a separate switch for
   the shake from explosions and power plays, both against motion sickness.
 * **HUD key:** switches the power bar and the info bar off and on during a race.
+
+## Texture dump
+
+`DumpTextures=1` exports the game's textures at the next start, before the game sets up Direct3D:
+a small window says "glimpse_fix: dumping the game's textures, please wait", a worker thread reads
+every `.ark` archive under `data`, writes each texture as a DDS file to
+`glimpse_textures\<archive path>\`, the key is set back to 0 and the process ends. Only files are read and written; no game code runs and none is changed.
+
+* Archive: a header (`u32 0x10000`, header size), then an index of 20-byte entries (type, offset,
+  packed size, size, key), sorted by key. The key is a hash of the lower-case file name with `/`
+  (`h = h * 31 + c`, 0x571080); the names themselves are not stored. Entries are stored (type 0) or
+  LZSS-packed (type 1: a `u32` size, then a 4 KB window starting at 0xFEE); types 2 and 3 exist in
+  the loader but do not occur.
+* A texture entry is a 136-byte `SXET` header followed by a complete DDS file (DXT1/3/4/5, ATI1/2,
+  uncompressed and float formats, cube maps).
+* Files are named `<key>.dds`; each folder's `index.txt` lists name, size, format, mip levels and
+  bytes. The sector archives (`*.static.ark`, `*.stream.ark`) hold geometry only.
+* Steam build: 42 archives, 551 textures, 573 MB, about 10 seconds.
+
+This is the groundwork for texture packs, which need the original textures and their keys. Loading
+replacement textures is not part of this version. The large address aware flag stays for that
+reason too: high-resolution textures need address space on top of the streaming pool.
 
 ## Online over Steam
 

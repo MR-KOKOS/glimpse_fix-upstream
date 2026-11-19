@@ -18,7 +18,9 @@ that adds what the port never had, with a settings program instead of hand-editi
   triggers and rumble. Out of the box the port only knows the wired Xbox 360 pad.
 * **60 fps** with the simulation stepped exactly as at 30 fps, so physics and AI behave as intended.
 * **Sharp, complete worlds:** a larger streaming pool against blurry, grey or missing textures and
-  props, no pop-in of buildings beside the track, longer draw distances.
+  props, no pop-in of buildings beside the track, longer draw distances, sun shadows that reach twice
+  as far, and the opponents' cars in the Xbox 360's detail instead of the PS3's, so they no longer pop
+  between detail levels.
 * **Image:** power play icons at console size at high resolutions, motion blur matched to 60 fps,
   anisotropic filtering, no stray line at the bottom at Very High, vignette, gradient, bloom and
   flares switchable.
@@ -43,6 +45,7 @@ that adds what the port never had, with a settings program instead of hand-editi
 | **Camera** | Field of view, zoom keys, less camera shake, a HUD key and a **photo mode** with a free camera, depth of field, bloom and exposure. |
 | **Skip the intro** | No boot movies at start. |
 | **Online over Steam** *(experimental)* | The game's LAN mode over the internet with the players of a Steam lobby: no server, no ports to open. See [Online over Steam](#online-over-steam-experimental). |
+| **Texture dump** | All the game's textures as DDS files, the groundwork for texture packs. See [Texture dump](#texture-dump). |
 
 All buttons and keys can be changed. Details on every feature are in the
 [technical notes](docs/TECHNICAL.md).
@@ -51,9 +54,9 @@ All buttons and keys can be changed. Details on every feature are in the
 
 1. Copy `dinput8.dll`, `SplitSecondPad.ini` and `glimpse_config.exe` into the game folder
    (`...\steamapps\common\SplitSecond`).
-2. Drag `SplitSecond.exe` onto `setlaa.exe`. It sets the large address aware flag the bigger
-   streaming pool needs and keeps the original as `SplitSecond.exe.orig`. Steam's "Verify integrity
-   of game files" restores the original exe; just run it again.
+2. Drag `SplitSecond.exe` onto `setlaa.exe`. It sets the large address aware flag, which the bigger
+   streaming pool (and later texture packs) needs. The original stays as `SplitSecond.exe.orig`.
+   Steam's "Verify integrity of game files" restores the original exe; just run it again.
 3. Run `glimpse_config.exe` to change the settings.
 
 Uninstall: delete the three files and rename `SplitSecond.exe.orig` back.
@@ -114,6 +117,25 @@ saved at once; bloom and exposure apply while the game runs, everything else at 
 Comments and keys it does not know stay as they are. Every key is described in the
 [INI reference](docs/INI.md).
 
+## Texture dump
+
+Settings program, page *Debug*: *Dump textures on the next start*. At the next start a small window
+says "glimpse_fix: dumping the game's textures, please wait" while the fix reads the game's
+archives, then the switch turns itself off and the game closes. Start it again to play.
+
+* Result: the folder `glimpse_textures` in the game folder, one subfolder per archive, every texture
+  as a DDS file with an `index.txt` (size, format, mip levels). On the Steam version: 551 textures,
+  573 MB, in about 10 seconds.
+* The archives keep only a hash of each file name, so the files are named by that key
+  (`0A1B2C3D.dds`); the key is also what a texture pack will use to say which texture it replaces.
+* Nothing in the game folder is changed apart from the new folder and the switch in the INI, and
+  no game code is involved.
+
+This is the first step towards texture packs: a pack needs the original textures to start from.
+Loading replaced textures in the game is the next step and not part of this version. That is also
+why the large address aware flag (`setlaa.exe`) stays: high-resolution textures need address space
+on top of the 512 MB streaming pool.
+
 ## Copy protection
 
 The Steam executable is protected with SecuROM. **This project does not remove, bypass or weaken
@@ -154,15 +176,26 @@ Bug reports: set `Log=1` (settings program, *Debug*) and attach `SplitSecondPad.
 
 ## Credits
 
-* [Back on Air](https://github.com/xenophobentx/back-on-air) by xenophobentx was the inspiration for the
-  opponent engine fix: its notes pointed out that the opponents race without an engine sound on PC,
-  which I had never noticed. The fix here was worked out and written independently; no code was taken.
+* [Back on Air](https://github.com/xenophobentx/back-on-air) by xenophobentx gave the ideas for three
+  features: the opponent engine fix (its notes pointed out that the opponents race without an engine
+  sound on PC, which I had never noticed), the opponent car detail (the PC loads the PS3's car detail
+  settings) and the longer shadow distance. All three were worked out and written independently
+  here; no code was taken.
+* JOHN30011887: the requests for the car detail and the shadow distance
+  ([#13](https://github.com/frankyfife/glimpse_fix/issues/13),
+  [#12](https://github.com/frankyfife/glimpse_fix/issues/12)).
 * MR-KOKOS: the full ultrawide mode (`UltrawideFix=2`).
 
 ## Building
 
 `build.bat` with the Visual Studio 2022 Build Tools (x86). The research tools and the address notes
 are in the [technical notes](docs/TECHNICAL.md#building).
+
+## AI disclosure
+
+glimpse_fix is developed with AI assistance: the code, the reverse engineering and the
+documentation are written with Claude (Anthropic). Changes are tested in the game on the
+German/English Steam version before a release; what could not be tested is marked as such.
 
 ## License
 
