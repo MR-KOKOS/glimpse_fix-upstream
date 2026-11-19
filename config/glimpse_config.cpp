@@ -126,6 +126,7 @@ static Option kOptions[] = {
     { "Online", "FriendsOnly", BOOL_OPT, "  Friends only", "Your lobby is open to your Steam friends only and not listed for anybody else. When a friend is already in one, you join theirs. The lobby name is not used then.", "0" },
     { "Online", "LobbyName", TEXT, "  Lobby name", "Players with the same name meet in one lobby, like a password: pick an unusual one to stay among yourselves. Empty = the public lobby, where everybody with the fix meets. Letters, digits, - and _.", "" },
     // Debug
+    { "Debug", "DumpTextures", BOOL_OPT, "Dump textures on the next start", "At the next start the game's textures are written as DDS files to the folder glimpse_textures in the game folder (one folder per archive, each with an index.txt; about 600 MB, under a minute). A window shows the progress, then the game closes and this switch goes off again.", "0" },
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
@@ -596,7 +597,7 @@ static const char* const kPageText[kPageCount] = {
     "Boost for the AI cars (experimental).",
     "The opponents' engines and the console's reverb.",
     "Online play over Steam (experimental). Presets leave this page alone.",
-    "For bug reports.",
+    "For bug reports, and the texture dump.",
 };
 
 static void ShowPage(int page)

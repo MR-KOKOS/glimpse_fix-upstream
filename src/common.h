@@ -17,6 +17,7 @@ struct Config {
     float rumbleScale;       // multiplier for the game's motor values
     GlyphStyle glyphs;
     bool  log;
+    bool  dumpTextures;      // [Debug] DumpTextures: write the game's textures as DDS files at the next start, then quit
     bool  testFeed;          // read pad state from shared memory instead of XInput (development)
     bool  profile;           // count calls of timing-relevant game functions (development)
     int   frameRate;         // 30 (stock) or 60
@@ -133,6 +134,7 @@ void HdrDeviceLost();                                // before Reset
 void HdrDeviceReset(IDirect3DDevice9* dev);          // after a successful Reset
 bool HdrPresent(IDirect3DDevice9* dev, long* result);  // instead of the device's Present; false = not active
 extern volatile DWORD g_lastPresent;                 // diag.cpp: GetTickCount of the last Present
+void RunTextureDump();                               // texdump.cpp: DumpTextures=1, never returns (the game ends)
 void HdrToneMapped();                                // right after the game's tone mapping pass: the gain (stage 2)
 void HdrInstallUiHook();                             // after UltrawideDeviceCreated: Scaleform hook for the HUD copy
 void SaveStage0Tracking();     // around a pass of our own that sets sampler stage 0

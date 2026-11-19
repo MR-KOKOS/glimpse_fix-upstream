@@ -675,6 +675,8 @@ static IDirect3D9* WINAPI Diag_Direct3DCreate9(UINT sdk)
     VirtualProtect((void*)s_origCreate9, 5, old, &old);
     FlushInstructionCache(GetCurrentProcess(), (void*)s_origCreate9, 5);
 
+    // DumpTextures=1: the textures are written before the game makes its device, then the game ends
+    if (g_cfg.dumpTextures) RunTextureDump();
     IDirect3D9* d3d = s_origCreate9(sdk);
     Log("Direct3DCreate9(%u) -> %p, %u adapters", sdk, d3d, d3d ? d3d->GetAdapterCount() : 0);
     if (d3d) {

@@ -94,6 +94,7 @@ static void LoadConfig()
 
     // [Debug] first, so the log is open for everything below
     g_cfg.log = IniBool("Debug", "Log", false);
+    g_cfg.dumpTextures = IniBool("Debug", "DumpTextures", false);
     g_cfg.testFeed = IniBool("Debug", "TestFeed", false);
     g_cfg.profile = IniBool("Debug", "Profile", false);
     if (g_cfg.log) {
@@ -316,7 +317,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         LoadConfig();
         FixOpponentEngineBanks();  // plain data in the exe file, read when the audio system starts
         FixReverbPresets();        // fmod_event.dll is mapped already (an import of the exe)
-        if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2) &&
+        if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2 ||
+             g_cfg.dumpTextures) &&
             (g_cfg.patchMask & PATCH_D3D))
             InstallD3DHooks();
     }
