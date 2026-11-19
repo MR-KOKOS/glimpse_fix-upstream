@@ -8,7 +8,7 @@ The file is split into sections. INIs from older versions with everything under 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). The game accepts at most 4 joysticks; lower this to make room for a wheel. At 0 the per-frame extras (photo mode, HUD and zoom keys, unlocks, decals, boost, LOD scaling, `PopInFix`, `LensFlare=0`) do not run, as they run with the pads' poll. |
+| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). The game accepts at most 4 joysticks; lower this to make room for a wheel. At 0 the per-frame extras (photo mode, HUD and zoom keys, unlocks, decals, boost, LOD scaling, `ShadowDistance`, `PopInFix`, `CarDetail`, `LensFlare=0`) do not run, as they run with the pads' poll. |
 | `HideXInputFromDirectInput` | 1 | Don't offer the real XInput devices through DirectInput as well. |
 | `SeparateTriggers` | 1 | 0 = stock shared Z axis. |
 | `StickDeadzone` | 0.15 | Radial stick deadzone (0–1). |
@@ -40,7 +40,9 @@ The file is split into sections. INIs from older versions with everything under 
 |---|---|---|
 | `StreamPoolMB` | 512 | Streaming pool in MB, 0 = stock (57). Only used when the exe has the LAA flag. |
 | `LodDistanceScale` | 2.0 | Multiplier for LOD, streaming, particle, debris and powerplay distances (0.5–8). |
+| `ShadowDistance` | 2.0 | Multiplier for the sun shadow range at the High and Very High quality levels in single player (1–3). The game: shadows reach 300 m and fade out over the last 100 m (`Lighting/CSM_Max`). Shadows close to the car get a little softer the higher it is. |
 | `PopInFix` | 1 | Ignore the sectors' precomputed visibility lists. 0 = stock. |
+| `CarDetail` | 1 | Opponent car detail. The PC release loads the PS3's car LOD settings (`PlayerLOD_ps3.params`: at most 3 opponents in medium detail, coarse from 100 m on). 1 = the Xbox 360's (`PlayerLOD_xenon.params`: medium detail for all, coarse from 200 m on), 2 = high (also full detail for all opponents up to 40 m), 0 = as the PC release. |
 
 **[Camera]**
 

@@ -28,6 +28,7 @@ struct Config {
     float motionBlurStrength; // multiplier on top of the 60 fps compensation
     int   anisotropy;        // forced anisotropic filtering, 0/1 = game default
     float lodDistanceScale;  // environment, particle and powerplay draw distances
+    float shadowDistance;    // multiplier for the sun shadow range at High and Very High
     bool  vignette;          // keep the cameras' screen edge darkening
     bool  bloom;             // bloom added to the frame (tone mapping stays)
     bool  lensFlare;         // sun, light and screen space lens flares
@@ -37,6 +38,7 @@ struct Config {
     int   hdrPaperWhite;     // nits, the brightness of the game's white
     int   skipIntro;         // 0 = boot movies as the game, 1 = skip the publisher logo, 2 = also the intro
     bool  popInFix;          // ignore the sectors' precomputed visibility lists (distance and frustum only)
+    int   carDetail;         // opponent car detail: 0 as the PC release, 1 as the Xbox 360, 2 high
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's

@@ -79,6 +79,8 @@ static Option kOptions[] = {
     // World
     { "World", "StreamPoolMB", CHOICE, "Streaming pool", "Memory for the track's textures and props. Bigger keeps them sharp instead of blurry or grey. Needs SplitSecond.exe with the LAA flag (setlaa.exe).", "512", "0|Stock (57 MB);256|256 MB;512|512 MB;768|768 MB" },
     { "World", "LodDistanceScale", RANGE, "Draw distance", "Multiplier for LOD, streaming, particle, debris and power play distances.", "2.0", 0, 0.5, 8, 0.1, 1 },
+    { "World", "ShadowDistance", RANGE, "Shadow distance", "Multiplier for how far the sun shadows reach (the game: 300 m) at the High and Very High quality levels in single player. Shadows close to the car get a little softer the higher it is.", "2.0", 0, 1, 3, 0.1, 1 },
+    { "World", "CarDetail", CHOICE, "Opponent car detail", "How detailed the opponents' cars are drawn. The PC release uses the PS3's settings: only 3 opponents in medium detail and every opponent coarse from 100 m on, so cars visibly pop between detail levels. As the Xbox 360: medium detail for all, coarse from 200 m on. High: all opponents in full detail up to 40 m.", "1", "0|As the PC release;1|As the Xbox 360;2|High" },
     { "World", "PopInFix", BOOL_OPT, "Pop-in fix", "Buildings beside the track no longer pop in at section borders (a little more to draw).", "1" },
     // Gameplay
     // Camera
@@ -126,7 +128,7 @@ static Option kOptions[] = {
     { "Online", "FriendsOnly", BOOL_OPT, "  Friends only", "Your lobby is open to your Steam friends only and not listed for anybody else. When a friend is already in one, you join theirs. The lobby name is not used then.", "0" },
     { "Online", "LobbyName", TEXT, "  Lobby name", "Players with the same name meet in one lobby, like a password: pick an unusual one to stay among yourselves. Empty = the public lobby, where everybody with the fix meets. Letters, digits, - and _.", "" },
     // Debug
-    { "Debug", "DumpTextures", BOOL_OPT, "Dump textures on the next start", "At the next start the game's textures are written as DDS files to the folder glimpse_textures in the game folder (one folder per archive, each with an index.txt; about 600 MB, under a minute). A window shows the progress, then the game closes and this switch goes off again.", "0" },
+    { "Debug", "DumpTextures", BOOL_OPT, "Dump textures on the next start", "At the next start the game's textures are written as DDS files to the folder glimpse_textures in the game folder (one folder per archive, each with an index.txt; about 570 MB, roughly 10 seconds). A window shows that the dump is running, then the game closes and this switch goes off again.", "0" },
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
@@ -590,7 +592,7 @@ static const char* const kPageText[kPageCount] = {
     "Pads, triggers and button prompts.",
     "Frame rate, texture filtering, HDR output and the icon size.",
     "Motion blur, bloom, flares and the screen overlays. Bloom and exposure apply while the game runs.",
-    "Streaming, draw distance and pop-in.",
+    "Streaming, draw and shadow distance, pop-in and the opponents' car detail.",
     "Field of view, ultrawide screens, camera shake, zoom, photo mode and the HUD key.",
     "Unlocks, boot movies, respot time and the power play bar.",
     "Boost and handbrake for your car, with their buttons and keys.",
@@ -625,7 +627,7 @@ struct Preset {
 };
 static const Preset kPresets[] = {
     { "Recommended", "Every option at its default: 60 fps and the fixes on, the extras off.", "" },
-    { "Original game", "The game as it was: 30 fps, linear filtering, the stock streaming pool, draw distances and pop-in, all effects on, the stock icon size, shared triggers and no ultrawide fix. The controller support stays.", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;PopInFix=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as it was: 30 fps, linear filtering, the stock streaming pool, draw distances, shadow distance, pop-in and opponent car detail, all effects on, the stock icon size, shared triggers and no ultrawide fix. The controller support stays.", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Chaos", "Recommended plus everything unlocked, the boost, the power bar fill and the AI boost in chaos mode.", "UnlockAll=1;Boost=1;PowerBarFill=1;AIBoost=1;AIBoostChaos=1" },
 };
 

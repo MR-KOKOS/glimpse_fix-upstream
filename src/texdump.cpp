@@ -1,7 +1,7 @@
 // Split/Second PC fix - DumpTextures=1: the game's textures as DDS files
 //
 // The game's .ark archives (read by its ArkLoader) hold every texture as an entry of its own: a 136 byte
-// "TEXS" block and an ordinary DDS file, packed with LZSS or stored. The dump walks each archive's index,
+// "SXET" block (TEXS as a little-endian dword) and an ordinary DDS file, packed with LZSS or stored. The dump walks each archive's index,
 // unpacks the texture entries and writes their DDS files into a folder per archive under glimpse_textures,
 // with an index.txt that lists every file with its size, format and mip levels.
 //
@@ -153,7 +153,7 @@ struct DumpTotals {
 // header {count, offset of the entries, 0, ...} and count entries of 20 bytes {type (0 stored, 1 LZSS),
 // file offset, packed size, size, key}; the key is the name's hash (h = h * 31 + lower case char, '/' as
 // separator). A packed entry starts with its u32 size, then the LZSS stream. A texture entry is a 136 byte
-// "TEXS" block followed by one DDS file.
+// "SXET" block followed by one DDS file.
 void DumpArchive(const std::string& arkPath, const std::string& outDir, uint64_t doneBefore, uint64_t allBytes,
                  DumpTotals* totals)
 {

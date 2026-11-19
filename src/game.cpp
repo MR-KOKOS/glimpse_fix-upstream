@@ -754,6 +754,61 @@ static void WatchVmContexts()
     Log("securom vm: %d of 10 contexts in use at frame %u (%lu ms):%s", used, frame, GetTickCount(), list);
 }
 
+// Opponent car detail (CarDetail): the PC release loads Generic/Params/PlayerLOD_ps3.params, the PS3's car
+// LOD tunables, where at most 3 opponents get the mid detail level (the rest the far one) and every opponent
+// switches to the far level at 100 m. The Xbox 360's file in the same archive (PlayerLOD_xenon.params) has
+// 31 and 200 m; with only the PS3's numbers the opponents visibly pop between detail levels. 1 writes the
+// Xbox 360's numbers, 2 also gives up to 7 opponents (all of them) the near level and moves its switch from
+// 20 to 40 m. Plain tunables in .data (PlayerLOD/01..04, registered at 0xB807B4), written again whenever the
+// game loads the params file; the idea came from the Back on Air project.
+static void ApplyCarDetail()
+{
+    if (!g_cfg.carDetail) return;
+    int* nearLods = (int*)G(0x00D37C78);       // PlayerLOD/01;MaxAINearLODs
+    int* midLods = (int*)G(0x00D37C80);        // PlayerLOD/02;MaxAIMidLODs
+    float* nearToMid = (float*)G(0x00D37C88);  // PlayerLOD/03;AINearToMid
+    float* midToFar = (float*)G(0x00D37C90);   // PlayerLOD/04;AIMidToFar
+    // only values that look like the tunables (not loaded yet, or another layout: left alone)
+    if (*midLods < 0 || *midLods > 31 || *nearLods < 0 || *nearLods > 31 || !(*midToFar > 0 && *midToFar < 10000) ||
+        !(*nearToMid > 0 && *nearToMid < 10000))
+        return;
+    bool changed = false;
+    if (*midLods < 31) *midLods = 31, changed = true;
+    if (*midToFar < 200.0f) *midToFar = 200.0f, changed = true;
+    if (g_cfg.carDetail == 2) {
+        if (*nearLods < 7) *nearLods = 7, changed = true;
+        if (*nearToMid < 40.0f) *nearToMid = 40.0f, changed = true;
+    }
+    if (changed && g_cfg.log) {
+        static int logged;
+        if (logged++ < 5)
+            Log("car detail %s: near %d up to %.0f m, mid %d up to %.0f m", g_cfg.carDetail == 2 ? "high" : "as the Xbox 360",
+                *nearLods, *nearToMid, *midLods, *midToFar);
+    }
+}
+
+// Sun shadow distance (ShadowDistance): at the High and Very High quality levels in single player the
+// game takes its sun shadow cascades from the global Lighting/CSM_Max settings (0x88A3E0 picks them,
+// 0x894B60 copies them): shadows reach 300 m and fade out over the last 100 m. Both are scaled here;
+// split screen and the Low and Medium levels keep their per-level settings. Plain tunables in .data
+// (registered at 0xB8904C / 0xB890B0), re-scaled when anything loads new values into them.
+static void ScaleShadowDistance()
+{
+    if (g_cfg.shadowDistance == 1.0f) return;
+    float* const kVars[2] = {
+        (float*)G(0x00D47874),  // Lighting/CSM_Max/Settings/c; range
+        (float*)G(0x00D47864),  // Lighting/CSM_Max/Settings/a; fadeout range
+    };
+    static float s_written[2];
+    for (int i = 0; i < 2; i++) {
+        float v = *kVars[i];
+        if (v == s_written[i] || !(v > 0 && v < 100000.0f)) continue;
+        s_written[i] = v * g_cfg.shadowDistance;
+        *kVars[i] = s_written[i];
+        if (g_cfg.log) Log("shadow %s %.0f -> %.0f m", i ? "fadeout range" : "range", v, s_written[i]);
+    }
+}
+
 void OnInputFrame()
 {
     if (g_cfg.profile) ProfilerTick();
@@ -762,6 +817,8 @@ void OnInputFrame()
     if (s_knownBuild && (g_cfg.patchMask & PATCH_LOD)) {
         static unsigned frame;
         ScaleLodDistances();
+        ApplyCarDetail();
+        ScaleShadowDistance();
         if (frame++ % 30 == 0) ScalePowerplayDrawDists();
         // Precomputed visibility: each track sector lists what can be seen from it, and the rest is
         // skipped, so buildings pop in at sector borders whatever their distance. The game's own

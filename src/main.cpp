@@ -155,6 +155,9 @@ static void LoadConfig()
         g_cfg.lodDistanceScale = lod < 0.5f ? 1.0f : lod;
     }
     g_cfg.popInFix = IniBool("World", "PopInFix", true);
+    g_cfg.shadowDistance = IniFloat("World", "ShadowDistance", 2.0f, 1.0f, 3.0f);
+    g_cfg.carDetail = IniInt("World", "CarDetail", 1);
+    if (g_cfg.carDetail < 0 || g_cfg.carDetail > 2) g_cfg.carDetail = 1;
 
     // [Camera]
     g_cfg.fov = IniFloat("Camera", "FOV", 1.0f, 0.3f, 2.5f);
