@@ -181,9 +181,6 @@ Bug reports: set `Log=1` (settings program, *Debug*) and attach `SplitSecondPad.
   sound on PC, which I had never noticed), the opponent car detail (the PC loads the PS3's car detail
   settings) and the longer shadow distance. All three were worked out and written independently
   here; no code was taken.
-* JOHN30011887: the requests for the car detail and the shadow distance
-  ([#13](https://github.com/frankyfife/glimpse_fix/issues/13),
-  [#12](https://github.com/frankyfife/glimpse_fix/issues/12)).
 * MR-KOKOS: the full ultrawide mode (`UltrawideFix=2`).
 
 ## Building
