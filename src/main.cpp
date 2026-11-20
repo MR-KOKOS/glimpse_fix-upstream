@@ -145,6 +145,10 @@ static void LoadConfig()
     g_cfg.hdrPaperWhite = IniInt("Graphics", "HDRPaperWhite", 200);
     g_cfg.hdrPaperWhite = g_cfg.hdrPaperWhite < 80 ? 80 : g_cfg.hdrPaperWhite > 500 ? 500 : g_cfg.hdrPaperWhite;
     g_cfg.fixIconSize = IniBool("Graphics", "FixPowerplayIconSize", true);
+    g_cfg.qualityCap = IniInt("Graphics", "QualityCap", 3);
+    if (g_cfg.qualityCap < 0 || g_cfg.qualityCap > 3) g_cfg.qualityCap = 3;
+    g_cfg.textureDetail = IniInt("Graphics", "TextureDetail", 0);
+    if (g_cfg.textureDetail < 0 || g_cfg.textureDetail > 3) g_cfg.textureDetail = 0;
     g_cfg.opponentEngines = IniBool("Audio", "OpponentEngines", true);
     g_cfg.consoleReverb = IniBool("Audio", "ConsoleReverb", true);
 
@@ -158,6 +162,9 @@ static void LoadConfig()
     g_cfg.shadowDistance = IniFloat("World", "ShadowDistance", 2.0f, 1.0f, 3.0f);
     g_cfg.carDetail = IniInt("World", "CarDetail", 1);
     if (g_cfg.carDetail < 0 || g_cfg.carDetail > 2) g_cfg.carDetail = 1;
+    g_cfg.shadows = IniBool("World", "Shadows", true);
+    g_cfg.shadowResolution = IniInt("World", "ShadowResolution", 2);
+    if (g_cfg.shadowResolution != 1 && g_cfg.shadowResolution != 4) g_cfg.shadowResolution = 2;
 
     // [Camera]
     g_cfg.fov = IniFloat("Camera", "FOV", 1.0f, 0.3f, 2.5f);
@@ -190,6 +197,8 @@ static void LoadConfig()
     g_cfg.wreckTime = IniFloat("Gameplay", "WreckTime", 0.0f, 0.0f, 120.0f);
     if (g_cfg.unlockDecals < 0 || g_cfg.unlockDecals > 2) g_cfg.unlockDecals = 0;
     g_cfg.skipIntro = IniInt("Gameplay", "SkipIntro", 0);
+    g_cfg.cutsceneSkip = IniBool("Gameplay", "CutsceneSkip", true);
+    g_cfg.smaa = IniBool("Graphics", "SMAA", true);
     g_cfg.boost = IniBool("Gameplay", "Boost", false);
     g_cfg.boostKey = IniInt("Gameplay", "BoostKey", VK_LSHIFT);
     g_cfg.boostButton = IniButton("Gameplay", "BoostButton", XINPUT_GAMEPAD_X);
@@ -321,7 +330,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         FixOpponentEngineBanks();  // plain data in the exe file, read when the audio system starts
         FixReverbPresets();        // fmod_event.dll is mapped already (an import of the exe)
         if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2 ||
-             g_cfg.dumpTextures) &&
+             g_cfg.dumpTextures || g_cfg.cutsceneSkip || g_cfg.smaa || g_cfg.textureDetail > 0 || g_cfg.qualityCap < 3 ||
+             g_cfg.shadowResolution > 1) &&
             (g_cfg.patchMask & PATCH_D3D))
             InstallD3DHooks();
     }

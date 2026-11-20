@@ -19,17 +19,19 @@ that adds what the port never had, with a settings program instead of hand-editi
 * **60 fps** with the simulation stepped exactly as at 30 fps, so physics and AI behave as intended.
 * **Sharp, complete worlds:** a larger streaming pool against blurry, grey or missing textures and
   props, no pop-in of buildings beside the track, longer draw distances, sun shadows that reach twice
-  as far, and the opponents' cars in the Xbox 360's detail instead of the PS3's, so they no longer pop
-  between detail levels.
-* **Image:** power play icons at console size at high resolutions, motion blur matched to 60 fps,
-  anisotropic filtering, no stray line at the bottom at Very High, vignette, gradient, bloom and
-  flares switchable.
+  as far and are drawn into a shadow map of twice the resolution, and the opponents' cars in the Xbox
+  360's detail instead of the PS3's, so they no longer pop between detail levels.
+* **Image:** anti-aliasing (SMAA) on the 3D picture with a sharp HUD, power play icons at console
+  size at high resolutions, motion blur matched to 60 fps, anisotropic filtering, no stray line at
+  the bottom at Very High, vignette, gradient, bloom and flares switchable.
 * **Sound as on the console:** the opponents' engines are audible again, and the Xbox 360 release's
   reverb presets replace the PC's stock ones (see [Credits](#credits)).
 * **Ultrawide:** the race cameras keep the 16:9 picture height; an experimental full mode widens
   every camera and keeps menus and HUD at 16:9 in the centre.
 * **HDR output** for HDR displays: the game's picture at an adjustable paper white, and the highlights
   of the game's own HDR image (sun, sky, lights, explosions) up to the display's peak brightness.
+* **Skippable cutscenes:** the season's "Coming up" and "Next time" movies, the end sequence, the demo
+  and boot movies. The first press of A, B, X, Y, Start, Enter or Space shows "Press again to skip".
 
 **Extras** (all off by default)
 
@@ -44,6 +46,7 @@ that adds what the port never had, with a settings program instead of hand-editi
 | **Achievements and decals** | All of them, or only the ones nobody can earn any more (ranked online, Pure). |
 | **Camera** | Field of view, zoom keys, less camera shake, a HUD key and a **photo mode** with a free camera, depth of field, bloom and exposure. |
 | **Skip the intro** | No boot movies at start. |
+| **Potato presets** | For very weak PCs, at 60 fps: graphics quality Low, no shadows, no effects, the shortest draw distances; *Peeled potato* also draws the textures at an eighth of their size. See [Settings](#settings). |
 | **Online over Steam** *(experimental)* | The game's LAN mode over the internet with the players of a Steam lobby: no server, no ports to open. See [Online over Steam](#online-over-steam-experimental). |
 | **Texture dump** | All the game's textures as DDS files, the groundwork for texture packs. See [Texture dump](#texture-dump). |
 
@@ -111,11 +114,16 @@ in an online game. Tested so far with two players, in Race and Eliminator.
 
 ## Settings
 
-`glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic, a help line for the
-option under the mouse, and three presets (*Recommended*, *Original game*, *Chaos*). Every change is
-saved at once; bloom and exposure apply while the game runs, everything else at the next start.
-Comments and keys it does not know stay as they are. Every key is described in the
-[INI reference](docs/INI.md).
+`glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic and a help line for
+the option under the mouse. Every change is saved at once; bloom and exposure apply while the game
+runs, everything else at the next start. Comments and keys it does not know stay as they are. Every
+key is described in the [INI reference](docs/INI.md).
+
+The *Presets* page sets everything but the Online and Debug pages at once: *Recommended* (the
+defaults), *Original game*, *Potato* and *Peeled potato* for very weak PCs, and *Chaos*. Before a
+preset is applied, your own settings are kept, and *Back to your settings* puts them back. Presets
+change only the INI: the potato presets cap the graphics quality while they are on, but the level
+chosen in the game's own menu stays saved as it is.
 
 ## Texture dump
 
@@ -143,7 +151,8 @@ it, and it does not change any game code.** SecuROM checks the game code at fixe
 a changed instruction makes the game hang minutes later, typically after the finish line. That is
 also the likely reason why earlier 60 fps patches got a reputation for breaking the game. glimpse_fix
 works only through the game's data, swapped function pointers and calls into the game's own
-functions, after checking the expected bytes. The copy protection stays intact. How, in detail:
+functions, after checking the expected bytes, and through hooks in Direct3D, which is part of
+Windows. The copy protection stays intact. How, in detail:
 [Copy protection in detail](docs/TECHNICAL.md#copy-protection-in-detail).
 
 **The "elysium" Xbox content pack (`Xenon.dll`) is not supported.** It replaces `SplitSecond.exe`
@@ -169,8 +178,12 @@ Please reproduce problems without such packs before reporting them.
 * `UnlockDecals` works in single player races; finish the race or leave it through the pause menu
   so the profile is saved.
 * Online over Steam is experimental, see [above](#online-over-steam-experimental).
+* On the Russian Steam build the options new in 2.2.0 are mapped and checked against a dump, not yet
+  played. SMAA in split screen has not been checked yet.
 * Audio: the game forces FMOD to DirectSound 5.1; the LFE channel and the pause menu are silent in
   the game's own mix.
+* `TextureDetail` below full also blurs menu and HUD pictures that have mip levels; the text stays
+  sharp. `ShadowResolution=4` is experimental.
 
 Bug reports: set `Log=1` (settings program, *Debug*) and attach `SplitSecondPad.log`.
 
@@ -182,6 +195,10 @@ Bug reports: set `Log=1` (settings program, *Debug*) and attach `SplitSecondPad.
   settings) and the longer shadow distance. All three were worked out and written independently
   here; no code was taken.
 * MR-KOKOS: the full ultrawide mode (`UltrawideFix=2`).
+* EndlessPapercuts: the request for skippable cutscenes
+  ([#11](https://github.com/frankyfife/glimpse_fix/issues/11)).
+* [SMAA](https://github.com/iryoku/smaa) by Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando
+  Navarro and Diego Gutierrez: the anti-aliasing shaders and tables, unchanged in `third_party/smaa`.
 
 ## Building
 
@@ -196,5 +213,6 @@ German/English Steam version before a release; what could not be tested is marke
 
 ## License
 
-GPL-3.0, see [LICENSE](LICENSE). Split/Second is © Disney; this project contains no game code or
-data.
+GPL-3.0, see [LICENSE](LICENSE). `third_party/smaa` is under the MIT license
+([its license](third_party/smaa/LICENSE.txt)). Split/Second is © Disney; this project contains no game
+code or data.

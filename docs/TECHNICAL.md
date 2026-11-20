@@ -103,6 +103,21 @@ shadow cascades from the global `Lighting/CSM_Max` settings (chosen at 0x88A3E0,
 both. The three cascades then cover a longer distance, so close shadows get a little softer. Split
 screen and the Low and Medium levels keep their per-level settings.
 
+**Shadow resolution.** In single player all three cascades go into one depth texture of 1024x3072
+(INTZ, or the first of RAWZ, DF24, DF16, D24S8 the device takes), one above the other, drawn through
+viewports at y = 0, 1024 and 2048, with an A8R8G8B8 colour target of the same size bound that is never
+written. The game never asks either texture for its size, and its shaders pick and filter a cascade in
+texture coordinates. `ShadowResolution` (2 by default, 4 experimental) creates both that many times as
+wide and high, and while the colour target is render target 0 the viewports, scissor and clear rects
+the game sets in its 1024x3072 units are scaled with them (Direct3D vtable slots: `CreateTexture`,
+`SetRenderTarget`, `SetViewport`, `SetScissorRect`, `Clear`). The soft edge keeps its width in texture
+coordinates and is sampled finer. The factor is lowered to the device's largest texture; if a large
+target cannot be made, both stay at the game's size. Split screen (two maps of 1024x1024) is left
+as it is.
+
+**Shadows off.** `Shadows=0` sets the game's own switch `Lighting/Debug/Cast shadows - Disable all
+shadows` (0xD716EC), which every pass that draws into the shadow maps checks.
+
 ### Other image fixes
 
 * **Powerplay icons:** the port multiplies their scale by width / 1280 on top of the renderer's
@@ -142,8 +157,29 @@ screen and the Low and Medium levels keep their per-level settings.
   the game's target is copied: the picture without the HUD. At Present every pixel that still equals
   that copy gets the gain, so the HUD and menus stay at paper white. The output costs about 1.6 ms a
   frame at 4K and adds one frame of delay.
+* **Anti-aliasing (SMAA):** SMAA 1x (the reference shaders by Jimenez et al., unchanged in
+  `third_party/smaa`, compiled with `fxc` at build time) runs on the 3D picture right before the game
+  draws its HUD: at the first Scaleform movie after the tone mapper (`GFxMovieRoot::Display`, vtable
+  `0xC41CF4` slot 31) on a target of the tone mapper's size, so text and HUD stay sharp. In split
+  screen each half is meant to be smoothed after its own tone mapping, within its viewport (not
+  checked in the game yet). A frame without a HUD
+  (photo mode) is smoothed at Present. The device state is captured and put back with a state block.
+  About 0.1 ms a frame at 4K on an RTX 5090.
 * **Anisotropic filtering:** the game filters all textures linearly; mipmapped textures that are
-  not render targets get anisotropic filtering.
+  not render targets get anisotropic filtering (through the device's `SetTexture` and
+  `SetSamplerState`).
+* **Direct3D hooks kept in place:** right after the device's first `Reset` the Direct3D runtime writes
+  its own functions back into the device's vtable. Before 2.2.0 that silently undid every hook of the
+  fix except Present and Reset (the anisotropic filtering among them). Every hooked slot is now checked
+  after each Reset and every input frame; where the runtime's function is back, the fix's hook goes in
+  front of it again and calls on to it. A slot another module took over is left to it.
+* **Texture detail:** `TextureDetail=1..3` raises the sampler state `MAXMIPLEVEL` on the same samplers,
+  so mipmapped textures are drawn at half, a quarter or an eighth of their size; textures without mip
+  levels (text, most of the HUD) are not affected.
+* **Graphics quality limit:** the game sets its quality level (0xD0F7E8) only through one function
+  (0x471530), which clamps it to the range of the level's tweakable (the object at `[0xD0F7EC]`,
+  maximum at +0xC). `QualityCap` lowers that maximum before the device is made and every frame; the
+  level the options menu keeps and saves stays the player's own.
 * **Graphics quality:** "Very High" is exactly "High" plus 2x supersampling: of all places in the
   game that read the quality level, only the supersampling ones tell Very High from High. To render
   at screen resolution, pick "High" in the game; nothing else changes.
@@ -198,6 +234,15 @@ screen and the Low and Medium levels keep their per-level settings.
 * **Camera shake:** a slider for the race cameras' shake on bumps and hits, and a separate switch for
   the shake from explosions and power plays, both against motion sickness.
 * **HUD key:** switches the power bar and the info bar off and on during a race.
+
+### Cutscenes
+
+`CutsceneSkip` makes the season's cutscenes ("Coming up", "Next time", the end sequence), the demo
+movies and the boot movies skippable. They are Bink movies: `BinkOpen`, `BinkWait` and `BinkDoFrame`
+are wrapped through their import slots. The first press of A, B, X, Y, Start (any pad), Enter or Space shows "Press
+again to skip" for 3 seconds; a second press within that time moves the movie to its last frame, so
+the game's player ends it as if it had played through. A press held when the movie starts does not
+count.
 
 ## Texture dump
 
@@ -270,7 +315,7 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
 * swapped vtable slots (motion blur, grading, bloom, depth of field and particle flare passes, AI
   player update, chase and bumper camera update, with the photo mode the other camera classes'
   update, the respot logic's update with the photo mode or `WreckTime`, the Scaleform movie's
-  `Display` with `HDR=1` and `UltrawideFix=2`, its `SetViewport` with `UltrawideFix=2` and its `Invoke`
+  `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with `UltrawideFix=2` and its `Invoke`
   with `SteamLAN=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
   `Event::start`), read-only
@@ -358,6 +403,8 @@ problems without it before reporting them.
   before the first menu is drawn, so a white HUD element over a white sky gets the highlight gain too.
 * `SteamLAN` is experimental; it needs `steam_api.dll`, which is not part of this fix. It runs on both
   supported builds; on the Russian one it is mapped and checked against a dump, not yet played.
+* The options new in 2.2.0 (`SMAA`, `CutsceneSkip`, `ShadowResolution`, `Shadows`, `QualityCap`,
+  `TextureDetail`) are mapped on the Russian build and checked against a dump, not yet played.
 * Audio: the game forces FMOD to DirectSound in 5.1. The LFE channel stays silent and the pause
   menu is completely silent; both are the game's own mix.
 

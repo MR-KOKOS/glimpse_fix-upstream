@@ -894,6 +894,7 @@ static GfxDisplay_t s_origGfxDisplay;
 
 static void __fastcall Hook_GfxDisplay(void* self, void*)
 {
+    if (g_cfg.smaa) SmaaBeforeHud();  // before the HUD copy, so that the copy holds the smoothed picture
     if (s_toneDone && !s_snapDone && s_snapSurf && s_dev) {
         s_movieSeen = true;
         IDirect3DSurface9* rt = NULL;
@@ -916,18 +917,21 @@ static bool OwnCode(const void* p)
     return GetModuleHandleExA(flags, (LPCSTR)p, &m) && GetModuleHandleExA(flags, (LPCSTR)&OwnCode, &self) && m == self;
 }
 
-// after UltrawideDeviceCreated, so that its check of the slot sees the game's function
+bool HdrUiHooked() { return s_uiHooked; }
+
+// after UltrawideDeviceCreated, so that its check of the slot sees the game's function. Used by HDR (the
+// HUD copy) and SMAA (smoothing before the HUD).
 void HdrInstallUiHook()
 {
-    if (!g_cfg.hdr || s_failed || s_uiHooked) return;
+    if (((!g_cfg.hdr || s_failed) && !g_cfg.smaa) || s_uiHooked) return;
     if (CurrentBuild() == BUILD_UNKNOWN) {
-        Log("HDR: the HUD is told apart on the known Steam builds only; here no light above white");
+        Log("the HUD is told apart on the known Steam builds only; here no HDR light above white and no SMAA");
         return;
     }
     void** const kGfxDisplaySlot = (void**)G(0x00C41CF4) + 31;
     void* cur = IsBadReadPtr(kGfxDisplaySlot, 4) ? NULL : *kGfxDisplaySlot;
     if (!cur || (cur != (void*)G(0x00987E60) && !OwnCode(cur))) {
-        Log("HDR: Scaleform movie class not recognised, the HUD is not told apart (no light above white)");
+        Log("Scaleform movie class not recognised, the HUD is not told apart (no HDR light above white, no SMAA)");
         return;
     }
     s_origGfxDisplay = (GfxDisplay_t)cur;

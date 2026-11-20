@@ -1452,25 +1452,6 @@ void OnlineFrame()
 // starting, other rules or versions), drawn with ID3DXFont from d3dx9_42.dll, which the game loads,
 // before the frame is presented. Only on the back buffer; the viewport is put back afterwards.
 
-typedef HRESULT(WINAPI* D3DXCreateFontA_t)(IDirect3DDevice9*, INT, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD, LPCSTR,
-                                           void**);
-static void* s_font;  // ID3DXFont: [2] Release, [15] DrawTextW, [16] OnLostDevice, [17] OnResetDevice
-static IDirect3DStateBlock9* s_bannerState;  // the device state around the panel; released before a Reset
-static UINT s_fontForHeight;
-
-static void FontCall(int slot)
-{
-    if (s_font) ((HRESULT(WINAPI*)(void*))(*(void***)s_font)[slot])(s_font);
-}
-
-void OnlineDeviceLost()
-{
-    FontCall(16);
-    if (s_bannerState) s_bannerState->Release();
-    s_bannerState = NULL;
-}
-void OnlineDeviceReset() { FontCall(17); }
-
 void OnlinePresent(IDirect3DDevice9* dev)
 {
     if (!s_started || !dev) return;
@@ -1483,131 +1464,15 @@ void OnlinePresent(IDirect3DDevice9* dev)
     memcpy(lines, s_bannerLines, sizeof(lines));
     LeaveCriticalSection(&s_showLock);
     if (!count || (int)(GetTickCount() - until) >= 0) return;
-    // the game's own texts (the mode) and Steam's lobby names are UTF-8: drawn as UTF-16, so that a
-    // Russian mode name shows on a German Windows too (the Windows code page would turn it into "?")
-    WCHAR wide[4][192];
-    for (int i = 0; i < count; i++)
-        if (!MultiByteToWideChar(CP_UTF8, 0, lines[i], -1, wide[i], 192)) wide[i][0] = 0;
-
-    // the game may leave another render target set when it presents: draw on the back buffer and put
-    // the game's target and viewport back afterwards
-    static bool reported;
-    IDirect3DSurface9 *rt = NULL, *bb = NULL;
-    dev->GetRenderTarget(0, &rt);
-    if (FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) || !bb) {
-        if (rt) rt->Release();
-        if (!reported) Log("online: banner: no back buffer");
-        reported = true;
-        return;
+    const char* text[4];
+    D3DCOLOR colors[4];
+    for (int i = 0; i < count; i++) {
+        text[i] = lines[i];
+        colors[i] = i == 0 ? D3DCOLOR_ARGB(255, 255, 120, 20)
+                    : !strncmp(lines[i], "WARNING", 7) ? D3DCOLOR_ARGB(255, 255, 85, 75)
+                                                         : D3DCOLOR_ARGB(255, 235, 235, 238);
     }
-    D3DSURFACE_DESC desc = {};
-    bb->GetDesc(&desc);
-    bool switched = rt != bb;
-    D3DVIEWPORT9 vp = {};
-    dev->GetViewport(&vp);
-    if (switched) dev->SetRenderTarget(0, bb);
-    struct Restore {
-        IDirect3DDevice9* dev;
-        IDirect3DSurface9 *rt, *bb;
-        bool switched;
-        D3DVIEWPORT9* vp;
-        ~Restore()
-        {
-            if (switched && rt) dev->SetRenderTarget(0, rt);
-            dev->SetViewport(vp);
-            if (rt) rt->Release();
-            bb->Release();
-        }
-    } restore = { dev, rt, bb, switched, &vp };
-    if (!desc.Height) return;
-
-    UINT height = desc.Height / 40 < 16 ? 16 : desc.Height / 40;
-    if (s_font && s_fontForHeight != height) {
-        ((ULONG(WINAPI*)(void*))(*(void***)s_font)[2])(s_font);
-        s_font = NULL;
-    }
-    if (!s_font) {
-        HMODULE x = GetModuleHandleA("d3dx9_42.dll");
-        D3DXCreateFontA_t create = x ? (D3DXCreateFontA_t)GetProcAddress(x, "D3DXCreateFontA") : NULL;
-        if (!create || FAILED(create(dev, (INT)height, 0, FW_BOLD, 1, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                     ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Arial", &s_font))) {
-            static bool logged;
-            if (!logged) Log("online: no font for the banner (d3dx9_42.dll)");
-            logged = true;
-            s_font = NULL;
-            return;
-        }
-        s_fontForHeight = height;
-    }
-    typedef INT(WINAPI* DrawTextW_t)(void*, void*, LPCWSTR, INT, RECT*, DWORD, D3DCOLOR);
-    DrawTextW_t draw = (DrawTextW_t)(*(void***)s_font)[15];
-    D3DVIEWPORT9 full = { 0, 0, desc.Width, desc.Height, 0.0f, 1.0f };
-    dev->SetViewport(&full);
-    HRESULT begun = dev->BeginScene();
-    if (!reported) {
-        Log("online: banner drawn %ux%u, the game's render target %s the back buffer, BeginScene %08lX", desc.Width,
-            desc.Height, switched ? "was not" : "was", (unsigned long)begun);
-        reported = true;
-    }
-    if (SUCCEEDED(begun)) {
-        int x = (int)desc.Height / 30, y = (int)desc.Height / 30;
-        // a dark panel behind the lines, so the game's picture does not show through the text
-        int width = 0;
-        for (int i = 0; i < count; i++) {
-            RECT m = { 0, 0, 0, 0 };
-            draw(s_font, NULL, wide[i], -1, &m, DT_CALCRECT | DT_LEFT | DT_TOP | DT_SINGLELINE, 0xFFFFFFFF);
-            if (m.right > width) width = m.right;
-        }
-        int pad = (int)height / 2, lineStep = (int)(height * 1.25f);
-        float l = (float)(x - pad), t = (float)(y - pad), rt_ = (float)(x + width + pad),
-              b = (float)(y + (count - 1) * lineStep + (int)height + pad);
-        if (!s_bannerState) dev->CreateStateBlock(D3DSBT_ALL, &s_bannerState);
-        IDirect3DStateBlock9* saved = s_bannerState;
-        if (saved && SUCCEEDED(saved->Capture())) {
-            SaveStage0Tracking();
-            struct V { float x, y, z, w; D3DCOLOR c; };
-            const D3DCOLOR panel = D3DCOLOR_ARGB(200, 12, 12, 16);
-            V quad[4] = { { l - 0.5f, t - 0.5f, 0, 1, panel }, { rt_ - 0.5f, t - 0.5f, 0, 1, panel },
-                          { l - 0.5f, b - 0.5f, 0, 1, panel }, { rt_ - 0.5f, b - 0.5f, 0, 1, panel } };
-            dev->SetPixelShader(NULL);
-            dev->SetVertexShader(NULL);
-            dev->SetTexture(0, NULL);
-            dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
-            dev->SetRenderState(D3DRS_ZENABLE, FALSE);
-            dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
-            dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
-            dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-            dev->SetRenderState(D3DRS_LIGHTING, FALSE);
-            dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
-            dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
-            dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-            dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
-            dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
-            dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-            dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-            dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-            dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-            dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-            dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
-            dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
-            dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
-            dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-            dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(quad[0]));
-            saved->Apply();
-            RestoreStage0Tracking();
-        }
-        for (int i = 0; i < count; i++) {
-            D3DCOLOR color = i == 0 ? D3DCOLOR_ARGB(255, 255, 120, 20)
-                             : !strncmp(lines[i], "WARNING", 7) ? D3DCOLOR_ARGB(255, 255, 85, 75)
-                                                                  : D3DCOLOR_ARGB(255, 235, 235, 238);
-            RECT shadow = { x + 2, y + 2, (LONG)desc.Width, y + (int)height * 2 };
-            RECT r = { x, y, (LONG)desc.Width, y + (int)height * 2 };
-            draw(s_font, NULL, wide[i], -1, &shadow, DT_NOCLIP | DT_LEFT | DT_TOP, D3DCOLOR_ARGB(200, 0, 0, 0));
-            draw(s_font, NULL, wide[i], -1, &r, DT_NOCLIP | DT_LEFT | DT_TOP, color);
-            y += (int)(height * 1.25f);
-        }
-        dev->EndScene();
-    }
+    OverlayDraw(dev, text, colors, count, OVERLAY_TOP_LEFT, 1.0f);
 }
 
 // Steam: a friend's "Join game" while the game runs (GameLobbyJoinRequested_t, 333). The layout of

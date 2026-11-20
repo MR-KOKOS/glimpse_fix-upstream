@@ -8,7 +8,7 @@ The file is split into sections. INIs from older versions with everything under 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). The game accepts at most 4 joysticks; lower this to make room for a wheel. At 0 the per-frame extras (photo mode, HUD and zoom keys, unlocks, decals, boost, LOD scaling, `ShadowDistance`, `PopInFix`, `CarDetail`, `LensFlare=0`) do not run, as they run with the pads' poll. |
+| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). The game accepts at most 4 joysticks; lower this to make room for a wheel. At 0 the per-frame extras (photo mode, HUD and zoom keys, unlocks, decals, boost, LOD scaling, `ShadowDistance`, `Shadows=0`, `PopInFix`, `CarDetail`, `LensFlare=0`; `QualityCap` then only applies at the start) do not run, as they run with the pads' poll. |
 | `HideXInputFromDirectInput` | 1 | Don't offer the real XInput devices through DirectInput as well. |
 | `SeparateTriggers` | 1 | 0 = stock shared Z axis. |
 | `StickDeadzone` | 0.15 | Radial stick deadzone (0–1). |
@@ -21,7 +21,10 @@ The file is split into sections. INIs from older versions with everything under 
 | Key | Default | Meaning |
 |---|---|---|
 | `FrameRate` | 60 | 30 = stock. |
+| `QualityCap` | 3 | The highest graphics quality level the game may use: 3 = no limit, 2 = High, 1 = Medium, 0 = Low. The game sets its level only through one function, which clamps it to the range of the level's tweakable; the fix lowers that range's maximum (data, before the game makes its device and every frame). The level chosen in the game's menu is kept and saved as it is and applies again once the limit allows it. |
+| `TextureDetail` | 0 | 1–3 skip that many of the top mip levels of every mipmapped texture that is not a render target (half, a quarter, an eighth of the size), through the sampler state `MAXMIPLEVEL`. Textures without mip levels (the text, most of the HUD) stay as they are; menu and HUD pictures with mip levels get blurrier too. Changes only what is drawn, not what is loaded. 0 = stock. |
 | `Anisotropy` | 16 | Anisotropic filtering 2–16, 0 = stock (linear). |
+| `SMAA` | 1 | Anti-aliasing: SMAA 1x (the reference implementation by Jimenez et al.) on the 3D picture, right before the game draws its HUD with Scaleform, so text and HUD stay sharp. A frame without any HUD (photo mode) is smoothed at Present. About 0.1 ms per frame at 4K on an RTX 5090; at Very High, which renders at twice the resolution, about four times that. With `HDR=1` the light above paper white is not smoothed. 0 = stock (no edge smoothing; only Very High supersamples). |
 | `MotionBlurStrength` | 1.0 | Motion blur multiplier on top of the 60 fps compensation. 0 = off. |
 | `Vignette` | 0 | 1 = keep the cameras' darkened screen edges. |
 | `Gradient` | 1 | 0 = no translucent blue band at the top of the screen. |
@@ -41,6 +44,8 @@ The file is split into sections. INIs from older versions with everything under 
 | `StreamPoolMB` | 512 | Streaming pool in MB, 0 = stock (57). Only used when the exe has the LAA flag. |
 | `LodDistanceScale` | 2.0 | Multiplier for LOD, streaming, particle, debris and powerplay distances (0.5–8). |
 | `ShadowDistance` | 2.0 | Multiplier for the sun shadow range at the High and Very High quality levels in single player (1–3). The game: shadows reach 300 m and fade out over the last 100 m (`Lighting/CSM_Max`). Shadows close to the car get a little softer the higher it is. |
+| `ShadowResolution` | 2 | Size of the sun shadow map: 1 = stock (one 1024x3072 depth texture, three cascades of 1024x1024), 2 = 2048x6144, 4 = 4096x12288 (experimental). The game never asks the map for its size and finds and filters a cascade in texture coordinates, so the fix creates both of its targets that many times as wide and high and scales the viewports, scissor and clear rects the game sets for them; the soft edge keeps its width and is sampled finer. Single player only; split screen keeps the game's two 1024x1024 maps. About 70 MB more graphics memory at 2, about 360 MB at 4. Where the device's largest texture is smaller the factor is lowered, and if a large target cannot be made the game's size is used; other values count as 2. |
+| `Shadows` | 1 | 0 = nothing casts a shadow: the game's own switch `Lighting/Debug/Cast shadows - Disable all shadows`, which every pass that draws into the shadow maps checks. 1 = stock. |
 | `PopInFix` | 1 | Ignore the sectors' precomputed visibility lists. 0 = stock. |
 | `CarDetail` | 1 | Opponent car detail. The PC release loads the PS3's car LOD settings (`PlayerLOD_ps3.params`: at most 3 opponents in medium detail, coarse from 100 m on). 1 = the Xbox 360's (`PlayerLOD_xenon.params`: medium detail for all, coarse from 200 m on), 2 = high (also full detail for all opponents up to 40 m), 0 = as the PC release. |
 
@@ -63,6 +68,7 @@ The file is split into sections. INIs from older versions with everything under 
 | Key | Default | Meaning |
 |---|---|---|
 | `UnlockAll` | 0 | 1 = all tracks, events, episodes, game modes and vehicles selectable (the game's own switches; the profile is not changed). |
+| `CutsceneSkip` | 1 | Skippable cutscenes: the season's "Coming up" and "Next time" movies, the end sequence, the demo movies and the boot movies. The first press of A, B, X, Y, Start, Enter or Space shows "Press again to skip" for 3 seconds; a second press within them skips the movie, which the game then ends as if it had played to the end. Menu backgrounds and the tutorial clips are left alone. 0 = stock. |
 | `SkipIntro` | 0 | Boot movies at every start: 1 = skip the publisher logo, 2 = also the game intro. They end at once without decoding (the movie files stay untouched). 0 = stock. |
 | `BonusContent` | 0 | 1 = the PC version's cheat code extras: Expressway track, Cobretti SlipStream, retailer branded cars, Euro livery pack. |
 | `WreckTime` | 0 | **Highly experimental: can softlock the game, especially together with the photo mode.** Seconds from a wreck of your car to the respot (about 4 s in the game; 0 = as the game): the game's respot logic is left out until then, the crash camera keeps showing the wreck. The photo mode holds the respot of all cars while it is on. |

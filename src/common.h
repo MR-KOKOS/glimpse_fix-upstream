@@ -37,8 +37,14 @@ struct Config {
     int   hdrPeak;           // nits, the display's peak brightness
     int   hdrPaperWhite;     // nits, the brightness of the game's white
     int   skipIntro;         // 0 = boot movies as the game, 1 = skip the publisher logo, 2 = also the intro
+    bool  smaa;              // SMAA 1x on the 3D picture (the HUD stays sharp)
+    bool  cutsceneSkip;      // cutscenes end on a second press of A (or B, X, Y, Start, Enter, Space)
     bool  popInFix;          // ignore the sectors' precomputed visibility lists (distance and frustum only)
     int   carDetail;         // opponent car detail: 0 as the PC release, 1 as the Xbox 360, 2 high
+    int   qualityCap;        // highest graphics quality level the game may use (3 = any, 0 = Low only)
+    bool  shadows;           // false: nothing casts a shadow (the game's own debug switch)
+    int   shadowResolution;  // 1 = the game's 1024 per sun shadow cascade, 2 or 4 = that many times as wide and high
+    int   textureDetail;     // 0 = full; 1-3 skip that many of the textures' top mip levels
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's
@@ -107,7 +113,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "2.1.0"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "2.2.0"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -139,7 +145,7 @@ extern volatile DWORD g_lastPresent;                 // diag.cpp: GetTickCount o
 void RunTextureDump();                               // texdump.cpp: DumpTextures=1, never returns (the game ends)
 void HdrToneMapped();                                // right after the game's tone mapping pass: the gain (stage 2)
 void HdrInstallUiHook();                             // after UltrawideDeviceCreated: Scaleform hook for the HUD copy
-void SaveStage0Tracking();     // around a pass of our own that sets sampler stage 0
+void SaveStage0Tracking();     // around a pass of our own that sets samplers (all stages are kept)
 void RestoreStage0Tracking();
 void BeginEdgeClamp();   // until EndEdgeClamp: texture addressing clamped at the edges (motion blur pass)
 void EndEdgeClamp();
@@ -234,8 +240,20 @@ void OnlineStart();
 void OnlineFrame();                              // game thread, every frame: lobby rules in a LAN session
 struct IDirect3DDevice9;
 void OnlinePresent(IDirect3DDevice9* dev);       // draws the lobby banner before Present
-void OnlineDeviceLost();                         // before Reset
-void OnlineDeviceReset();                        // after a successful Reset
+enum { OVERLAY_TOP_LEFT, OVERLAY_BOTTOM_RIGHT };
+// overlay.cpp: up to 4 lines of UTF-8 text on a dark panel on the back buffer, colors as D3DCOLOR, alpha 0..1
+void OverlayDraw(IDirect3DDevice9* dev, const char* const* lines, const DWORD* colors, int count, int corner, float alpha);
+void OverlayDeviceLost();                        // before Reset
+void OverlayDeviceReset();                       // after a successful Reset
+void MoviePresent(IDirect3DDevice9* dev);        // game.cpp: the movie skip prompt
+// smaa.cpp: SMAA 1x on the 3D picture before the HUD
+void SmaaDeviceCreated(IDirect3DDevice9* dev);
+void SmaaDeviceLost();                           // before Reset
+void SmaaSceneDone();                            // postfx.cpp: the tone mapper ran
+void SmaaBeforeHud();                            // hdr.cpp: a Scaleform movie is about to be drawn
+bool HdrUiHooked();                              // hdr.cpp: the Scaleform hook is in place
+void SmaaPresent(IDirect3DDevice9* dev);         // diag.cpp: start of Present
+void ApplyQualityCap();    // QualityCap: before the device is made and every frame (game.cpp)
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
 void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's audio system starts
 void CheckOpponentEngineBanks();

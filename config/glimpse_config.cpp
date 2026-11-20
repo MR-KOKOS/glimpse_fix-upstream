@@ -61,6 +61,9 @@ static Option kOptions[] = {
     { "Controller", "ButtonGlyphs", CHOICE, "Button prompts", "Icons in the prompt bar while the pad is in use. Keyboard = never switch.", "xbox", "xbox|Xbox;playstation|PlayStation;keyboard|Keyboard" },
     // Graphics
     { "Graphics", "FrameRate", CHOICE, "Frame rate", "60 fps with the simulation stepped exactly as at 30 fps.", "60", "60|60 fps;30|30 fps (stock)" },
+    { "Graphics", "SMAA", BOOL_OPT, "Anti-aliasing (SMAA)", "Smooths the jagged edges of the 3D picture with SMAA 1x before the game draws its HUD, so text and HUD stay sharp. Costs about 0.1 ms per frame at 4K on an RTX 5090 (at Very High, which renders at twice the resolution, about four times that).", "1" },
+    { "Graphics", "QualityCap", CHOICE, "Graphics quality limit", "The highest of the game's graphics quality levels it may use, whatever its menu is set to. The level chosen in the game's menu is kept and applies again once the limit allows it. Below High the sun shadows are simpler and shorter and there is no motion blur; Low also has no depth of field.", "3", "3|None (the game's setting);2|At most High;1|At most Medium;0|Low" },
+    { "Graphics", "TextureDetail", CHOICE, "Texture detail", "Full = the textures as the game streams them. Lower draws every texture that has smaller versions of itself at half, a quarter or an eighth of its size. Text stays sharp; menu and HUD pictures that have smaller versions get blurrier too. It changes only what is drawn, not what is loaded.", "0", "0|Full;1|Half;2|Quarter;3|Eighth" },
     { "Graphics", "Anisotropy", CHOICE, "Anisotropic filtering", "Sharper textures at an angle. Off = the game's plain linear filtering.", "16", "0|Off;2|2x;4|4x;8|8x;16|16x" },
     { "Graphics", "MotionBlurStrength", RANGE, "Motion blur", "Multiplier on the cameras' motion blur (graphics quality High or Very High). 0 = off.", "1.0", 0, 0, 3, 0.1, 1 },
     { "Graphics", "Vignette", BOOL_OPT, "Vignette", "Darkened screen edges of the race cameras.", "0" },
@@ -80,6 +83,8 @@ static Option kOptions[] = {
     { "World", "StreamPoolMB", CHOICE, "Streaming pool", "Memory for the track's textures and props. Bigger keeps them sharp instead of blurry or grey. Needs SplitSecond.exe with the LAA flag (setlaa.exe).", "512", "0|Stock (57 MB);256|256 MB;512|512 MB;768|768 MB" },
     { "World", "LodDistanceScale", RANGE, "Draw distance", "Multiplier for LOD, streaming, particle, debris and power play distances.", "2.0", 0, 0.5, 8, 0.1, 1 },
     { "World", "ShadowDistance", RANGE, "Shadow distance", "Multiplier for how far the sun shadows reach (the game: 300 m) at the High and Very High quality levels in single player. Shadows close to the car get a little softer the higher it is.", "2.0", 0, 1, 3, 0.1, 1 },
+    { "World", "ShadowResolution", CHOICE, "Shadow resolution", "Size of the sun shadow map: the game draws three cascades of 1024x1024 pixels. Higher = sharper shadow edges, also with a longer shadow distance. Double takes about 70 MB more graphics memory, quadruple about 360 MB (experimental).", "2", "1|As the game (1024);2|Double (2048);4|Quadruple (4096, experimental)" },
+    { "World", "Shadows", BOOL_OPT, "Shadows", "Off: nothing casts a shadow. The game's own switch for everything that draws into its shadow maps (cars, track, debris).", "1" },
     { "World", "CarDetail", CHOICE, "Opponent car detail", "How detailed the opponents' cars are drawn. The PC release uses the PS3's settings: only 3 opponents in medium detail and every opponent coarse from 100 m on, so cars visibly pop between detail levels. As the Xbox 360: medium detail for all, coarse from 200 m on. High: all opponents in full detail up to 40 m.", "1", "0|As the PC release;1|As the Xbox 360;2|High" },
     { "World", "PopInFix", BOOL_OPT, "Pop-in fix", "Buildings beside the track no longer pop in at section borders (a little more to draw).", "1" },
     // Gameplay
@@ -99,6 +104,7 @@ static Option kOptions[] = {
     { "Gameplay", "UnlockAll", BOOL_OPT, "Everything unlocked", "All tracks, events, episodes, game modes and cars selectable. Your profile is not changed.", "0" },
     { "Gameplay", "BonusContent", BOOL_OPT, "Bonus content", "The PC version's cheat code extras: Expressway track, Cobretti SlipStream, branded cars, Euro livery.", "0" },
     { "Gameplay", "UnlockDecals", CHOICE, "Achievements and decals", "Unlocked in the next single player race and saved with the profile (backed up to glimpse_backup first). Unobtainable = the six ranked online ones and the Pure decal.", "0", "0|As the game;2|Unobtainable only;1|All" },
+    { "Gameplay", "CutsceneSkip", BOOL_OPT, "Skippable cutscenes", "The season's cutscenes (Coming up, Next time, the end sequence), the demo movies and the boot movies: the first press of A, B, X, Y, Start, Enter or Space shows \"Press again to skip\", a second press within 3 seconds skips the movie.", "1" },
     { "Gameplay", "SkipIntro", CHOICE, "Boot movies", "Skip the movies at every start. The files stay untouched.", "0", "0|Play both;1|Skip the logo;2|Skip logo and intro" },
     { "Gameplay", "WreckTime", CHOICE, "Time until the respot (experimental)", "!Highly experimental: can softlock the game, especially together with the photo mode. How long after a wreck of yours (crashes, takedowns, power plays) the game puts your car back on the track.", "0", "0|As the game;5|5 s;8|8 s;10|10 s;15|15 s;20|20 s;30|30 s;60|60 s" },
     { "Gameplay", "Boost", BOOL_OPT, "Boost", "Your car surges forward while the boost button or key is held, with more motion blur.", "0" },
@@ -133,8 +139,8 @@ static Option kOptions[] = {
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
 // the pages in the sidebar; an option's page is its INI section, split up where a section is long (PageOf)
-static const char* const kPages[] = { "Controller", "Display",     "Effects", "World",  "Camera",
-                                      "Gameplay",   "Boost and handbrake", "AI", "Audio", "Online", "Debug" };
+static const char* const kPages[] = { "Presets", "Controller", "Display", "Effects", "World", "Camera",
+                                      "Gameplay", "Boost and handbrake", "AI", "Audio", "Online", "Debug" };
 static const int kPageCount = sizeof(kPages) / sizeof(kPages[0]);
 
 // options the presets do not touch
@@ -300,14 +306,16 @@ static HFONT s_font, s_fontBold, s_fontTitle, s_fontBrand, s_fontSmall;
 enum Role { R_NONE, R_LABEL, R_VALUE, R_DIM, R_TITLE, R_BRAND, R_SIDEDIM, R_NAV, R_PRESET, R_ACTION, R_TOGGLE, R_SELECT };
 
 static bool s_infoWarn;  // the help text shown is a warning
-static HWND s_wnd, s_status, s_info, s_title, s_subtitle, s_nav[kPageCount], s_preset[3];
+static const int kPresetCount = 5;
+static HWND s_wnd, s_status, s_info, s_title, s_subtitle, s_nav[kPageCount], s_preset[kPresetCount],
+    s_presetText[kPresetCount], s_undo, s_undoText;
 static int s_dpi = 96;
 static int s_page;
 static bool s_loading;
-static bool s_toggle[64];  // BOOL_OPT state by option index
-static int s_choice[64];   // CHOICE: selected item by option index, -1 = a value set by hand
-static std::string s_custom[64];  // that value
-static bool s_dim[64];  // the option is greyed out (its label and value are drawn in kOff)
+static bool s_toggle[kOptionCount];  // BOOL_OPT state by option index
+static int s_choice[kOptionCount];   // CHOICE: selected item by option index, -1 = a value set by hand
+static std::string s_custom[kOptionCount];  // that value
+static bool s_dim[kOptionCount];  // the option is greyed out (its label and value are drawn in kOff)
 static const char kSliderClass[] = "glimpse_slider";  // the own slider control, see SliderProc
 
 static int S(int px) { return MulDiv(px, s_dpi, 96); }
@@ -353,22 +361,24 @@ static int WindowDpi(HWND wnd)
 
 // layout, in 96 dpi pixels
 static const int kWidth = 880, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100;
-// the sidebar: the pages from 90 on, kNavStep apart, then the presets' heading and buttons below the last page
-static const int kNavTop = 90, kNavStep = 36, kNavH = 34, kPresetStep = 36;
-static const int kPresetLabel = kNavTop + kPageCount * kNavStep + 14, kPresetTop = kPresetLabel + 22;
+// the sidebar: the pages from 90 on, kNavStep apart; the presets page: a row for each preset (its button
+// and what it sets), then the way back to the settings from before a preset
+static const int kNavTop = 90, kNavStep = 36, kNavH = 34, kPresetRowH = 96, kPresetRowAvg = 76;
 
-// the client height: the longest page above the help area, and the sidebar's pages and presets
+// the client height: the longest page above the help area, and the sidebar's pages
 static int kHeight = 700;
 static void FitHeight()
 {
     int rows[kPageCount] = {}, most = 0;
     for (const Option& o : kOptions) {
         int page = 0;
-        while (strcmp(kPages[page], PageOf(o))) page++;
+        while (page < kPageCount - 1 && strcmp(kPages[page], PageOf(o))) page++;
         if (++rows[page] > most) most = rows[page];
     }
     int content = kRowTop + most * kRowH + 8 + 130;  // the rows, a gap, help text and buttons
-    int side = kPresetTop + 3 * kPresetStep + 16;     // the presets end there
+    int presets = kRowTop + kPresetCount * kPresetRowAvg + 48 + 130;  // rows as tall as their text, on average
+    if (presets > content) content = presets;
+    int side = kNavTop + kPageCount * kNavStep + 16;  // the pages end there
     kHeight = 600;
     if (content > kHeight) kHeight = content;
     if (side > kHeight) kHeight = side;
@@ -558,6 +568,8 @@ static void LoadControls()
     for (HWND b : s_preset) InvalidateRect(b, NULL, TRUE);  // the preset that matches is outlined
 }
 
+static void UpdateUndo();
+
 static void Changed(Option& o)
 {
     if (s_loading) return;
@@ -589,12 +601,13 @@ static void Changed(Option& o)
 }
 
 static const char* const kPageText[kPageCount] = {
+    "Ready-made settings for every page but Online and Debug. The one that matches is outlined.",
     "Pads, triggers and button prompts.",
-    "Frame rate, texture filtering, HDR output and the icon size.",
+    "Frame rate, quality limit, texture detail and filtering, SMAA, HDR output and the icon size.",
     "Motion blur, bloom, flares and the screen overlays. Bloom and exposure apply while the game runs.",
-    "Streaming, draw and shadow distance, pop-in and the opponents' car detail.",
+    "Streaming, draw distance, shadows, pop-in and the opponents' car detail.",
     "Field of view, ultrawide screens, camera shake, zoom, photo mode and the HUD key.",
-    "Unlocks, boot movies, respot time and the power play bar.",
+    "Unlocks, cutscenes and boot movies, respot time and the power play bar.",
     "Boost and handbrake for your car, with their buttons and keys.",
     "Boost for the AI cars (experimental).",
     "The opponents' engines and the console's reverb.",
@@ -613,8 +626,18 @@ static void ShowPage(int page)
         ShowWindow(o.ctrl, cmd);
         if (o.value) ShowWindow(o.value, cmd);
     }
+    int presets = page == 0 ? SW_SHOW : SW_HIDE;
+    for (int i = 0; i < kPresetCount; i++) {
+        ShowWindow(s_preset[i], presets);
+        ShowWindow(s_presetText[i], presets);
+    }
+    ShowWindow(s_undo, presets);
+    ShowWindow(s_undoText, presets);
+    if (page == 0) UpdateUndo();
     s_infoWarn = false;
-    SetWindowTextA(s_info, "Point at an option to see what it does. Every change is saved at once.");
+    SetWindowTextA(s_info, page == 0 ? "Before a preset is applied, your own settings are kept, and \"Back to your settings\" "
+                                       "puts them back. Presets change only this INI, never the game's own options or your profile."
+                                     : "Point at an option to see what it does. Every change is saved at once.");
     InvalidateRect(s_info, NULL, TRUE);
     for (int i = 0; i < kPageCount; i++) InvalidateRect(s_nav[i], NULL, TRUE);
     InvalidateRect(s_wnd, NULL, TRUE);  // the text fields are painted by the window
@@ -622,12 +645,16 @@ static void ShowPage(int page)
 
 struct Preset {
     const char* name;
-    const char* help;    // shown while the preset button is pointed at or has the focus
+    const char* help;    // shown next to the preset's button
     const char* values;  // "Key=value;..."
 };
-static const Preset kPresets[] = {
-    { "Recommended", "Every option at its default: 60 fps and the fixes on, the extras off.", "" },
-    { "Original game", "The game as it was: 30 fps, linear filtering, the stock streaming pool, draw distances, shadow distance, pop-in and opponent car detail, all effects on, the stock icon size, shared triggers and no ultrawide fix. The controller support stays.", "FrameRate=30;Anisotropy=0;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;SeparateTriggers=0;UltrawideFix=0" },
+static const Preset kPresets[kPresetCount] = {
+    { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off.", "" },
+    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
+      "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
+    { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",
+      "FrameRate=60;QualityCap=0;TextureDetail=3;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Chaos", "Recommended plus everything unlocked, the boost, the power bar fill and the AI boost in chaos mode.", "UnlockAll=1;Boost=1;PowerBarFill=1;AIBoost=1;AIBoostChaos=1" },
 };
 
@@ -657,8 +684,74 @@ static bool PresetMatches(const Preset& p)
     return true;
 }
 
+// Your settings from before a preset, to go back to: the values of every option a preset sets, in a file
+// next to the INI. Taken when a preset is applied to settings of your own (none of the presets); while the
+// settings are one preset's, applying another keeps the file, so it holds what you had before the first.
+static std::string UndoPath() { return std::string(s_path) + ".before_preset"; }
+
+static bool AnyPresetMatches()
+{
+    for (const Preset& p : kPresets)
+        if (PresetMatches(p)) return true;
+    return false;
+}
+
+static bool UndoExists() { return GetFileAttributesA(UndoPath().c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+static bool SaveUndo(const Preset& p)
+{
+    std::vector<std::string> lines;
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    char head[160];
+    sprintf(head, ";%s|%04u-%02u-%02u %02u:%02u", p.name, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
+    lines.push_back("; glimpse_fix: your settings from before a preset (\"Back to your settings\" on the Presets page)");
+    lines.push_back(head);
+    for (const Option& o : kOptions)
+        if (!OutsidePresets(o)) lines.push_back(std::string(o.key) + "=" + GetValue(o));
+    return SaveLines(UndoPath().c_str(), lines);
+}
+
+// what the file says it was taken before: "Potato, 2026-11-19 20:15"
+static std::string UndoInfo()
+{
+    FILE* f = fopen(UndoPath().c_str(), "rb");
+    if (!f) return "";
+    char line[256];
+    std::string info;
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;  // fgets keeps the line end
+        std::string l = Trim(line);
+        if (l.size() > 1 && l[0] == ';' && l.find('|') != std::string::npos && l[1] != ' ') {
+            info = l.substr(1);
+            size_t bar = info.find('|');
+            info = "\"" + info.substr(0, bar) + "\", " + info.substr(bar + 1);
+            break;
+        }
+    }
+    fclose(f);
+    return info;
+}
+
+static void UpdateUndo()
+{
+    if (!s_undo) return;
+    bool have = UndoExists();
+    EnableWindow(s_undo, have);
+    std::string info = UndoInfo();
+    std::string text = have ? (info.empty() ? std::string("Your settings from before a preset.")
+                                            : "Your settings from before the preset " + info + ".")
+                            : "Applying a preset keeps your own settings first, to come back to here.";
+    SetWindowTextA(s_undoText, text.c_str());
+    InvalidateRect(s_undo, NULL, TRUE);
+}
+
 static void ApplyPreset(const Preset& p)
 {
+    if ((!UndoExists() || !AnyPresetMatches()) && !SaveUndo(p)) {
+        Status("Could not keep your settings, the preset was not applied");
+        return;
+    }
     for (Option& o : kOptions) {
         if (OutsidePresets(o)) continue;
         SetValue(o, PresetValue(p, o));
@@ -667,6 +760,51 @@ static void ApplyPreset(const Preset& p)
     char msg[160];
     sprintf(msg, SaveIni() ? "Preset \"%s\" saved" : "Could not write the INI", p.name);
     Status(msg);
+    UpdateUndo();
+}
+
+// the settings from before the preset back, then the file goes
+static void PutBackUndo()
+{
+    FILE* f = fopen(UndoPath().c_str(), "rb");
+    if (!f) {
+        UpdateUndo();
+        return;
+    }
+    std::vector<std::pair<Option*, std::string>> values;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;  // fgets keeps the line end
+        std::string l = Trim(line);
+        size_t eq = l.find('=');
+        if (l.empty() || l[0] == ';' || eq == std::string::npos) continue;
+        Option* o = Find(l.substr(0, eq).c_str());
+        if (o && !OutsidePresets(*o)) values.push_back({ o, l.substr(eq + 1) });
+    }
+    bool bad = ferror(f) != 0;
+    fclose(f);
+    if (bad || values.empty()) {
+        Status("The file with your earlier settings could not be read; nothing was changed");
+        return;
+    }
+    // an option the file does not name came after it was written: it had its default then
+    for (Option& o : kOptions)
+        if (!OutsidePresets(o)) SetValue(o, o.def);
+    for (auto& v : values) SetValue(*v.first, v.second);
+    LoadControls();
+    if (SaveIni()) {
+        DeleteFileA(UndoPath().c_str());
+        Status("Your settings are back");
+    } else {
+        Status("Could not write the INI");
+    }
+    UpdateUndo();
+}
+
+static void RestoreUndo(HWND wnd)
+{
+    std::string q = "Put back your settings from before the preset " + UndoInfo() + "?";
+    if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) PutBackUndo();
 }
 
 static HWND Child(const char* cls, const char* text, DWORD style, int x, int y, int w, int h, int id, Role role,
@@ -678,7 +816,8 @@ static HWND Child(const char* cls, const char* text, DWORD style, int x, int y, 
     return h_;
 }
 
-enum { ID_NAV0 = 10, ID_PRESET0 = 20, ID_OPEN = 30, ID_CLOSE = 31, ID_RESTORE = 32, ID_OPTION0 = 100 };
+enum { ID_NAV0 = 10, ID_PRESET0 = 40, ID_OPEN = 30, ID_CLOSE = 31, ID_RESTORE = 32, ID_UNDO = 33, ID_OPTION0 = 100 };
+static_assert(ID_NAV0 + kPageCount <= ID_OPEN && ID_PRESET0 + kPresetCount <= ID_OPTION0, "control ids overlap");
 
 
 static void CreateControls()
@@ -689,10 +828,29 @@ static void CreateControls()
     for (int i = 0; i < kPageCount; i++)
         s_nav[i] = Child("BUTTON", kPages[i], WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, S(kNavTop) + i * S(kNavStep),
                          S(kSideW), S(kNavH), ID_NAV0 + i, R_NAV, s_font);
-    Child("STATIC", "PRESETS", WS_VISIBLE | SS_LEFT, S(22), S(kPresetLabel), S(160), S(18), 0, R_SIDEDIM, s_fontSmall);
-    for (int i = 0; i < 3; i++)
-        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(kPresetTop) + i * S(kPresetStep),
-                            S(174), S(32), ID_PRESET0 + i, R_PRESET, s_font);
+    // the presets page: each preset's button with what it sets beside it, then the way back
+    // each row as tall as its text (at most kPresetRowH, which FitHeight counts with)
+    const int textX = kContentX + 190, textW = kWidth - textX - 24;
+    HDC dc = GetDC(s_wnd);
+    HGDIOBJ oldFont = SelectObject(dc, s_font);
+    int presetY = S(kRowTop);
+    for (int i = 0; i < kPresetCount; i++) {
+        RECT t = { 0, 0, S(textW), 0 };
+        DrawTextA(dc, kPresets[i].help, -1, &t, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        int textH = t.bottom + S(4), rowH = (textH > S(32) ? textH : S(32)) + S(18);
+        if (rowH > S(kPresetRowH)) rowH = S(kPresetRowH);
+        s_preset[i] = Child("BUTTON", kPresets[i].name, WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX), presetY, S(170),
+                            S(32), ID_PRESET0 + i, R_PRESET, s_font);
+        s_presetText[i] = Child("STATIC", kPresets[i].help, SS_LEFT | SS_NOPREFIX, S(textX), presetY + S(6), S(textW), rowH - S(12), 0,
+                                R_DIM, s_font);
+        presetY += rowH;
+    }
+    SelectObject(dc, oldFont);
+    ReleaseDC(s_wnd, dc);
+    int undoY = presetY + S(8);
+    s_undo = Child("BUTTON", "Back to your settings", WS_TABSTOP | BS_OWNERDRAW, S(kContentX), undoY, S(170), S(32), ID_UNDO,
+                   R_ACTION, s_font);
+    s_undoText = Child("STATIC", "", SS_LEFT | SS_NOPREFIX, S(textX), undoY + S(6), S(textW), S(44), 0, R_DIM, s_font);
 
     s_title = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(26), S(600), S(36), 0, R_TITLE, s_fontTitle);
     s_subtitle = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(64), S(610), S(22), 0, R_DIM, s_font);
@@ -701,7 +859,7 @@ static void CreateControls()
     for (int i = 0; i < kOptionCount; i++) {
         Option& o = kOptions[i];
         int page = 0;
-        while (strcmp(kPages[page], PageOf(o))) page++;
+        while (page < kPageCount - 1 && strcmp(kPages[page], PageOf(o))) page++;
         int y = S(kRowTop) + row[page]++ * S(kRowH);
         int id = ID_OPTION0 + i;
         const char* text = o.text;
@@ -764,6 +922,7 @@ static void Open()
         Status(msg.c_str());
     }
     LoadControls();
+    UpdateUndo();
 }
 
 // puts the backup back and reloads it
@@ -873,14 +1032,12 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
         return;
     }
     // presets and actions: outlined pills, filled while pressed
-    HBRUSH b = CreateSolidBrush(role == R_PRESET ? kSide : kBack);
-    FillRect(dc, &r, b);
-    DeleteObject(b);
+    FillRect(dc, &r, s_backBrush);
     bool current = role == R_PRESET && PresetMatches(kPresets[GetDlgCtrlID(di->hwndItem) - ID_PRESET0]);
-    COLORREF line = current ? kAccent : kBorder;
-    RoundRect(dc, r, S(10), pressed ? kSideSel : (role == R_PRESET ? kSide : kField), line);
-    SelectObject(dc, s_font);
-    SetTextColor(dc, kText);
+    COLORREF line = current ? kAccent : disabled ? kField : kBorder;
+    RoundRect(dc, r, S(10), pressed ? kSideSel : kField, line);
+    SelectObject(dc, current ? s_fontBold : s_font);
+    SetTextColor(dc, disabled ? kOff : kText);
     DrawTextA(dc, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     if (focus) {
         RECT f = { r.left + S(3), r.top + S(3), r.right - S(3), r.bottom - S(3) };
@@ -1030,13 +1187,6 @@ static void ShowHelpFor(HWND hwnd)
     static HWND last;
     if (hwnd == last) return;
     last = hwnd;
-    for (int i = 0; i < 3; i++)
-        if (hwnd == s_preset[i]) {
-            s_infoWarn = false;
-            SetWindowTextA(s_info, kPresets[i].help);
-            InvalidateRect(s_info, NULL, TRUE);
-            return;
-        }
     for (Option& o : kOptions)
         if (hwnd == o.ctrl || hwnd == o.label || hwnd == o.value) {
             // a help text starting with '!' is a warning, shown in red
@@ -1124,14 +1274,14 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                 Changed(o);
             }
             if (code == BN_SETFOCUS || (o.kind == TEXT && code == EN_SETFOCUS)) ShowHelpFor(o.ctrl);
-        } else if (id >= ID_PRESET0 && id < ID_PRESET0 + 3 && code == BN_SETFOCUS) {
-            ShowHelpFor(s_preset[id - ID_PRESET0]);
         } else if (id >= ID_NAV0 && id < ID_NAV0 + kPageCount) {
             ShowPage(id - ID_NAV0);
-        } else if (id >= ID_PRESET0 && id < ID_PRESET0 + 3 && code == BN_CLICKED) {
+        } else if (id >= ID_PRESET0 && id < ID_PRESET0 + kPresetCount && code == BN_CLICKED) {
             char q[200];
             sprintf(q, "Set every option to \"%s\"?", kPresets[id - ID_PRESET0].name);
             if (MessageBoxA(wnd, q, "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) ApplyPreset(kPresets[id - ID_PRESET0]);
+        } else if (id == ID_UNDO && code == BN_CLICKED) {
+            RestoreUndo(wnd);
         } else if (id == ID_RESTORE) {
             RestoreBackup(wnd);
         } else if (id == ID_OPEN) {
@@ -1186,6 +1336,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         MakeFonts();
         EnumChildWindows(wnd, DestroyChild, 0);
         for (Option& o : kOptions) o.label = o.ctrl = o.value = NULL;
+        s_undo = s_undoText = NULL;
         CreateControls();
         LoadControls();
         ShowPage(s_page);

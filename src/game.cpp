@@ -428,12 +428,16 @@ static void HookRumble()
     Log("rumble hooked");
 }
 
-// ---------------------------------------------------------------- intro skip
+// ---------------------------------------------------------------- intro and cutscene skip
 
 // The boot movies (data/movies/bootup: publisher logo, intro) are played with Bink through the import
 // table. With SkipIntro=1 they are opened normally (so Bink sets up its sound as usual) but never
 // waited for or decoded, so the game ends them at once, as when the player skips them. Replacing or
 // shortening the movie files instead made the engine sound choppy for the rest of the session.
+//
+// CutsceneSkip=1 does the same for the season's cutscenes on request: the first press of A, B, X, Y,
+// Start, Enter or Space shows "Press again to skip" for 3 seconds, a second press within them marks the
+// movie as at its last frame, and the game's movie loop ends it as if it had played to the end.
 static void** const kIatBinkOpen = (void**)G(0x00B9B39C);
 static void** const kIatBinkWait = (void**)G(0x00B9B3B0);
 static void** const kIatBinkDoFrame = (void**)G(0x00B9B380);
@@ -444,6 +448,10 @@ static BinkDoFrame_t s_binkDoFrame;
 static BinkOpen_t s_binkOpen;
 static BinkWait_t s_binkWait;
 static void* s_skipped;  // the boot movie being skipped
+static void* volatile s_cutscene;       // the cutscene playing that may be skipped
+static volatile DWORD s_promptUntil;    // GetTickCount until which the skip prompt shows
+static WORD s_skipHeld;                 // buttons and keys held at the last check (edges only count)
+static volatile DWORD s_cutsceneFrame;  // GetTickCount of the cutscene's last BinkDoFrame
 
 // The movie loop (0x57B4EA) waits with BinkWait for the next frame's time, decodes it with BinkDoFrame
 // and ends the movie when LastFrameNum == Frames. For a skipped boot movie it neither waits nor decodes:
@@ -453,12 +461,64 @@ static int __stdcall Hook_BinkWait(void* bink)
     return bink && bink == s_skipped ? 0 : s_binkWait(bink);
 }
 
+// A, B, X, Y and Start of every pad, Enter and Space while the game has the focus (bit 0 and 1)
+static WORD SkipInput()
+{
+    WORD held = 0;
+    XINPUT_STATE st;
+    for (DWORD i = 0; i < XUSER_MAX_COUNT && pXInputGetState; i++)
+        if (PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS)
+            held |= st.Gamepad.wButtons & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_Y |
+                                           XINPUT_GAMEPAD_START);
+    DWORD pid = 0;
+    HWND fg = GetForegroundWindow();
+    if (fg) GetWindowThreadProcessId(fg, &pid);
+    if (pid == GetCurrentProcessId()) {
+        if (GetAsyncKeyState(VK_RETURN) & 0x8000) held |= 1;
+        if (GetAsyncKeyState(VK_SPACE) & 0x8000) held |= 2;
+    }
+    return held;
+}
+
 static int __stdcall Hook_BinkDoFrame(void* bink)
 {
-    if (!bink || bink != s_skipped) return s_binkDoFrame(bink);
     unsigned* h = (unsigned*)bink;  // HBINK: Width, Height, Frames, FrameNum, LastFrameNum
+    if (bink && bink == s_cutscene) {
+        s_cutsceneFrame = GetTickCount();
+        WORD held = SkipInput(), pressed = held & ~s_skipHeld;
+        s_skipHeld = held;
+        if (pressed) {
+            DWORD now = GetTickCount();
+            if (s_promptUntil && (int)(s_promptUntil - now) > 0) {
+                Log("cutscene skipped at frame %u of %u", h[3], h[2]);
+                s_cutscene = NULL;
+                s_promptUntil = 0;
+                h[3] = h[4] = h[2];
+                return 0;
+            }
+            s_promptUntil = now + 3000;
+        }
+        int r = s_binkDoFrame(bink);
+        if (h[4] >= h[2]) s_cutscene = NULL, s_promptUntil = 0;  // played to the end
+        return r;
+    }
+    if (!bink || bink != s_skipped) return s_binkDoFrame(bink);
     h[3] = h[4] = h[2];
     return 0;
+}
+
+// the skip prompt, bottom right, fading out over its last half second (diag.cpp's Present hook)
+void MoviePresent(IDirect3DDevice9* dev)
+{
+    DWORD until = s_promptUntil, now = GetTickCount();
+    if (!until || !s_cutscene) return;
+    // Bink close is not hooked here: a cutscene the game ended itself has no frames any more
+    if (now - s_cutsceneFrame > 250) return;
+    int left = (int)(until - now);
+    if (left <= 0) return;
+    const char* text = "Press again to skip";
+    const DWORD white = 0xFFEBEBEE;
+    OverlayDraw(dev, &text, &white, 1, OVERLAY_BOTTOM_RIGHT, left < 500 ? left / 500.0f : 1.0f);
 }
 
 static bool Contains(const char* s, const char* part)
@@ -475,13 +535,27 @@ static bool IsBootMovie(const char* name)
     return Contains(name, "disbr") ? g_cfg.skipIntro >= 1 : g_cfg.skipIntro >= 2;
 }
 
+// the cutscenes: the boot movies, the season's "Coming up" and "Next time" episodes, the end sequence
+// and the demo movies; not the menu backgrounds (they loop) or the tutorial clips
+static bool IsCutscene(const char* name)
+{
+    return Contains(name, "bootup") || Contains(name, "comingup") || Contains(name, "nexttime") ||
+           Contains(name, "endsequence") || Contains(name, "ss_demo");
+}
+
 static void* __stdcall Hook_BinkOpen(const char* name, unsigned flags)
 {
     void* bink = s_binkOpen(name, flags);
     if (bink == s_skipped) s_skipped = NULL;
-    if (bink && name && IsBootMovie(name)) {
+    if (bink == s_cutscene) s_cutscene = NULL, s_promptUntil = 0;
+    if (bink && name && g_cfg.skipIntro > 0 && IsBootMovie(name)) {
         s_skipped = bink;
         Log("intro skip: %s (%u frames)", name, ((unsigned*)bink)[2]);
+    } else if (bink && name && g_cfg.cutsceneSkip && IsCutscene(name)) {
+        s_skipHeld = SkipInput();  // a button still held from the menu does not count
+        s_promptUntil = 0;
+        s_cutscene = bink;
+        Log("cutscene: %s (%u frames), skipped on a second press", name, ((unsigned*)bink)[2]);
     }
     return bink;
 }
@@ -501,7 +575,7 @@ static void HookIntroSkip()
     // Bink, so the intro skip goes in front of them
     if (!open || !wait || !doFrame || (*kIatBinkOpen != open && !UltrawideBinkHook(*kIatBinkOpen)) ||
         *kIatBinkWait != wait || (*kIatBinkDoFrame != doFrame && !UltrawideBinkHook(*kIatBinkDoFrame))) {
-        Log("Bink imports not where expected, intro left as is");
+        Log("Bink imports not where expected, intro and cutscenes left as is");
         return;
     }
     s_binkOpen = (BinkOpen_t)*kIatBinkOpen;
@@ -513,7 +587,9 @@ static void HookIntroSkip()
     WriteMemory(kIatBinkWait, &hook, sizeof(hook));
     hook = (void*)Hook_BinkDoFrame;
     WriteMemory(kIatBinkDoFrame, &hook, sizeof(hook));
-    Log("intro skip on");
+    Log("%s on", g_cfg.skipIntro > 0 && g_cfg.cutsceneSkip ? "intro and cutscene skip"
+                 : g_cfg.skipIntro > 0                  ? "intro skip"
+                                                        : "cutscene skip");
 }
 
 // ---------------------------------------------------------------- prompt bar glyphs
@@ -809,6 +885,37 @@ static void ScaleShadowDistance()
     }
 }
 
+// Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
+// through one function (0x471530), which the options menu calls with the level it shows and saves, and
+// which clamps that level to the range of the level's tweakable (registered at 0xB6B2F0 with 0..3, the
+// object at [0xD0F7EC], minimum at +8, maximum at +0xC). Lowering the tweakable's maximum caps every level
+// the game sets from then on, while the level the menu keeps and saves stays the player's own; a level
+// already set above the cap is lowered once. Data only: the object is on the heap, the code is untouched.
+// Called before the game makes its device (so the renderer starts at the capped level) and every frame.
+void ApplyQualityCap()
+{
+    if (g_cfg.qualityCap >= 3 || CurrentBuild() == BUILD_UNKNOWN || !(g_cfg.patchMask & PATCH_LOD)) return;
+    BYTE* tw = *(BYTE**)G(0x00D0F7EC);
+    if (!tw || IsBadReadPtr(tw, 0x10)) return;  // not registered yet
+    int* lo = (int*)(tw + 8);
+    int* hi = (int*)(tw + 0xC);
+    if (*lo != 0 || (*hi != 3 && *hi != g_cfg.qualityCap)) {
+        static bool logged;
+        if (!logged) Log("graphics quality limit: the level's range is %d..%d, not the expected 0..3, left alone", *lo, *hi);
+        logged = true;
+        return;
+    }
+    if (*hi != g_cfg.qualityCap) {
+        *hi = g_cfg.qualityCap;
+        Log("graphics quality limit: at most level %d", g_cfg.qualityCap);
+    }
+    int* level = (int*)G(0x00D0F7E8);
+    if (*level > g_cfg.qualityCap) {
+        Log("graphics quality %d -> %d (limit)", *level, g_cfg.qualityCap);
+        *level = g_cfg.qualityCap;
+    }
+}
+
 void OnInputFrame()
 {
     if (g_cfg.profile) ProfilerTick();
@@ -830,6 +937,11 @@ void OnInputFrame()
             *(BYTE*)G(0x00D82788) = 1;
             *(BYTE*)G(0x00D9AFCC) = 1;
         }
+        // Shadows=0: the game's own switch Lighting/Debug/Cast shadows - Disable all shadows (registered at
+        // 0xB6DB50), which every shadow caster pass (cars, track, physics and pose objects) checks
+        // before it draws into the shadow maps; with nothing in them nothing is shadowed
+        if (!g_cfg.shadows) *(BYTE*)G(0x00D716EC) = 1;
+        ApplyQualityCap();
     }
     if (s_knownBuild && g_cfg.fixIconSize && (g_cfg.patchMask & PATCH_ICONSIZE)) FixPowerplayIconSize();
     if (s_knownBuild && (g_cfg.patchMask & PATCH_UNLOCK)) ApplyUnlocks();
@@ -928,7 +1040,7 @@ void ApplyGamePatches()
     const unsigned mask = g_cfg.patchMask;
     if (g_cfg.separateTriggers && (mask & PATCH_TRIGGERS)) PatchTriggerPreset();
     if (mask & PATCH_RUMBLE) HookRumble();
-    if (g_cfg.skipIntro > 0 && (mask & PATCH_INTRO)) HookIntroSkip();
+    if ((g_cfg.skipIntro > 0 || g_cfg.cutsceneSkip) && (mask & PATCH_INTRO)) HookIntroSkip();
     if (mask & PATCH_PROMPTBAR) CheckPromptBar();
     if (g_cfg.glyphs != GLYPHS_KEYBOARD && (mask & PATCH_TITLETEXT)) CheckTitleText();
     if (mask & PATCH_FRAMERATE) PatchFrameRate();
