@@ -5,9 +5,10 @@
 // (postfx.cpp's bloom hook calls SmaaSceneDone) whose target has the tone mapper's size: that target
 // then holds the 3D picture only, so edges are smoothed there and the HUD's text stays sharp. Movies
 // drawn into textures of other sizes (menu panels, split screen dials) are passed over. Only the tone
-// mapper's viewport is written, so in split screen each player's half is smoothed after its own tone
-// mapping, without touching the other half's HUD. A picture that no movie followed (photo mode without
-// HUD) is smoothed on the back buffer at Present instead. Without the Scaleform hook nothing is done.
+// mapper's viewport is written (a scissor rect; the viewports of tone mappings into the same target
+// without a movie between them, both split screen halves, are united), so no HUD drawn before is
+// touched. A picture that no movie followed (photo mode without HUD) is smoothed on the back buffer at
+// Present instead. Without the Scaleform hook nothing is done.
 //
 // The three passes of the reference: luma edge detection, blending weights (with its area and search
 // tables) and neighbourhood blending back into the game's target. Only our own render targets and
@@ -43,6 +44,7 @@ static int s_targetFailures;
 static bool s_pending;          // the tone mapper ran, its picture is not smoothed yet
 static UINT s_sceneW, s_sceneH;  // the tone mapper's target
 static D3DVIEWPORT9 s_sceneVp;   // and its viewport
+static IDirect3DSurface9* s_sceneRt;  // the tone mapper's target, compared only (no reference held)
 static D3DFORMAT s_srgbFormat[2];  // targets checked for sRGB writes: [0] can, [1] cannot
 
 static void Fail(const char* why)
@@ -130,6 +132,7 @@ void SmaaDeviceLost()
 {
     DropTargets();
     s_pending = false;
+    s_sceneRt = NULL;
 }
 
 static bool MakeTargets(UINT w, UINT h)
@@ -235,9 +238,24 @@ static void Run(IDirect3DDevice9* dev, IDirect3DSurface9* target, bool openScene
     Sampler(dev, 2, s_area, D3DTEXF_LINEAR, FALSE);
     Sampler(dev, 3, s_search, D3DTEXF_POINT, FALSE);
     Pass(dev, s_vsWeight, s_psWeight);
-    // 3: the picture blended with its neighbours, back into the target, only where the picture is
+    // 3: the picture blended with its neighbours, back into the target, only where the picture is. The
+    // quad keeps the whole target (SetRenderTarget set the viewport to it), so every pixel reads its own
+    // texel; a scissor rect keeps the writes inside the picture. A viewport would squeeze the whole
+    // picture into it: in split screen both halves into one half, three pictures on screen (issue #15).
     dev->SetRenderTarget(0, target);
-    if (only) dev->SetViewport(only);
+    if (only) {
+        RECT r = { (LONG)only->X, (LONG)only->Y, (LONG)(only->X + only->Width), (LONG)(only->Y + only->Height) };
+        if (r.right > (LONG)d.Width) r.right = (LONG)d.Width;
+        if (r.bottom > (LONG)d.Height) r.bottom = (LONG)d.Height;
+        if (r.left > 0 || r.top > 0 || r.right < (LONG)d.Width || r.bottom < (LONG)d.Height) {
+            static int logged;
+            if (g_cfg.log && logged++ < 3)
+                Log("SMAA: picture in %ld,%ld-%ld,%ld of %ux%u, written there only", r.left, r.top, r.right, r.bottom,
+                    d.Width, d.Height);
+            dev->SetScissorRect(&r);
+            dev->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+        }
+    }
     const BOOL srgb = s_srgbRead && SrgbWrite(d.Format);
     Sampler(dev, 0, s_color, D3DTEXF_LINEAR, srgb);
     Sampler(dev, 4, s_blend, D3DTEXF_LINEAR, FALSE);
@@ -272,8 +290,33 @@ void SmaaSceneDone()
     if (!s_dev || s_failed || !HdrUiHooked()) return;  // without the Scaleform hook the HUD would be smoothed too
     IDirect3DSurface9* rt = NULL;
     s_dev->GetRenderTarget(0, &rt);
-    s_pending = TargetSize(rt, &s_sceneW, &s_sceneH) && SUCCEEDED(s_dev->GetViewport(&s_sceneVp));
+    UINT w = 0, h = 0;
+    D3DVIEWPORT9 vp = {};
+    bool ok = TargetSize(rt, &w, &h) && SUCCEEDED(s_dev->GetViewport(&vp));
+    const bool same = rt == s_sceneRt;  // compared only, before the release
     if (rt) rt->Release();
+    if (ok && s_pending && same && w == s_sceneW && h == s_sceneH) {
+        // split screen: the other player's tone mapping before any movie; both halves are 3D picture
+        static int logged;
+        if (g_cfg.log && logged++ < 3)
+            Log("SMAA: tone mapping %lu,%lu %lux%lu united with %lu,%lu %lux%lu", vp.X, vp.Y, vp.Width, vp.Height,
+                s_sceneVp.X, s_sceneVp.Y, s_sceneVp.Width, s_sceneVp.Height);
+        DWORD x0 = min(vp.X, s_sceneVp.X), y0 = min(vp.Y, s_sceneVp.Y);
+        DWORD x1 = max(vp.X + vp.Width, s_sceneVp.X + s_sceneVp.Width);
+        DWORD y1 = max(vp.Y + vp.Height, s_sceneVp.Y + s_sceneVp.Height);
+        s_sceneVp.X = x0;
+        s_sceneVp.Y = y0;
+        s_sceneVp.Width = x1 - x0;
+        s_sceneVp.Height = y1 - y0;
+        return;
+    }
+    s_pending = ok;
+    s_sceneRt = ok ? rt : NULL;
+    if (ok) {
+        s_sceneW = w;
+        s_sceneH = h;
+        s_sceneVp = vp;
+    }
 }
 
 // hdr.cpp's Scaleform hook, at every movie drawn: the first one after the 3D picture into a target of the

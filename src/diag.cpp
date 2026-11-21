@@ -39,9 +39,31 @@ static StageState s_stages[16];
 // 2.1.0 tests counted no draws, and the shadow survey saw only a few of the game's render targets)
 static volatile LONG s_drawsSeen, s_setTextureSeen, s_createSeen;
 
+// textures of the fix's own passes that keep their filter and mip levels (dlcpickups.cpp's box model; taken out
+// again with TextureDetailForget before they are released, so a new texture at the same address is not excluded)
+static IDirect3DBaseTexture9* s_excluded[4];
+
+void TextureDetailExclude(IDirect3DBaseTexture9* t)
+{
+    for (IDirect3DBaseTexture9*& e : s_excluded)
+        if (!e || e == t) {
+            e = t;
+            return;
+        }
+}
+
+void TextureDetailForget(IDirect3DBaseTexture9* t)
+{
+    if (!t) return;
+    for (IDirect3DBaseTexture9*& e : s_excluded)
+        if (e == t) e = NULL;
+}
+
 static bool Eligible(IDirect3DBaseTexture9* t)
 {
     if (!t || t->GetLevelCount() < 2) return false;
+    for (IDirect3DBaseTexture9* e : s_excluded)
+        if (e == t) return false;
     D3DSURFACE_DESC d;
     D3DRESOURCETYPE type = t->GetType();
     if (type == D3DRTYPE_TEXTURE) {
@@ -89,8 +111,17 @@ static HRESULT STDMETHODCALLTYPE Hook_SetTexture(IDirect3DDevice9* dev, DWORD st
 // A pass of our own (HDR, SMAA, the overlay) sets samplers through the device and then puts the game's
 // state back with a state block, past these hooks: what they noted of every stage is kept around it.
 static StageState s_savedStages[16];
-void SaveStage0Tracking() { memcpy(s_savedStages, s_stages, sizeof(s_stages)); }
-void RestoreStage0Tracking() { memcpy(s_stages, s_savedStages, sizeof(s_stages)); }
+// The same holds for the pixel shader the glass fix notes (GlassFix=1).
+void SaveStage0Tracking()
+{
+    memcpy(s_savedStages, s_stages, sizeof(s_stages));
+    GlassSaveTracking();
+}
+void RestoreStage0Tracking()
+{
+    memcpy(s_stages, s_savedStages, sizeof(s_stages));
+    GlassRestoreTracking();
+}
 
 // A Reset puts every sampler and texture stage back to the device's defaults; what the hooks noted is
 // forgotten with it, so the next texture and filter the game sets are taken up afresh (the same managed
@@ -209,7 +240,9 @@ static void CaptureBackBuffer(IDirect3DDevice9* dev, DWORD index)
 // One frame, pass by pass: whenever the game switches render target 0, the target it drew into is
 // saved (a JPG of all of it, a PNG of its bottom 64 rows) and the mean colour of its bottom rows is
 // logged, with the targets and textures each pass reads. StretchRect copies are logged and their
-// destination saved. Only reads; the device state the game set is never changed.
+// destination saved. Every draw is logged with its shaders (by hash), targets and blend/depth states, and
+// the draws of the pixel shaders in DumpWatchPS are captured before and after (see LogDraw below). Only
+// reads; the device state the game set is never changed (copies go through surfaces of our own).
 typedef HRESULT(STDMETHODCALLTYPE* SetRenderTarget_t)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*);
 typedef HRESULT(STDMETHODCALLTYPE* StretchRect_t)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*,
                                                   const RECT*, D3DTEXTUREFILTERTYPE);
@@ -269,13 +302,20 @@ static bool RowMean(const D3DLOCKED_RECT& lr, D3DFORMAT fmt, UINT width, UINT y,
     return true;
 }
 
-static void DumpSurface(IDirect3DDevice9* dev, IDirect3DSurface9* surf, const char* what)
+// the game's own D3DX (it is loaded by the time anything is dumped)
+static D3DXSaveSurfaceToFileA_t D3DXSave()
 {
     static D3DXSaveSurfaceToFileA_t save;
     if (!save) {
         HMODULE x = GetModuleHandleA("d3dx9_42.dll");
         save = x ? (D3DXSaveSurfaceToFileA_t)GetProcAddress(x, "D3DXSaveSurfaceToFileA") : NULL;
     }
+    return save;
+}
+
+static void DumpSurface(IDirect3DDevice9* dev, IDirect3DSurface9* surf, const char* what)
+{
+    D3DXSaveSurfaceToFileA_t save = D3DXSave();
     D3DSURFACE_DESC d;
     if (!surf || FAILED(surf->GetDesc(&d))) return;
     IDirect3DSurface9 *resolved = NULL, *sys = NULL, *src = surf;
@@ -336,6 +376,639 @@ static void DescribeSurface(IDirect3DSurface9* s, char* out)
         wsprintfA(out, "%p", s);
 }
 
+// ---------------------------------------------------------------- shader identification (Log=1)
+
+// Every vertex and pixel shader made through the device is noted by a 64-bit FNV-1a hash of its bytecode:
+// the token stream passed to CreateVertexShader / CreatePixelShader, from the version token up to and with
+// the end token. tools/dlc/shaders/pshash.py computes the same over the code of the .fxc entries (the
+// game passes that code as it is: the runtime's copy of 152 of 156 shaders of an earlier dump was the
+// .fxc code byte for byte, the other 4 were in archives not searched), so the dump log can be read with
+// the game's shader IDs. Only the hash is kept, no copy. The first time a dump sees a shader, it is also
+// hashed from what the runtime holds (GetFunction) and the two compared; a shader made past the hook (the
+// runtime put its own function back into the slot for a while) is named by that hash alone.
+typedef HRESULT(STDMETHODCALLTYPE* CreateVertexShader_t)(IDirect3DDevice9*, const DWORD*, IDirect3DVertexShader9**);
+typedef HRESULT(STDMETHODCALLTYPE* CreatePixelShader_t)(IDirect3DDevice9*, const DWORD*, IDirect3DPixelShader9**);
+static CreateVertexShader_t s_origCreateVertexShader;
+static CreatePixelShader_t s_origCreatePixelShader;
+
+struct ShaderInfo {
+    void* shader;           // the object; a later one may get its address once it is released
+    ULONGLONG hash;         // of the code as created, 0 = made past the hook
+    ULONGLONG runtimeHash;  // of what the runtime holds, in the dump that last saw it
+    DWORD size, runtimeSize;  // bytes hashed
+    DWORD dump;             // the dump that last saw it
+    DWORD draws;            // its draws in that dump
+    bool pixel;
+};
+// a dump saw about 160 shaders; 8192 slots (384 KB) leave plenty of room. Taken from the heap when the hooks go
+// in (Log=1 only): the game is a 32-bit process close to its address limit, so nothing is reserved without a log
+static const int kShaderBits = 13;
+static const int kShaderSlots = 1 << kShaderBits;
+static ShaderInfo* s_shaders;               // by address (open addressing), never shrinks; NULL until Log=1 hooks
+static int s_shaderCount;
+static CRITICAL_SECTION s_shaderLock;       // shaders may be made on more than one thread
+static bool s_shaderLockReady;
+
+static ULONGLONG Fnv64(const BYTE* p, DWORD n)
+{
+    ULONGLONG h = 0xcbf29ce484222325ull;
+    for (DWORD i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
+    return h;
+}
+
+// bytes from the version token through the end token 0x0000FFFF, at most maxTokens tokens: comments are
+// skipped by their length, shader model 2+ instructions by the length in bits 24-27 (shader model 1 has
+// none there: the end token is searched for); 0 without an end token
+static DWORD ShaderLength(const DWORD* code, DWORD maxTokens)
+{
+    __try {
+        DWORD major = (code[0] >> 8) & 0xFF;
+        for (DWORD i = 1; i < maxTokens;) {
+            DWORD t = code[i];
+            if (t == 0x0000FFFF) return (i + 1) * 4;
+            if ((t & 0xFFFF) == 0xFFFE) i += 1 + ((t >> 16) & 0x7FFF);
+            else if (major >= 2) i += 1 + ((t >> 24) & 0x0F);
+            else i++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return 0;
+}
+
+// under the lock; add: a free slot is taken for an address not noted yet (NULL once the table is 3/4 full)
+static ShaderInfo* FindShader(void* shader, bool add)
+{
+    if (!s_shaders) return NULL;
+    DWORD i = ((DWORD)(UINT_PTR)shader >> 3) * 2654435761u >> (32 - kShaderBits);
+    for (int n = 0; n < kShaderSlots; n++, i = (i + 1) & (kShaderSlots - 1)) {
+        ShaderInfo& s = s_shaders[i];
+        if (s.shader == shader) return &s;
+        if (!s.shader) {
+            if (!add || s_shaderCount >= kShaderSlots / 4 * 3) return NULL;
+            s_shaderCount++;
+            s.shader = shader;
+            return &s;
+        }
+    }
+    return NULL;
+}
+
+static ULONGLONG CodeHash(const DWORD* code, DWORD* size)
+{
+    *size = ShaderLength(code, 1u << 18);
+    return *size ? Fnv64((const BYTE*)code, *size) : 0;
+}
+
+static void NoteShader(void* shader, ULONGLONG h, DWORD size, bool pixel)
+{
+    EnterCriticalSection(&s_shaderLock);
+    ShaderInfo* s = FindShader(shader, true);
+    if (s) {
+        s->hash = h;
+        s->size = size;
+        s->runtimeHash = 0;
+        s->runtimeSize = 0;
+        s->dump = 0;
+        s->draws = 0;
+        s->pixel = pixel;
+    }
+    LeaveCriticalSection(&s_shaderLock);
+    static bool full;
+    if (!s && !full) {
+        full = true;
+        Log("frame dump: the shader table is full (%d shaders); later ones are named in a dump from the runtime's copy",
+            s_shaderCount);
+    }
+}
+
+static HRESULT STDMETHODCALLTYPE Hook_CreateVertexShader(IDirect3DDevice9* dev, const DWORD* fn, IDirect3DVertexShader9** out)
+{
+    HRESULT hr = s_origCreateVertexShader(dev, fn, out);
+    if (SUCCEEDED(hr) && fn && out && *out) {
+        DWORD size;
+        ULONGLONG h = CodeHash(fn, &size);
+        NoteShader(*out, h, size, false);
+    }
+    return hr;
+}
+
+// Log=1 (the dump's names) and GlassFix=1 (the glass shaders' tags): the code is hashed once for both
+static HRESULT STDMETHODCALLTYPE Hook_CreatePixelShader(IDirect3DDevice9* dev, const DWORD* fn, IDirect3DPixelShader9** out)
+{
+    HRESULT hr = s_origCreatePixelShader(dev, fn, out);
+    if (SUCCEEDED(hr) && fn && out && *out) {
+        DWORD size;
+        ULONGLONG h = CodeHash(fn, &size);
+        if (s_shaderLockReady) NoteShader(*out, h, size, true);
+        if (g_cfg.glassFix) GlassShaderCreated(*out, h);
+    }
+    return hr;
+}
+
+// GlassFix=1: the pixel shader the game sets, for the draw hooks
+typedef HRESULT(STDMETHODCALLTYPE* SetPixelShader_t)(IDirect3DDevice9*, IDirect3DPixelShader9*);
+static SetPixelShader_t s_origSetPixelShader;
+
+static HRESULT STDMETHODCALLTYPE Hook_SetPixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9* ps)
+{
+    HRESULT hr = s_origSetPixelShader(dev, ps);
+    if (SUCCEEDED(hr)) GlassPixelShaderSet(ps);
+    return hr;
+}
+
+// the hash of the code the runtime holds for the shader (a copy, only in a dump)
+static ULONGLONG RuntimeHash(IUnknown* shader, bool pixel, DWORD* size)
+{
+    *size = 0;
+    UINT n = 0;
+    HRESULT hr = pixel ? ((IDirect3DPixelShader9*)shader)->GetFunction(NULL, &n) : ((IDirect3DVertexShader9*)shader)->GetFunction(NULL, &n);
+    if (FAILED(hr) || n < 8 || n > (1u << 20)) return 0;
+    DWORD* code = (DWORD*)HeapAlloc(GetProcessHeap(), 0, n);
+    if (!code) return 0;
+    ULONGLONG h = 0;
+    hr = pixel ? ((IDirect3DPixelShader9*)shader)->GetFunction(code, &n) : ((IDirect3DVertexShader9*)shader)->GetFunction(code, &n);
+    if (SUCCEEDED(hr)) {
+        DWORD len = ShaderLength(code, n / 4);
+        *size = len ? len : n;
+        h = Fnv64((const BYTE*)code, *size);
+    }
+    HeapFree(GetProcessHeap(), 0, code);
+    return h;
+}
+
+unsigned long long PixelShaderHash(IDirect3DPixelShader9* ps)
+{
+    DWORD size;
+    return ps ? RuntimeHash(ps, true, &size) : 0;
+}
+
+// The shader's name in the dump log: the hash of its code as created, else as the runtime holds it. The
+// first time a dump sees a shader, both are logged (and compared); its draws are counted for the list of
+// the dump's shaders at its end.
+static ULONGLONG DumpShaderHash(IUnknown* shader, bool pixel)
+{
+    if (!shader) return 0;
+    EnterCriticalSection(&s_shaderLock);
+    ShaderInfo* s = FindShader(shader, true);
+    ShaderInfo seen = s ? *s : ShaderInfo{};
+    if (s) s->draws++;
+    LeaveCriticalSection(&s_shaderLock);
+    if (s && seen.dump == s_dumpIndex) return seen.hash ? seen.hash : seen.runtimeHash;
+    DWORD rsize = 0;
+    ULONGLONG rh = RuntimeHash(shader, pixel, &rsize);
+    const char* kind = pixel ? "pixel" : "vertex";
+    if (!s)
+        Log("dump pass %02d: %s shader %p = %016llx (%lu bytes, from the runtime; the shader table is full)", s_pass, kind, shader, rh,
+            rsize);
+    else if (!seen.hash)
+        Log("dump pass %02d: %s shader %p = %016llx (%lu bytes, from the runtime: made past the hook)", s_pass, kind, shader, rh, rsize);
+    else if (seen.hash != rh || seen.size != rsize)  // most likely a shader made past the hook at a released one's address
+        Log("dump pass %02d: %s shader %p = %016llx (%lu bytes) as the runtime holds it; the one noted at this address was %016llx "
+            "(%lu bytes)",
+            s_pass, kind, shader, rh, rsize, seen.hash, seen.size);
+    else
+        Log("dump pass %02d: %s shader %p = %016llx (%lu bytes, the same in the runtime)", s_pass, kind, shader, rh, rsize);
+    if (!s) return rh;
+    if (rh && seen.hash != rh) seen.hash = 0;  // named by what the runtime holds from now on (kept if unreadable)
+    EnterCriticalSection(&s_shaderLock);
+    if (s->shader == shader) {
+        s->hash = seen.hash;
+        s->runtimeHash = rh;
+        s->runtimeSize = rsize;
+        s->dump = s_dumpIndex;
+        s->draws = 1;
+        s->pixel = pixel;
+    }
+    LeaveCriticalSection(&s_shaderLock);
+    return seen.hash ? seen.hash : rh;
+}
+
+// at the end of a dump: every shader it saw with its draws
+static void LogDumpShaders()
+{
+    if (!s_shaderLockReady || !s_shaders) return;
+    int n = 0;
+    EnterCriticalSection(&s_shaderLock);
+    for (int i = 0; i < kShaderSlots; i++) {
+        const ShaderInfo& s = s_shaders[i];
+        if (!s.shader || s.dump != s_dumpIndex) continue;
+        n++;
+        Log("dump %lu: shader %s %016llx %p, %lu bytes, %lu draws%s", s_dumpIndex, s.pixel ? "ps" : "vs", s.hash ? s.hash : s.runtimeHash,
+            s.shader, s.hash ? s.size : s.runtimeSize, s.draws,
+            !s.hash ? " (from the runtime's copy)" : "");
+    }
+    LeaveCriticalSection(&s_shaderLock);
+    Log("dump %lu: %d shaders, %d noted since the device was made", s_dumpIndex, n, s_shaderCount);
+}
+
+// ---------------------------------------------------------------- render targets as pictures (F9)
+
+// A render target as two PNGs: the colour (float formats tone mapped x/(1+x) per channel, NaN as magenta)
+// and, for formats with alpha, the alpha as grey (0..1, clamped), with each channel's range in the log.
+static int FloatClass(float v)  // 0 finite, 1 infinite, 2 NaN
+{
+    DWORD b;
+    memcpy(&b, &v, 4);
+    if ((b & 0x7F800000) != 0x7F800000) return 0;
+    return (b & 0x7FFFFF) ? 2 : 1;
+}
+
+static float HalfFloat(WORD h)  // IEEE half, with infinities and NaN
+{
+    DWORD sign = (DWORD)(h & 0x8000) << 16, exp = (h >> 10) & 31, man = h & 1023, bits;
+    if (exp == 31) {
+        bits = sign | 0x7F800000 | (man << 13);
+    } else if (exp) {
+        bits = sign | ((exp + 112) << 23) | (man << 13);
+    } else if (!man) {
+        bits = sign;
+    } else {
+        DWORD e = 113;
+        while (!(man & 1024)) man <<= 1, e--;
+        bits = sign | (e << 23) | ((man & 1023) << 13);
+    }
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
+
+static bool FloatFormat(D3DFORMAT f)
+{
+    return f == D3DFMT_R16F || f == D3DFMT_G16R16F || f == D3DFMT_A16B16G16R16F || f == D3DFMT_R32F || f == D3DFMT_G32R32F ||
+           f == D3DFMT_A32B32G32R32F;
+}
+
+static bool AlphaFormat(D3DFORMAT f)
+{
+    return f == D3DFMT_A8R8G8B8 || f == D3DFMT_A8B8G8R8 || f == D3DFMT_A2R10G10B10 || f == D3DFMT_A2B10G10R10 ||
+           f == D3DFMT_A16B16G16R16 || f == D3DFMT_A16B16G16R16F || f == D3DFMT_A32B32G32R32F || f == D3DFMT_A8;
+}
+
+// one pixel of a row of a locked surface as r g b a (a = 1 without alpha), false for formats not read here
+static bool DecodePixel(const BYTE* row, D3DFORMAT fmt, UINT x, float c[4])
+{
+    c[0] = c[1] = c[2] = 0.0f;
+    c[3] = 1.0f;
+    const DWORD p = (fmt == D3DFMT_R5G6B5 || fmt == D3DFMT_A8 || fmt == D3DFMT_L8 || fmt == D3DFMT_R16F) ? 0 : ((const DWORD*)row)[x];
+    switch (fmt) {
+    case D3DFMT_A8R8G8B8:
+    case D3DFMT_X8R8G8B8:
+        c[0] = ((p >> 16) & 255) / 255.0f, c[1] = ((p >> 8) & 255) / 255.0f, c[2] = (p & 255) / 255.0f;
+        if (fmt == D3DFMT_A8R8G8B8) c[3] = (p >> 24) / 255.0f;
+        return true;
+    case D3DFMT_A8B8G8R8:
+    case D3DFMT_X8B8G8R8:
+        c[0] = (p & 255) / 255.0f, c[1] = ((p >> 8) & 255) / 255.0f, c[2] = ((p >> 16) & 255) / 255.0f;
+        if (fmt == D3DFMT_A8B8G8R8) c[3] = (p >> 24) / 255.0f;
+        return true;
+    case D3DFMT_A2R10G10B10:
+        c[0] = ((p >> 20) & 1023) / 1023.0f, c[1] = ((p >> 10) & 1023) / 1023.0f, c[2] = (p & 1023) / 1023.0f, c[3] = (p >> 30) / 3.0f;
+        return true;
+    case D3DFMT_A2B10G10R10:
+        c[0] = (p & 1023) / 1023.0f, c[1] = ((p >> 10) & 1023) / 1023.0f, c[2] = ((p >> 20) & 1023) / 1023.0f, c[3] = (p >> 30) / 3.0f;
+        return true;
+    case D3DFMT_G16R16:
+        c[0] = (p & 0xFFFF) / 65535.0f, c[1] = (p >> 16) / 65535.0f;
+        return true;
+    case D3DFMT_A16B16G16R16: {
+        const WORD* w = (const WORD*)row + x * 4;
+        for (int i = 0; i < 4; i++) c[i] = w[i] / 65535.0f;
+        return true;
+    }
+    case D3DFMT_A16B16G16R16F: {
+        const WORD* w = (const WORD*)row + x * 4;
+        for (int i = 0; i < 4; i++) c[i] = HalfFloat(w[i]);
+        return true;
+    }
+    case D3DFMT_G16R16F:
+        c[0] = HalfFloat((WORD)(p & 0xFFFF)), c[1] = HalfFloat((WORD)(p >> 16));
+        return true;
+    case D3DFMT_R16F:
+        c[0] = HalfFloat(((const WORD*)row)[x]);
+        return true;
+    case D3DFMT_R32F:
+        c[0] = ((const float*)row)[x];
+        return true;
+    case D3DFMT_G32R32F:
+        c[0] = ((const float*)row)[x * 2], c[1] = ((const float*)row)[x * 2 + 1];
+        return true;
+    case D3DFMT_A32B32G32R32F:
+        for (int i = 0; i < 4; i++) c[i] = ((const float*)row)[x * 4 + i];
+        return true;
+    case D3DFMT_R5G6B5: {
+        WORD w = ((const WORD*)row)[x];
+        c[0] = (w >> 11) / 31.0f, c[1] = ((w >> 5) & 63) / 63.0f, c[2] = (w & 31) / 31.0f;
+        return true;
+    }
+    case D3DFMT_A8:
+        c[3] = row[x] / 255.0f;
+        return true;
+    case D3DFMT_L8:
+        c[0] = c[1] = c[2] = row[x] / 255.0f;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static BYTE ToByte(float v, bool tone)
+{
+    if (FloatClass(v) == 1) return v > 0 ? 255 : 0;
+    if (v <= 0.0f) return 0;
+    if (tone) v = v / (1.0f + v);
+    return v >= 1.0f ? 255 : (BYTE)(v * 255.0f + 0.5f);
+}
+
+// sys: the target's system memory copy; out: an X8R8G8B8 system memory surface of its size
+static void WriteTargetPngs(IDirect3DSurface9* sys, IDirect3DSurface9* out, const D3DSURFACE_DESC& d, const char* name)
+{
+    D3DXSaveSurfaceToFileA_t save = D3DXSave();
+    D3DLOCKED_RECT in;
+    if (FAILED(sys->LockRect(&in, NULL, D3DLOCK_READONLY))) {
+        Log("dump %s: the copy cannot be locked, skipped", name);
+        return;
+    }
+    float c[4];
+    if (!DecodePixel((const BYTE*)in.pBits, d.Format, 0, c)) {
+        sys->UnlockRect();
+        Log("dump %s: format %u is not read here, skipped", name, d.Format);
+        return;
+    }
+    bool tone = FloatFormat(d.Format), alpha = AlphaFormat(d.Format);
+    double sum[4] = {};
+    float lo[4] = { 3.4e38f, 3.4e38f, 3.4e38f, 3.4e38f }, hi[4] = { -3.4e38f, -3.4e38f, -3.4e38f, -3.4e38f };
+    DWORD nan = 0, inf = 0, finite[4] = {};
+    for (int pass = 0; pass < (alpha ? 2 : 1); pass++) {
+        D3DLOCKED_RECT o;
+        if (FAILED(out->LockRect(&o, NULL, 0))) {
+            Log("dump %s: the picture cannot be locked, skipped", name);
+            break;
+        }
+        for (UINT y = 0; y < d.Height; y++) {
+            const BYTE* row = (const BYTE*)in.pBits + (size_t)y * in.Pitch;
+            DWORD* dst = (DWORD*)((BYTE*)o.pBits + (size_t)y * o.Pitch);
+            for (UINT x = 0; x < d.Width; x++) {
+                DecodePixel(row, d.Format, x, c);
+                int cls[4] = { FloatClass(c[0]), FloatClass(c[1]), FloatClass(c[2]), FloatClass(c[3]) };
+                if (!pass) {
+                    for (int i = 0; i < 4; i++) {
+                        if (cls[i] == 2) nan++;
+                        else if (cls[i] == 1) inf++;
+                        else {
+                            sum[i] += c[i];
+                            finite[i]++;
+                            if (c[i] < lo[i]) lo[i] = c[i];
+                            if (c[i] > hi[i]) hi[i] = c[i];
+                        }
+                    }
+                    if (cls[0] == 2 || cls[1] == 2 || cls[2] == 2)
+                        dst[x] = 0xFFFF00FF;
+                    else
+                        dst[x] = 0xFF000000 | (DWORD)ToByte(c[0], tone) << 16 | (DWORD)ToByte(c[1], tone) << 8 | ToByte(c[2], tone);
+                } else {
+                    BYTE a = ToByte(c[3], false);
+                    dst[x] = cls[3] == 2 ? 0xFFFF00FF : 0xFF000000 | (DWORD)a << 16 | (DWORD)a << 8 | a;
+                }
+            }
+        }
+        out->UnlockRect();
+        char path[MAX_PATH];
+        _snprintf(path, sizeof(path), "%s\\%s%s.png", s_dumpDir, name, pass ? "_alpha" : "");
+        path[sizeof(path) - 1] = 0;
+        HRESULT hr = save ? save(path, 3 /* D3DXIFF_PNG */, out, NULL, NULL) : E_FAIL;
+        if (FAILED(hr)) Log("dump %s: saving %s failed (%08lx)", name, path, hr);
+    }
+    sys->UnlockRect();
+    double mean[4];
+    for (int i = 0; i < 4; i++) {
+        mean[i] = finite[i] ? sum[i] / finite[i] : 0.0;
+        if (!finite[i]) lo[i] = hi[i] = 0.0f;
+    }
+    Log("dump %s: r %.4g..%.4g mean %.4g, g %.4g..%.4g mean %.4g, b %.4g..%.4g mean %.4g, a %.4g..%.4g mean %.4g; %lu NaN, %lu Inf values%s",
+        name, lo[0], hi[0], mean[0], lo[1], hi[1], mean[1], lo[2], hi[2], mean[2], lo[3], hi[3], mean[3], nan, inf,
+        tone ? " (picture tone mapped x/(1+x))" : "");
+}
+
+// a render target saved through a system memory copy (a multisampled one is resolved into a plain target
+// of its own first); only copies are made, the device's state stays as the game set it
+static void SaveTarget(IDirect3DDevice9* dev, IDirect3DSurface9* surf, const char* what, DWORD index)
+{
+    D3DSURFACE_DESC d;
+    if (!surf || FAILED(surf->GetDesc(&d))) return;
+    char name[128];
+    _snprintf(name, sizeof(name), "f%lu_%02d_%s_rt%lu_%ux%u_fmt%u", s_dumpIndex, s_pass, what, index, d.Width, d.Height, d.Format);
+    name[sizeof(name) - 1] = 0;
+    // a copy and a picture of a target above 4K (8K internal resolution, scaled shadow maps) take 400 MB and more
+    // at once in a 32-bit process near its limit, where the game's own allocations would then fail
+    if ((ULONGLONG)d.Width * d.Height > 3840ull * 2160ull) {
+        Log("dump %s: skipped, larger than 3840x2160", name);
+        return;
+    }
+    IDirect3DSurface9 *resolved = NULL, *sys = NULL, *out = NULL, *src = surf;
+    HRESULT hr = D3D_OK;
+    const char* step = "";
+    if (d.MultiSampleType != D3DMULTISAMPLE_NONE) {
+        step = "resolving the multisampled target";
+        hr = dev->CreateRenderTarget(d.Width, d.Height, d.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &resolved, NULL);
+        if (SUCCEEDED(hr)) hr = s_origStretchRect(dev, surf, NULL, resolved, NULL, D3DTEXF_NONE);
+        src = resolved;
+    }
+    if (SUCCEEDED(hr)) {
+        step = "the system memory copy";
+        hr = dev->CreateOffscreenPlainSurface(d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sys, NULL);
+    }
+    if (SUCCEEDED(hr)) hr = dev->GetRenderTargetData(src, sys);
+    if (SUCCEEDED(hr)) {
+        step = "the picture";
+        hr = dev->CreateOffscreenPlainSurface(d.Width, d.Height, D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &out, NULL);
+    }
+    if (FAILED(hr))
+        Log("dump %s: skipped, %s failed (%08lx), multisample %d, usage %lx", name, step, hr, d.MultiSampleType, d.Usage);
+    else
+        WriteTargetPngs(sys, out, d, name);
+    if (out) out->Release();
+    if (sys) sys->Release();
+    if (resolved) resolved->Release();
+}
+
+// ---------------------------------------------------------------- draws of the dumped frame (F9)
+
+// Each draw is logged with its primitives, its shaders (by hash), the bound render targets and the blend,
+// depth, stencil, alpha test, cull and sRGB states. A draw whose pixel shader is in DumpWatchPS ([Debug])
+// is a watched one: for the first 4 of the frame every bound render target is saved right before and
+// right after it, with its textures, samplers and shader constants in the log. The targets drawn into by
+// a pass are saved at its end (RT1-3, and RT0 with them for a pass with more than one target; RT0 alone is
+// the JPG of EndPass).
+static int s_drawLines;     // draw lines in this dump
+static int s_watchCount;    // watched draws in this dump
+static bool s_rtUsed[4];    // drawn into since it was saved or bound
+static bool s_passMrt;      // the pass drew into more than one target
+static int s_constLines;    // shader constant lines in this dump (LogConstants)
+
+static void LogShaderConstants(IDirect3DDevice9* dev, bool pixel, bool vertex);
+static void SaveShader(IUnknown* shader, bool pixel);
+
+static const char* PrimName(D3DPRIMITIVETYPE t)
+{
+    switch (t) {
+    case D3DPT_POINTLIST: return "points";
+    case D3DPT_LINELIST: return "lines";
+    case D3DPT_LINESTRIP: return "linestrip";
+    case D3DPT_TRIANGLELIST: return "trilist";
+    case D3DPT_TRIANGLESTRIP: return "tristrip";
+    case D3DPT_TRIANGLEFAN: return "trifan";
+    default: return "?";
+    }
+}
+
+// vertices (or indices) a draw of that many primitives reads
+static UINT PrimVertices(D3DPRIMITIVETYPE t, UINT prims)
+{
+    switch (t) {
+    case D3DPT_LINELIST: return prims * 2;
+    case D3DPT_LINESTRIP: return prims + 1;
+    case D3DPT_TRIANGLELIST: return prims * 3;
+    case D3DPT_TRIANGLESTRIP:
+    case D3DPT_TRIANGLEFAN: return prims + 2;
+    default: return prims;
+    }
+}
+
+static bool WatchedPS(ULONGLONG h)
+{
+    for (int i = 0; i < g_cfg.dumpWatchCount; i++)
+        if (g_cfg.dumpWatchPS[i] == h) return true;
+    return false;
+}
+
+static void LogDumpLegend()
+{
+    Log("dump %lu: draw lines: blend = ALPHABLENDENABLE SRCBLEND,DESTBLEND op BLENDOP; alpha = SEPARATEALPHABLENDENABLE "
+        "SRCBLENDALPHA,DESTBLENDALPHA op BLENDOPALPHA; cw = COLORWRITEENABLE 0-3; z = ZENABLE write ZWRITEENABLE func ZFUNC; "
+        "stencil = STENCILENABLE func ref; atest = ALPHATESTENABLE ref func; cull; srgbw = SRGBWRITEENABLE",
+        s_dumpIndex);
+    Log("dump %lu: D3DBLEND 1 zero 2 one 3 srccolor 4 invsrccolor 5 srcalpha 6 invsrcalpha 7 destalpha 8 invdestalpha 9 destcolor "
+        "10 invdestcolor 11 srcalphasat 14 blendfactor; D3DBLENDOP 1 add 2 subtract 3 revsubtract 4 min 5 max; D3DCMP 1 never 2 less "
+        "3 equal 4 lessequal 5 greater 6 notequal 7 greaterequal 8 always; cull 1 none 2 cw 3 ccw",
+        s_dumpIndex);
+    if (!g_cfg.dumpWatchCount) {
+        Log("dump %lu: no watched pixel shaders ([Debug] DumpWatchPS)", s_dumpIndex);
+        return;
+    }
+    char list[16 * 18 + 1];
+    int n = 0;
+    for (int i = 0; i < g_cfg.dumpWatchCount; i++) n += _snprintf(list + n, sizeof(list) - n, "%s%016llx", i ? "," : "", g_cfg.dumpWatchPS[i]);
+    Log("dump %lu: watched pixel shaders %s (the first 4 of their draws)", s_dumpIndex, list);
+}
+
+// one draw: its line in the log, the targets it draws into noted; returns whether it is a watched one
+static bool LogDraw(IDirect3DDevice9* dev, const char* call, D3DPRIMITIVETYPE type, UINT prims, UINT verts, const char* extra)
+{
+    IDirect3DVertexShader9* vs = NULL;
+    IDirect3DPixelShader9* ps = NULL;
+    dev->GetVertexShader(&vs);
+    dev->GetPixelShader(&ps);
+    ULONGLONG vh = DumpShaderHash(vs, false), ph = DumpShaderHash(ps, true);
+    if (vs) vs->Release();
+    if (ps) ps->Release();
+    char rts[160];
+    int n = 0;
+    for (DWORD i = 0; i < 4; i++) {
+        IDirect3DSurface9* s = NULL;
+        D3DSURFACE_DESC d = {};
+        if (SUCCEEDED(dev->GetRenderTarget(i, &s)) && s) {
+            s->GetDesc(&d);
+            s_rtUsed[i] = true;
+            if (i) s_passMrt = true;
+            s->Release();
+        }
+        n += _snprintf(rts + n, sizeof(rts) - n, s ? "%s%p:%u" : "%s-", i ? " " : "", s, d.Format);
+    }
+    static const D3DRENDERSTATETYPE kStates[] = {
+        D3DRS_ALPHABLENDENABLE, D3DRS_SRCBLEND, D3DRS_DESTBLEND, D3DRS_BLENDOP, D3DRS_SEPARATEALPHABLENDENABLE, D3DRS_SRCBLENDALPHA,
+        D3DRS_DESTBLENDALPHA, D3DRS_BLENDOPALPHA, D3DRS_BLENDFACTOR, D3DRS_COLORWRITEENABLE, D3DRS_COLORWRITEENABLE1,
+        D3DRS_COLORWRITEENABLE2, D3DRS_COLORWRITEENABLE3, D3DRS_ZENABLE, D3DRS_ZWRITEENABLE, D3DRS_ZFUNC, D3DRS_STENCILENABLE,
+        D3DRS_STENCILFUNC, D3DRS_STENCILREF, D3DRS_ALPHATESTENABLE, D3DRS_ALPHAREF, D3DRS_ALPHAFUNC, D3DRS_CULLMODE,
+        D3DRS_SRGBWRITEENABLE,
+    };
+    DWORD v[sizeof(kStates) / sizeof(kStates[0])] = {};
+    for (int i = 0; i < (int)(sizeof(kStates) / sizeof(kStates[0])); i++) dev->GetRenderState(kStates[i], &v[i]);
+    bool watch = ph && WatchedPS(ph) && s_watchCount < 4;
+    if (watch || s_drawLines++ < 30000)
+        Log("dump pass %02d: draw %lu %s %s %u prims %u verts%s, vs %016llx ps %016llx%s, rt %s, blend %lu %lu,%lu op %lu, alpha %lu "
+            "%lu,%lu op %lu, factor %08lx, cw %lx %lx %lx %lx, z %lu write %lu func %lu, stencil %lu func %lu ref %lu, atest %lu ref %lu "
+            "func %lu, cull %lu, srgbw %lu",
+            s_pass, s_passDraws, call, PrimName(type), prims, verts, extra, vh, ph, watch ? " WATCHED" : "", rts, v[0], v[1], v[2], v[3],
+            v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17], v[18], v[19], v[20], v[21],
+            v[22], v[23]);
+    return watch;
+}
+
+// a watched draw: every bound render target before (with the draw's inputs) or after it
+static bool ScaledShadow(IDirect3DSurface9* s);
+static void WatchDraw(IDirect3DDevice9* dev, int watch, bool after)
+{
+    char what[24];
+    _snprintf(what, sizeof(what), "w%d_%s", watch, after ? "after" : "before");
+    what[sizeof(what) - 1] = 0;
+    Log("dump pass %02d: watched draw %d (draw %lu of the pass), render targets %s it", s_pass, watch, after ? s_passDraws - 1 : s_passDraws,
+        after ? "after" : "before");
+    if (!after) {
+        IDirect3DSurface9* ds = NULL;
+        dev->GetDepthStencilSurface(&ds);
+        char desc[128];
+        DescribeSurface(ds, desc);
+        if (ds) ds->Release();
+        D3DVIEWPORT9 vp = {};
+        dev->GetViewport(&vp);
+        Log("dump pass %02d:   depth stencil %s, viewport %lu,%lu %lux%lu z %.3f-%.3f", s_pass, desc, vp.X, vp.Y, vp.Width, vp.Height,
+            vp.MinZ, vp.MaxZ);
+        for (DWORD stage = 0; stage < 16; stage++) {
+            IDirect3DBaseTexture9* t = NULL;
+            if (FAILED(dev->GetTexture(stage, &t)) || !t) continue;
+            D3DSURFACE_DESC d = {};
+            if (t->GetType() == D3DRTYPE_TEXTURE) ((IDirect3DTexture9*)t)->GetLevelDesc(0, &d);
+            else if (t->GetType() == D3DRTYPE_CUBETEXTURE) ((IDirect3DCubeTexture9*)t)->GetLevelDesc(0, &d);
+            DWORD s[8] = {};
+            const D3DSAMPLERSTATETYPE kinds[8] = { D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER, D3DSAMP_ADDRESSU,
+                                                   D3DSAMP_ADDRESSV, D3DSAMP_SRGBTEXTURE, D3DSAMP_MAXMIPLEVEL, D3DSAMP_BORDERCOLOR };
+            for (int i = 0; i < 8; i++) dev->GetSamplerState(stage, kinds[i], &s[i]);
+            Log("dump pass %02d:   stage %lu texture %p type %d %ux%u fmt %u usage %lx levels %lu, filter %lu/%lu/%lu, address %lu/%lu, "
+                "srgb %lu, max mip %lu, border %08lx",
+                s_pass, stage, t, t->GetType(), d.Width, d.Height, d.Format, d.Usage, t->GetLevelCount(), s[0], s[1], s[2], s[3], s[4], s[5],
+                s[6], s[7]);
+            t->Release();
+        }
+        int constLines = s_constLines;  // a watched draw's constants are logged whatever the survey logged before
+        s_constLines = 0;
+        LogShaderConstants(dev, true, true);
+        s_constLines = constLines;
+        IDirect3DVertexShader9* vs = NULL;
+        IDirect3DPixelShader9* ps = NULL;
+        dev->GetVertexShader(&vs);
+        dev->GetPixelShader(&ps);
+        SaveShader(vs, false);
+        SaveShader(ps, true);
+        if (vs) vs->Release();
+        if (ps) ps->Release();
+    }
+    for (DWORD i = 0; i < 4; i++) {
+        IDirect3DSurface9* s = NULL;
+        if (SUCCEEDED(dev->GetRenderTarget(i, &s)) && s) {
+            if (!ScaledShadow(s)) SaveTarget(dev, s, what, i);  // the scaled shadow colour target: huge, never written
+            s->Release();
+        }
+    }
+}
+
+// the end of a pass for render target index: saved if it was drawn into
+static void SaveUsedTarget(IDirect3DDevice9* dev, DWORD index, IDirect3DSurface9* surf)
+{
+    if (!s_rtUsed[index]) return;
+    s_rtUsed[index] = false;
+    if (surf) SaveTarget(dev, surf, "end", index);
+}
+
 static void ShadowPassStart(IDirect3DDevice9* dev);
 
 // at the first draw into a target: what it is and what the pass reads
@@ -375,13 +1048,16 @@ static void DumpPassStart(IDirect3DDevice9* dev)
 
 static void ShadowDrawCheck(IDirect3DDevice9* dev);
 
-static void CountDraw(IDirect3DDevice9* dev)
+// a draw of the dumped frame: logged (LogDraw); returns the watch number (1-4) of a watched one, whose
+// targets are then saved as they are before it (and by the hook after it)
+static int CountDraw(IDirect3DDevice9* dev, const char* call, D3DPRIMITIVETYPE type, UINT prims, UINT verts, const char* extra)
 {
-    s_drawsSeen++;
-    if (!s_dumping) return;
     if (!s_passDraws) DumpPassStart(dev);
     ShadowDrawCheck(dev);
+    int watch = LogDraw(dev, call, type, prims, verts, extra) ? ++s_watchCount : 0;
+    if (watch) WatchDraw(dev, watch, false);
     s_passDraws++;
+    return watch;
 }
 
 void DumpMark(const char* what)
@@ -389,29 +1065,75 @@ void DumpMark(const char* what)
     if (s_dumping) Log("dump pass %02d: -- %s (after %lu draws)", s_pass, what, s_passDraws);
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_DrawPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT a, UINT b)
+// GlassFix=1: around a draw of a glass pixel shader, the blend change of glass.cpp (when its states match);
+// any other draw costs the test of g_glassBound. Put back when the hook returns, after the dump's captures.
+struct GlassScope {
+    IDirect3DDevice9* dev;
+    GlassSaved saved;
+    bool on;
+    GlassScope(IDirect3DDevice9* d, const char* call, UINT prims) : dev(d), on(g_glassBound && GlassBegin(d, &saved, call, prims)) {}
+    ~GlassScope()
+    {
+        if (on) GlassEnd(dev, &saved);
+    }
+    GlassScope(const GlassScope&) = delete;
+    GlassScope& operator=(const GlassScope&) = delete;
+};
+
+// the draw hooks only count outside a dump
+static HRESULT STDMETHODCALLTYPE Hook_DrawPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT start, UINT prims)
 {
-    CountDraw(dev);
-    return s_origDrawPrimitive(dev, t, a, b);
+    s_drawsSeen++;
+    GlassScope glass(dev, "DP", prims);
+    if (!s_dumping) return s_origDrawPrimitive(dev, t, start, prims);
+    char extra[48];
+    _snprintf(extra, sizeof(extra), " (from vertex %u)", start);
+    extra[sizeof(extra) - 1] = 0;
+    int watch = CountDraw(dev, "DP", t, prims, PrimVertices(t, prims), extra);
+    HRESULT hr = s_origDrawPrimitive(dev, t, start, prims);
+    if (watch) WatchDraw(dev, watch, true);
+    return hr;
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_DrawIndexedPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT a, UINT b, UINT c, UINT d, UINT e)
+static HRESULT STDMETHODCALLTYPE Hook_DrawIndexedPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT base, UINT minIndex, UINT verts,
+                                                           UINT start, UINT prims)
 {
-    CountDraw(dev);
-    return s_origDrawIndexedPrimitive(dev, t, a, b, c, d, e);
+    s_drawsSeen++;
+    GlassScope glass(dev, "DIP", prims);
+    if (!s_dumping) return s_origDrawIndexedPrimitive(dev, t, base, minIndex, verts, start, prims);
+    char extra[96];
+    _snprintf(extra, sizeof(extra), " (base %d, vertices from %u, %u indices from %u)", base, minIndex, PrimVertices(t, prims), start);
+    extra[sizeof(extra) - 1] = 0;
+    int watch = CountDraw(dev, "DIP", t, prims, verts, extra);
+    HRESULT hr = s_origDrawIndexedPrimitive(dev, t, base, minIndex, verts, start, prims);
+    if (watch) WatchDraw(dev, watch, true);
+    return hr;
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_DrawPrimitiveUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT a, const void* b, UINT c)
+static HRESULT STDMETHODCALLTYPE Hook_DrawPrimitiveUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT prims, const void* data, UINT stride)
 {
-    CountDraw(dev);
-    return s_origDrawPrimitiveUP(dev, t, a, b, c);
+    s_drawsSeen++;
+    GlassScope glass(dev, "DPUP", prims);
+    if (!s_dumping) return s_origDrawPrimitiveUP(dev, t, prims, data, stride);
+    int watch = CountDraw(dev, "DPUP", t, prims, PrimVertices(t, prims), "");
+    HRESULT hr = s_origDrawPrimitiveUP(dev, t, prims, data, stride);
+    if (watch) WatchDraw(dev, watch, true);
+    return hr;
 }
 
-static HRESULT STDMETHODCALLTYPE Hook_DrawIndexedPrimitiveUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT a, UINT b, UINT c, const void* d,
-                                                             D3DFORMAT e, const void* f, UINT g)
+static HRESULT STDMETHODCALLTYPE Hook_DrawIndexedPrimitiveUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT minIndex, UINT verts, UINT prims,
+                                                             const void* idx, D3DFORMAT fmt, const void* data, UINT stride)
 {
-    CountDraw(dev);
-    return s_origDrawIndexedPrimitiveUP(dev, t, a, b, c, d, e, f, g);
+    s_drawsSeen++;
+    GlassScope glass(dev, "DIPUP", prims);
+    if (!s_dumping) return s_origDrawIndexedPrimitiveUP(dev, t, minIndex, verts, prims, idx, fmt, data, stride);
+    char extra[64];
+    _snprintf(extra, sizeof(extra), " (vertices from %u, %u indices)", minIndex, PrimVertices(t, prims));
+    extra[sizeof(extra) - 1] = 0;
+    int watch = CountDraw(dev, "DIPUP", t, prims, verts, extra);
+    HRESULT hr = s_origDrawIndexedPrimitiveUP(dev, t, minIndex, verts, prims, idx, fmt, data, stride);
+    if (watch) WatchDraw(dev, watch, true);
+    return hr;
 }
 
 static bool ScaledShadow(IDirect3DSurface9* s);
@@ -422,12 +1144,24 @@ static void EndPass(IDirect3DDevice9* dev, const char* why)
         IDirect3DSurface9* rt = NULL;
         if (SUCCEEDED(dev->GetRenderTarget(0, &rt)) && rt) {
             Log("dump pass %02d: %lu draws, ends (%s)", s_pass, s_passDraws, why);
-            if (!ScaledShadow(rt)) DumpSurface(dev, rt, "target");  // the scaled shadow colour target is never written
+            if (!ScaledShadow(rt)) {  // the scaled shadow colour target is never written
+                DumpSurface(dev, rt, "target");
+                if (s_passMrt) SaveUsedTarget(dev, 0, rt);  // with alpha, next to the pass's other targets
+            }
             rt->Release();
+        }
+        for (DWORD i = 1; i < 4; i++) {  // the pass's other targets, as far as they are still bound
+            IDirect3DSurface9* s = NULL;
+            if (s_rtUsed[i] && SUCCEEDED(dev->GetRenderTarget(i, &s)) && s) {
+                SaveUsedTarget(dev, i, s);
+                s->Release();
+            }
         }
         s_pass++;
     }
     s_passDraws = 0;
+    s_passMrt = false;
+    memset(s_rtUsed, 0, sizeof(s_rtUsed));
 }
 
 // The full screen passes (bloom and tone mapping, motion blur, depth of field, colour grading ...) all
@@ -555,6 +1289,9 @@ static HRESULT STDMETHODCALLTYPE Hook_SetRenderTarget(IDirect3DDevice9* dev, DWO
                 char desc[128];
                 DescribeSurface(surf, desc);
                 Log("dump pass %02d: render target %lu = %s", s_pass, index, desc);
+                // the target it replaces is done with: saved if the pass drew into it (still bound here)
+                if (index < 4 && cur) SaveUsedTarget(dev, index, cur);
+                if (index < 4) s_rtUsed[index] = false;
             }
         }
     }
@@ -604,7 +1341,6 @@ static SetScissorRect_t s_origSetScissorRect;
 static SetDepthStencilSurface_t s_origSetDepthStencil;
 static Clear_t s_origClear;
 static int s_createLogs, s_frameLogs;  // lines so far (creation for the whole run, the rest per dump)
-static int s_constLines;               // shader constant lines in this dump
 static bool s_viewportLogged, s_scissorLogged;  // in this dump
 static void* s_constLogged[24];        // pixel shaders described in this dump
 static int s_constLoggedCount;
@@ -895,6 +1631,7 @@ static HRESULT STDMETHODCALLTYPE Hook_SetScissorRect(IDirect3DDevice9* dev, cons
 
 static HRESULT STDMETHODCALLTYPE Hook_SetDepthStencil(IDirect3DDevice9* dev, IDirect3DSurface9* s)
 {
+    if (PickupsWanted()) PickupsDepthSet(s);  // the scene's depth surface, for the pickup boxes
     if (FrameLog()) {
         char desc[128];
         DescribeSurface(s, desc);
@@ -1079,7 +1816,8 @@ static void DumpAtPresent(IDirect3DDevice9* dev)
             bb->Release();
         }
         s_dumping = false;
-        Log("dump %lu: done, %d passes, files in %s", s_dumpIndex, s_pass, s_dumpDir);
+        LogDumpShaders();
+        Log("dump %lu: done, %d passes, %d watched draws, files in %s", s_dumpIndex, s_pass, s_watchCount, s_dumpDir);
     }
     // F9 while the game has the focus dumps the next frame
     static bool was;
@@ -1097,7 +1835,12 @@ static void DumpAtPresent(IDirect3DDevice9* dev)
         s_constLines = 0;
         s_viewportLogged = s_scissorLogged = false;
         s_constLoggedCount = 0;
+        s_drawLines = 0;
+        s_watchCount = 0;
+        s_passMrt = false;
+        memset(s_rtUsed, 0, sizeof(s_rtUsed));
         Log("dump %lu: next frame, graphics quality %d", s_dumpIndex, KnownBuild() ? *(int*)G(0x00D0F7E8) : -1);
+        LogDumpLegend();
     }
     was = down;
 }
@@ -1134,9 +1877,11 @@ static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PA
     SmaaDeviceLost();
     HdrDeviceLost();
     UltrawideDeviceLost();
+    PickupsDeviceLost();
     HdrPresentParams(NULL, 0, NULL, pp);  // keeps the device windowed for the HDR swap chain
     HRESULT hr = s_origReset(dev, pp);
     ForgetStages();
+    GlassDeviceReset();  // no pixel shader set now; the shaders and their tags outlive a Reset
     s_shadowRt = false;
     EnterCriticalSection(&s_hookLock);
     CheckSlotsLocked();  // the runtime may have written its functions back
@@ -1286,6 +2031,7 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
     // the banners after the ultrawide pillars are cleared, so that they are not wiped off
     if (g_cfg.steamLan) OnlinePresent(dev);
     MoviePresent(dev);
+    if (PickupsWanted()) PickupsPresent(dev);
     HRESULT hr;
     StageState stages[16];
     memcpy(stages, s_stages, sizeof(stages));
@@ -1320,6 +2066,7 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
                 InterlockedExchange(&s_drawsSeen, 0), InterlockedExchange(&s_setTextureSeen, 0), InterlockedExchange(&s_createSeen, 0),
                 InterlockedExchange(&s_repatched, 0),
                 vt == s_vt ? "as hooked" : "another one", ModuleOf(vt[82], a, sizeof(a)), ModuleOf(vt[65], b, sizeof(b)));
+            if (g_cfg.glassFix) Log("glass fix: %ld glass draws changed in 10 s", GlassTakeChangedDraws());
         }
     }
     g_lastPresent = GetTickCount();
@@ -1343,19 +2090,24 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         LogForeignModules("after device");
         void** vt = *(void***)*out;
         bool ultrawide = g_cfg.ultrawideFix == 2;
+        bool pickups = PickupsWanted();  // [DLC] Pickups=1 with the mode pack merged (dlcpickups.cpp)
         if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan || g_cfg.hdr || ultrawide || g_cfg.cutsceneSkip ||
-            g_cfg.smaa) {
+            g_cfg.smaa || pickups) {
             PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
             s_d3dPresent = s_origPresent;  // the device's own, for nested calls (CheckD3DHooks)
         }
         if (g_cfg.steamLan || g_cfg.hdr || ultrawide || g_cfg.cutsceneSkip || g_cfg.smaa || g_cfg.anisotropy > 1 ||
-            g_cfg.textureDetail > 0 || g_cfg.shadowResolution > 1) {
-            // the overlay's font, the SMAA and HDR targets, the ultrawide surfaces and aspect, the samplers
+            g_cfg.textureDetail > 0 || g_cfg.shadowResolution > 1 || g_cfg.glassFix || pickups) {
+            // the overlay's font, the SMAA and HDR targets, the ultrawide surfaces and aspect, the samplers,
+            // the glass fix's pixel shader
             PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);
             s_d3dReset = s_origReset;
         }
         HdrDeviceCreated(*out);
         SmaaDeviceCreated(*out);
+        PickupsDeviceCreated(*out);
+        if (pickups)  // the scene's depth surface for the pickup boxes (dlcpickups.cpp)
+            PatchVtable(vt, 39, (void*)Hook_SetDepthStencil, (void**)&s_origSetDepthStencil);
         s_device = *out;
         if (g_cfg.ultrawideFix == 2) UltrawideDeviceCreated(*out, pp, focus);
         HdrInstallUiHook();
@@ -1375,18 +2127,33 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
             PatchVtable(vt, 75, (void*)Hook_SetScissorRect, (void**)&s_origSetScissorRect);
             if (s_shadowFactor > 1) Log("shadow maps: %ux resolution", s_shadowFactor);
         }
-        if (g_cfg.log) {  // frame dump on F9
-            PatchVtable(vt, 34, (void*)Hook_StretchRect, (void**)&s_origStretchRect);
+        if (g_cfg.log || g_cfg.glassFix) {  // the frame dump's draw lines; the glass fix's blend change
             PatchVtable(vt, 81, (void*)Hook_DrawPrimitive, (void**)&s_origDrawPrimitive);
             PatchVtable(vt, 82, (void*)Hook_DrawIndexedPrimitive, (void**)&s_origDrawIndexedPrimitive);
             PatchVtable(vt, 83, (void*)Hook_DrawPrimitiveUP, (void**)&s_origDrawPrimitiveUP);
             PatchVtable(vt, 84, (void*)Hook_DrawIndexedPrimitiveUP, (void**)&s_origDrawIndexedPrimitiveUP);
+        }
+        if (g_cfg.glassFix) {  // the glass pixel shaders tagged when made, the one set noted (glass.cpp)
+            GlassDeviceCreated(flags);
+            PatchVtable(vt, 106, (void*)Hook_CreatePixelShader, (void**)&s_origCreatePixelShader);
+            PatchVtable(vt, 107, (void*)Hook_SetPixelShader, (void**)&s_origSetPixelShader);
+        }
+        if (g_cfg.log) {  // frame dump on F9
+            PatchVtable(vt, 34, (void*)Hook_StretchRect, (void**)&s_origStretchRect);
             // shadow map survey: creation all along, the rest in the dumped frame
             PatchVtable(vt, 25, (void*)Hook_CreateCubeTexture, (void**)&s_origCreateCubeTexture);
             PatchVtable(vt, 28, (void*)Hook_CreateRenderTarget, (void**)&s_origCreateRenderTarget);
             PatchVtable(vt, 29, (void*)Hook_CreateDepthStencil, (void**)&s_origCreateDepthStencil);
             PatchVtable(vt, 39, (void*)Hook_SetDepthStencil, (void**)&s_origSetDepthStencil);
-            Log("frame dump: F9");
+            // the shaders by the hash of their code, for the dump's draw lines and DumpWatchPS
+            if (!s_shaderLockReady) {
+                InitializeCriticalSection(&s_shaderLock);
+                s_shaders = (ShaderInfo*)calloc(kShaderSlots, sizeof(ShaderInfo));  // NULL: shaders go unnamed
+                s_shaderLockReady = true;
+            }
+            PatchVtable(vt, 91, (void*)Hook_CreateVertexShader, (void**)&s_origCreateVertexShader);
+            PatchVtable(vt, 106, (void*)Hook_CreatePixelShader, (void**)&s_origCreatePixelShader);
+            Log("frame dump: F9, %d watched pixel shaders ([Debug] DumpWatchPS)", g_cfg.dumpWatchCount);
         }
         s_vt = vt;  // the checks start once every slot is in place
     }

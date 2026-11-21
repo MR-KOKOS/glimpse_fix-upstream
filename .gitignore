@@ -7,8 +7,29 @@ build/
 *.pdb
 # never commit game data: decrypted dumps, Ghidra database, screenshots, recordings
 re/
-ghidra/
+/ghidra/
 shots/
 *.log
 *.wav
 dist/
+# never commit converted DLC or game data either (tools/dlc writes such files only to work folders and test_out)
+tools/dlc/**/test_out/
+# read from SplitSecond.exe (Havok class reflection): build_all.py makes it on the user's PC in its work folder
+tools/dlc/havok/hkref.json
+# converted or extracted game/DLC files that a converter run may leave next to the scripts (no source has these types)
+tools/dlc/**/*.json
+tools/dlc/**/*.dds
+tools/dlc/**/*.xml
+tools/dlc/**/*.bin
+tools/dlc/**/*.pkps
+tools/dlc/**/*.gfx
+tools/dlc/**/*.cso
+tools/dlc/**/*.xma
+# XEX2 / title update tools for reverse engineering: local only (xex2.py holds Microsoft's XEX key), never released
+tools/dlc/xex/
+__pycache__/
+*.ark
+*.pkl
+*.fsb
+*.fev
+*.bik

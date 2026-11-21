@@ -69,6 +69,7 @@ static float s_pos[3];
 static float s_axis[3][3];        // left, up, forward (the state's axes)
 static float s_photoFov;          // the FOV the photo mode started with
 static DWORD s_raceCamera;        // tick of the last race camera update (0: none yet)
+static bool s_raceHooked;         // the chase and bumper camera updates are hooked
 static DWORD s_anyCamera;         // tick of the last update of any hooked camera
 static BYTE s_slowOn;             // the slow motion tweakables before the photo mode
 static float s_slowSpeed;
@@ -464,17 +465,21 @@ void PatchCamera()
             Log("respot not recognised");
     }
     // the race cameras also tell UnlockDecals that a single player race runs (SinglePlayerRace), and the
-    // boost and handbrake buttons that a race runs (RaceRunning); with SteamLAN a host may allow them
+    // boost and handbrake buttons and the D-pad's menu repeat that a race runs (RaceRunning); with
+    // SteamLAN a host may allow them
     bool race = g_cfg.fov != 1.0f || g_cfg.ultrawideFix || g_cfg.zoomKeys || g_cfg.photoMode || g_cfg.unlockDecals ||
-                g_cfg.cameraShake < 0.999f || g_cfg.boost || g_cfg.handbrake || g_cfg.steamLan;
+                g_cfg.cameraShake < 0.999f || g_cfg.boost || g_cfg.handbrake || g_cfg.steamLan || g_cfg.menuRepeat;
     if (race) {
         bool chase = HookSlot(kChaseUpdateSlot, kChaseUpdate, "\x81\xEC\x44\x01\x00\x00", 6, (void*)Hook_ChaseUpdate,
                               (void**)&s_origChase);
         bool bumper = HookSlot(kBumperUpdateSlot, kBumperUpdate, "\x81\xEC\xEC\x00\x00\x00", 6, (void*)Hook_BumperUpdate,
                                (void**)&s_origBumper);
+        s_raceHooked = chase && bumper;
         Log("camera fov: chase %s, bumper %s, factor %.2f, ultrawide %d, zoom keys %d, shake %.2f", chase ? "hooked" : "not recognised",
             bumper ? "hooked" : "not recognised", g_cfg.fov, g_cfg.ultrawideFix, g_cfg.zoomKeys, g_cfg.cameraShake);
     }
+    if (g_cfg.menuRepeat)
+        Log(s_raceHooked ? "menu repeat: a held D-pad repeats outside a race" : "menu repeat off: race cameras not hooked");
     if (g_cfg.explosionShakeOff) Log("explosion camera shake off");
     if (g_cfg.photoMode) {
         int hooked = 0;
@@ -503,6 +508,11 @@ static bool InRace()
 }
 
 bool RaceRunning() { return InRace(); }
+
+// without both race camera hooks RaceRunning cannot see a race
+bool RaceCameraHooked() { return s_raceHooked; }
+
+DWORD RaceCameraAge() { return s_raceCamera ? GetTickCount() - (s_raceCamera & ~1u) : 0xFFFFFFFFu; }
 
 // some camera ran within the last half second while a car is wrecked, within 15 s of a race camera
 // (a crash or takedown camera during the race, not the cameras of the pause menu, the finish or the

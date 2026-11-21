@@ -15,6 +15,9 @@ addresses are mapped from a table (`src/build_ru.inc`). The Polish depot 297866 
 not supported; French, Italian and Spanish have not been checked. The log names the build it found
 (`SplitSecond.exe build recognised (...)`) or says `unknown SplitSecond.exe build`.
 
+The converted Xbox DLC (`[DLC]`, the overlays included) needs the Steam version 1.0.0.1 of the German and
+English depots, not the Russian depot: on any other build the DLL leaves all of `[DLC]` off.
+
 ## What was wrong, and what the fix does
 
 ### Controllers
@@ -37,6 +40,25 @@ PS3 icons.
   switches back to key captions as soon as a key is pressed. The title screen reads
   "Press START" instead of "Press ENTER" (any language). The controls screen names pad inputs
   A/B/X/Y/LB/RB/LT/RT/LS…/RS… instead of "Button 1" or "Z rotation".
+
+### Menu repeat
+
+The menus take their directions from the game's UI input update (0x4D60F0, every frame in the front end
+and in a race). The D-pad's actions (0x19-0x1C, bound to the POV) count only on the frame they are
+pressed, so a held D-pad gives one step and nothing more; scrolling through a long list (the car select)
+takes one press per entry.
+
+* With `MenuRepeat=1` the virtual pads report a held D-pad as a train of presses: after
+  `MenuRepeatDelay` ms the POV goes centred for 40 ms and at least two `GetDeviceState` calls (so a frame
+  in which more than one reader polls the pad still sees the release), then back, which the game takes as
+  a new press. Then the same every `MenuRepeatRate` ms after the press, so a step every rate + 40 ms. A
+  POV press is exactly what a tap gives, so every screen counts one step.
+* An earlier version pushed the left stick instead, to use the game's own typematic (0.4 s / 0.1 s); some
+  screens also read the stick themselves, so a step could count twice and fields were skipped.
+* Not in a race: the race camera hooks tell a race (`RaceRunning`, a race camera ran in the last half
+  second), so without them (an unknown build) nothing repeats. A direction already held when a race ends
+  or the pause menu opens (also one pressed within that half second) waits until it is let go.
+  DirectInput devices passed through are not touched (`src\dinput_wrap.cpp`, `MenuPov`).
 
 ### 30 fps
 
@@ -160,9 +182,11 @@ shadows` (0xD716EC), which every pass that draws into the shadow maps checks.
 * **Anti-aliasing (SMAA):** SMAA 1x (the reference shaders by Jimenez et al., unchanged in
   `third_party/smaa`, compiled with `fxc` at build time) runs on the 3D picture right before the game
   draws its HUD: at the first Scaleform movie after the tone mapper (`GFxMovieRoot::Display`, vtable
-  `0xC41CF4` slot 31) on a target of the tone mapper's size, so text and HUD stay sharp. In split
-  screen each half is meant to be smoothed after its own tone mapping, within its viewport (not
-  checked in the game yet). A frame without a HUD
+  `0xC41CF4` slot 31) on a target of the tone mapper's size, so text and HUD stay sharp. Only the
+  tone mapper's viewport is written back, through a scissor rect with the full-target quad (in 2.2.0
+  a viewport squeezed the whole picture into it, so split screen showed three pictures, issue #15);
+  in split screen the viewports of both tone mappings before the HUD are united (split screen fix not
+  yet confirmed in the game). A frame without a HUD
   (photo mode) is smoothed at Present. The device state is captured and put back with a state block.
   About 0.1 ms a frame at 4K on an RTX 5090.
 * **Anisotropic filtering:** the game filters all textures linearly; mipmapped textures that are
@@ -183,6 +207,32 @@ shadows` (0xD716EC), which every pass that draws into the shadow maps checks.
 * **Graphics quality:** "Very High" is exactly "High" plus 2x supersampling: of all places in the
   game that read the quality level, only the supersampling ones tell Very High from High. To render
   at screen resolution, pick "High" in the game; nothing else changes.
+
+### Car glass
+
+The game's deferred G-buffer keeps the specular intensity in the alpha of its first target (RT0.a, x0.5),
+the motion byte in the alpha of the second and the specular power in the alpha of the third (RT2.a, /64);
+the sun pass lights every pixel with `2 * RT0.a * pow(.., 64 * RT2.a)`. The car glass shaders
+(VehicleGlassAndDamage, VehicleGlass01) write the glass opacity (about 0.87) into the alpha of all three
+targets. The Xbox 360 blends each target on its own: RT0's alpha with ZERO / blend factor 0, so a glass
+pixel ends up with specular intensity 0, and RT2's alpha not written. Direct3D 9 has one blend state for
+all targets: the PC port's race pass ('Render Vehicles Alpha') blends alpha ONE/ZERO, so every window
+writes its opacity as specular intensity while the power stays that of the surface behind. Where that
+power is 0 (the window frames of the converted DLC cars) `pow(x, 0) = 1` and the sun paints the glass flat
+white; on the base cars the glass gets a sun highlight with the shine of whatever lies behind it. The PC's
+car select already does it right (alpha ZERO / blend factor, factor 0).
+
+* `GlassFix=1` tags the glass pixel shaders when they are made (`CreatePixelShader`, by the hash of their
+  code that the frame dump uses) and notes in `SetPixelShader` whether the shader set last is one of
+  them; a draw costs one test of that flag.
+* For a glass draw with exactly the race pass's blend state, `SRCBLENDALPHA` goes from ONE to ZERO
+  (RT0.a = 0, as on the Xbox) and `COLORWRITEENABLE1` from 0xF to 7, so RT1.a keeps the motion byte of the
+  surface behind (the same car in nearly every pixel; written as 0 the motion blur would smear the
+  windows like the world). Both states are put back after the draw, so the game's state cache stays right.
+* What remains different from the Xbox: the normal in RT1 is blended like the other targets instead of
+  replaced, which only moves the glass's diffuse sun term. The glass's reflections (RT0/RT2 colour) stay.
+  Device vtable slots only (`src\glass.cpp`, `src\diag.cpp`); not on a pure device, which the game does
+  not make.
 
 ### Audio
 
@@ -289,6 +339,72 @@ in the log) and the Scaleform movie's `Invoke` vtable slot; no game code.
 * **Game mode:** the game's lobby screen sets its title to "LOBBY - <mode>" in the game's language;
   the fix reads it from the Scaleform calls (`GFxMovieRoot` vtable slot 18, `Invoke`) and the host
   publishes it for the others in the Steam lobby.
+* **DLC tracks** (`[DLC] TracksOnline=1`): the host's game setup is the Net-Z well known object
+  `gWellKnownGameSetup` (made at `0x872750`); `0x871C30` writes three bytes into it: the mode (+0x59,
+  `[0xD82518]`), the track index (+0x5A, `[0xD82528]`, from race setup +0x9A0 or picked at random by
+  `0x872340` from the mode's TrackFiltration list) and two option nibbles (+0x58). A guest copies the index
+  (`0x871D40`), and at the race start every player reads it (`0x8717A0`) and looks name, letter and level
+  path up in its own track tables (`0x4838B0`). No name or list is sent: 0..14 mean the same everywhere,
+  15 and up only with the same DLC tracks, and the host can switch to a DLC track inside a running
+  session (Quazal also migrates the host). So the players of one LAN game must have the same DLC tracks
+  or none: each member publishes a signature (`glimpse_dlc` member data: 64-bit FNV-1a over the fix
+  version, the registered tracks, their four level archives' sizes and CRC-32 of the first MB and the last 64 KB, and
+  the merged `track_*.ark`; `none` without a track overlay, `dlcfs.cpp`), and between two players whose
+  signatures differ (for a player with DLC tracks also: not known yet) the driver passes only broadcasts, the game's session
+  searches: the host's answer to a search (its game in the list) and all game port traffic are held back
+  on both sides. A member of an older release publishes no signature and has no DLC tracks (`none`); the
+  signature is published again after every lobby join or create (Steam drops member data on leave).
+
+## Converted Xbox DLC
+
+The converters in `tools\dlc` turn the user's own Xbox 360 DLC packages into PC-format archives and loose
+files (`tools\dlc\README_build.md`; cars `tools\dlc\assemble\README.md`, tracks
+`tools\dlc\assemble\README_track.md`, modes `tools\dlc\mode\README.md`, audio `tools\dlc\audio\README.md`).
+The DLL's `[DLC]` layer makes the result visible to the game without changing the game folder's files or
+any game code byte: everything is data writes, vtable slots and import slots, and every part checks the
+build (Steam version 1.0.0.1, not the Russian depot; the overlay merge too) and that the code it relies on is
+as expected, and otherwise stays off.
+
+* **Overlay merge** (`src\dlcfs.cpp`, `src\vark.cpp`, `src\iohook.cpp`): the game reads all its resident
+  content from `data\resident.ark`, one index of keys (the lower-case path hashed `h*31+c`) with offsets.
+  Every `glimpse_dlc\*.ark` is laid over it in name order: the game is shown one archive with a merged
+  index (an overlay entry replaces a base entry with the same key, new keys are added) whose data comes
+  from the original file and the overlays. The game opens resident.ark with `CreateFileA` and asks for
+  its size right away; from then on that handle is served as the merged archive through `ReadFile`,
+  `SetFilePointer`, `GetFileSize` and `CloseHandle`.
+* **kernel32 import-slot redirect:** the game reads resident.ark before its own import table is filled,
+  and its `CreateFileA` slot holds the copy protection's wrapper, which is left alone. So the four
+  functions are taken over in kernel32's own import table behind its `jmp [slot]` export thunks, while
+  the DLL loads. The same way, `CreateFileA/W` and `FindFirstFileA` send opens and existence checks of
+  the DLC tracks' level archives, sound banks and movies (and the modes' movies) to
+  `glimpse_dlc\<name>\data\...` when they are not below `data` (all three or none; without them the
+  tracks whose files lie there are left out). When the overlays cannot be used after all, every slot
+  swapped so far is put back; the DLL puts them back when it unloads, too.
+* **Track registration** (`src\dlcfs.cpp`): the game knows its tracks by an index 0..14 through five enum
+  tables; each is copied with the DLC tracks appended (Quarry 15, nem_quarry 16) and its descriptor
+  pointed at the copy. The quick play screen's movie slot serves the tracks' movies, and their entries in
+  the quick play track list are unlocked. The track overlay (`track_*.ark`) is only merged when every
+  track it lists will be registered.
+* **Modes** (`src\dlcmode.cpp`): the quick play mode list's item update (a vtable slot) unlocks
+  Deadline's entry and gives the DLC modes movie ids from 64 on, which the swapped movie slot of the quick
+  play screen turns into their movies. **Cars** (`src\dlccars.cpp`): the front-end car select's
+  activation slot appends the DLC car records to the screen's own list. **Pickups**
+  (`src\dlcpickups.cpp`, `src\dlcrivals.cpp`, `src\pickups.hlsl`): the countdown's update and reset slots
+  hold the clock while frozen time is left (and add `DeadlineBonus` with `Pickups=0`), and the boxes are
+  drawn by the DLL right after the game's tone mapping; the D3D hooks for them go in only with an overlay
+  that brings the mode. Slot 2 of the event objectives, race end and race results screens
+  (`cEventObjectives`, `cRaceEnd`, `cRaceResults`) is wrapped to keep the race kind Time Trial, add the
+  Xbox's rivals to the race info and write the time left (or DNF) into the end screen and the result rows
+  (`dlcrivals.cpp`); slot 4 of the lap timer `cLaps` holds the race time while the clock is frozen. The
+  HUD runs through the game's own HUD message queue and the DLC's `DialsInfo.gfx` timer functions, the
+  top centre counter is hidden through its movie's `SetVisible`, the DLC's `DLCMenu` bank is loaded on the
+  sound thread for the Deadline sounds (`dlcmusic.cpp`), and the *Frozen Time* post presets go onto the
+  game's colour cube pass (`postfx.cpp`). See `tools\dlc\mode\README.md` for the mode pack and the Xbox
+  rules. **Music** (`src\dlcmusic.cpp`): two
+  entries of the sound thread's message table run the game's handlers and then, on Quarry, swap
+  `Music/Music` for `DLC3_Music`, alias the event names and set the picker's group.
+
+Every key is described in `docs\INI.md` (`[DLC]`); with `Log=1` each part logs what it found and did.
 
 ## Copy protection in detail
 

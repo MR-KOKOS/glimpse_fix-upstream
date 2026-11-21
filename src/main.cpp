@@ -96,7 +96,6 @@ static void LoadConfig()
     g_cfg.log = IniBool("Debug", "Log", false);
     g_cfg.dumpTextures = IniBool("Debug", "DumpTextures", false);
     g_cfg.testFeed = IniBool("Debug", "TestFeed", false);
-    g_cfg.profile = IniBool("Debug", "Profile", false);
     if (g_cfg.log) {
         char path[MAX_PATH], prev[MAX_PATH];
         ModulePath(path, "SplitSecondPad.log");
@@ -110,6 +109,28 @@ static void LoadConfig()
         g_cfg.patchMask = strtoul(buf, NULL, 0);
         if (g_cfg.patchMask != PATCH_ALL) Log("patch mask 0x%X", g_cfg.patchMask);
     }
+    {
+        // the frame dump's watched pixel shaders: hashes as the dump log shows them (hex, 0x optional),
+        // separated by commas or spaces
+        char buf[512];
+        IniString("Debug", "DumpWatchPS", "", buf, sizeof(buf));
+        g_cfg.dumpWatchCount = 0;
+        for (char* p = buf; *p && g_cfg.dumpWatchCount < 16;) {
+            if (*p == ',' || *p == ' ' || *p == '\t') {
+                p++;
+                continue;
+            }
+            char* end;
+            unsigned long long v = _strtoui64(p, &end, 16);
+            if (end == p || (*end && *end != ',' && *end != ' ' && *end != '\t')) {  // not a number: skipped
+                Log("DumpWatchPS: \"%s\" is not a hash, skipped", p);
+                while (*p && *p != ',') p++;
+                continue;
+            }
+            if (v) g_cfg.dumpWatchPS[g_cfg.dumpWatchCount++] = v;
+            p = end;
+        }
+    }
 
     // [Controller]
     g_cfg.virtualPads = IniInt("Controller", "VirtualPads", 4);
@@ -120,6 +141,13 @@ static void LoadConfig()
     g_cfg.stickDeadzone = IniFloat("Controller", "StickDeadzone", 0.15f, 0.0f, 1.0f);
     g_cfg.triggerDeadzone = IniFloat("Controller", "TriggerDeadzone", 0.05f, 0.0f, 1.0f);
     g_cfg.rumbleScale = IniFloat("Controller", "RumbleStrength", 1.0f, 0.0f, 10.0f);
+    g_cfg.menuRepeat = IniBool("Controller", "MenuRepeat", true);
+    g_cfg.menuRepeatDelay = IniInt("Controller", "MenuRepeatDelay", 450);
+    if (g_cfg.menuRepeatDelay < 100) g_cfg.menuRepeatDelay = 100;
+    if (g_cfg.menuRepeatDelay > 2000) g_cfg.menuRepeatDelay = 2000;
+    g_cfg.menuRepeatRate = IniInt("Controller", "MenuRepeatRate", 160);
+    if (g_cfg.menuRepeatRate < 80) g_cfg.menuRepeatRate = 80;  // a press and its 40 ms release must fit
+    if (g_cfg.menuRepeatRate > 1000) g_cfg.menuRepeatRate = 1000;
     char glyphs[32];
     IniString("Controller", "ButtonGlyphs", "xbox", glyphs, sizeof(glyphs));
     if (!_stricmp(glyphs, "playstation") || !_stricmp(glyphs, "ps"))
@@ -149,6 +177,7 @@ static void LoadConfig()
     if (g_cfg.qualityCap < 0 || g_cfg.qualityCap > 3) g_cfg.qualityCap = 3;
     g_cfg.textureDetail = IniInt("Graphics", "TextureDetail", 0);
     if (g_cfg.textureDetail < 0 || g_cfg.textureDetail > 3) g_cfg.textureDetail = 0;
+    g_cfg.glassFix = IniBool("Graphics", "GlassFix", true);
     g_cfg.opponentEngines = IniBool("Audio", "OpponentEngines", true);
     g_cfg.consoleReverb = IniBool("Audio", "ConsoleReverb", true);
 
@@ -180,6 +209,16 @@ static void LoadConfig()
     g_cfg.hudKey = IniInt("Camera", "HudKey", 0);
     g_cfg.cameraShake = IniFloat("Camera", "CameraShake", 1.0f, 0.0f, 1.0f);
     g_cfg.explosionShakeOff = IniBool("Camera", "ExplosionShakeOff", false);
+    g_cfg.dlcOverlays = IniBool("DLC", "Overlays", false);
+    g_cfg.dlcTracks = IniBool("DLC", "Tracks", false);
+    g_cfg.dlcTracksOnline = IniBool("DLC", "TracksOnline", false);
+    g_cfg.dlcMusic = IniBool("DLC", "Music", true);
+    g_cfg.dlcModes = IniBool("DLC", "Modes", false);
+    g_cfg.dlcPickups = IniBool("DLC", "Pickups", false);
+    g_cfg.pickupVignette = IniBool("DLC", "PickupVignette", true);
+    g_cfg.deadlineBonus = IniFloat("DLC", "DeadlineBonus", 50.0f, 0.0f, 300.0f);
+    g_cfg.dlcCars = IniBool("DLC", "Cars", true);
+    g_cfg.dlcCarsCareer = IniBool("DLC", "CarsCareer", false);
     g_cfg.steamLan = IniBool("Online", "SteamLAN", false);
     IniString("Online", "LobbyName", "", g_cfg.lobbyName, sizeof(g_cfg.lobbyName));
     {  // only letters, digits, - and _ (as glimpse_config.exe lets you type), at most 32
@@ -284,6 +323,9 @@ extern "C" HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version
         LogEnvironment();  // here, not in DllMain: it reads files, the registry and the module list
         LoadXInput();
         ApplyGamePatches();
+        DlcInstallModes();  // [DLC] Modes: same moment as DlcRegisterTracks, checks build and overlay itself
+        DlcInstallPickups();  // [DLC] Pickups / DeadlineBonus: the same, checks build and overlay itself
+        DlcInstallCars();   // [DLC] Cars: the same, checks build, UnlockAll and overlay itself
     }
     if (riid == IID_IDirectInput8A && pXInputGetState && g_cfg.virtualPads > 0)
         *out = WrapDirectInput8A((IDirectInput8A*)*out);
@@ -327,13 +369,16 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         DisableThreadLibraryCalls(inst);
         InitializeCriticalSection(&s_logLock);
         LoadConfig();
+        DlcInstall();  // before the game's first read of resident.ark
         FixOpponentEngineBanks();  // plain data in the exe file, read when the audio system starts
         FixReverbPresets();        // fmod_event.dll is mapped already (an import of the exe)
         if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2 ||
              g_cfg.dumpTextures || g_cfg.cutsceneSkip || g_cfg.smaa || g_cfg.textureDetail > 0 || g_cfg.qualityCap < 3 ||
-             g_cfg.shadowResolution > 1) &&
+             g_cfg.shadowResolution > 1 || g_cfg.glassFix || PickupsWanted()) &&
             (g_cfg.patchMask & PATCH_D3D))
             InstallD3DHooks();
+    } else if (reason == DLL_PROCESS_DETACH) {
+        DlcUninstall();
     }
     return TRUE;
 }

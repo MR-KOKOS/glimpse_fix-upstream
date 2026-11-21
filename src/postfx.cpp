@@ -87,7 +87,10 @@ static void __fastcall Hook_GradeRender(BYTE* self, void*, void* a, void* b, voi
     float u = vig[0], v = vig[1], gradient = *alpha;
     if (!g_cfg.vignette) vig[0] = vig[1] = 0.0f;
     if (!g_cfg.gradient) *alpha = 0.0f;
+    float frozen[17];  // [DLC] Pickups: Deadline's "Frozen Time" post preset for the call (dlcpickups.cpp)
+    const bool preset = PickupsGradeBegin(params, frozen);
     s_origGrade(self, a, b, c, d, e);
+    if (preset) PickupsGradeEnd(params, frozen);
     vig[0] = u;
     vig[1] = v;
     *alpha = gradient;
@@ -95,7 +98,7 @@ static void __fastcall Hook_GradeRender(BYTE* self, void*, void* a, void* b, voi
 
 void PatchVignette()
 {
-    if (g_cfg.vignette && g_cfg.gradient) return;
+    if (g_cfg.vignette && g_cfg.gradient && !PickupsWanted()) return;  // Deadline's Frozen Time look uses this pass
     if (memcmp(kGradeRender, "\x83\xEC\x08\x57\x8B\xF9", 6) || *kGradeSlot != kGradeRender) {
         Log("vignette pass not recognised");
         return;
@@ -178,8 +181,10 @@ static void __fastcall Hook_BloomRender(BYTE* self, void*, void* a, void* b, voi
     if (g_photoBloom < 0.05f || (!g_cfg.bloom && g_photoBloom == 1.0f)) params[0x38] = 0;
     else if (g_photoBloom != 1.0f) params[0x38] = 1;
     DumpMark("bloom and tone mapping begin");
+    PickupsBeforePost();  // [DLC] Pickups: the scene's depth surface while it is still set
     s_origBloom(self, a, b, c, d, e);
     HdrToneMapped();
+    PickupsAfterToneMap();  // [DLC] Pickups: the boxes into the tone mapped picture, before grading and the HUD
     SmaaSceneDone();
     DumpMark("bloom and tone mapping end");
     for (int i = 0; i < 4; i++) *(float*)(params + kBloomOffsets[i]) = stock[i];

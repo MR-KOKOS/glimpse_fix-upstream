@@ -17,6 +17,9 @@
 //
 // steam_api.dll (Steamworks SDK, flat API) is loaded from the game folder at run time; the game runs
 // as its own app 297860, which has Steam lobbies and the relay network.
+//
+// With DLC tracks registered online ([DLC] TracksOnline=1) only players with the same DLC tracks see each other's
+// LAN games (the DLC check below SendDatagram); players without DLC tracks are not affected by each other.
 #include "common.h"
 #include <d3d9.h>
 #include <stdint.h>
@@ -107,6 +110,7 @@ enum DiagKind : uint64_t {
     DIAG_NO_SOCKET = 1ull << 56, DIAG_FIRST_IN = 2ull << 56, DIAG_FIRST_OUT = 3ull << 56, DIAG_QUEUE_FULL = 4ull << 56,
     DIAG_TRUNCATED = 5ull << 56, DIAG_BAD_WIRE = 6ull << 56, DIAG_TOO_BIG = 7ull << 56, DIAG_UNSUPPORTED = 8ull << 56,
     DIAG_WINSOCK_SOCKET = 9ull << 56, DIAG_SEND_FAILED = 10ull << 56, DIAG_IP_CLASH = 11ull << 56,
+    DIAG_DLC = 12ull << 56,
 };
 static uint64_t Key(DiagKind kind, uint32_t ip, uint16_t port) { return kind | ((uint64_t)ip << 16) | port; }
 
@@ -198,6 +202,7 @@ static_assert(offsetof(ConnectionInfo, state) == 176 && offsetof(ConnectionInfo,
 static void *s_user, *s_utils, *s_mm, *s_msg;
 static CRITICAL_SECTION s_steamLock;     // Steam calls from the game's network threads and ours
 static uint64_t s_lobby, s_mySteamID;
+static volatile LONG s_lobbySerial;      // counts joins and creates: the own member data is published again after each
 
 struct Peer {
     uint64_t steamID;
@@ -205,6 +210,9 @@ struct Peer {
     SteamNetworkingIdentity identity;
     int state;      // Steam connection state last logged
     bool relayed;
+    bool dlcKnown;        // its DLC tracks are known (lobby member data glimpse_dlc); kept once known
+    char dlc[24];         // their signature (DlcOnlineSignature), "none" without DLC tracks
+    char dlcNames[96];    // which, for the log and the banner
 };
 static std::vector<Peer> s_peers;        // the other lobby members
 
@@ -429,6 +437,76 @@ static volatile uint32_t s_sessionHost;
 // connection to a host means this player created the game (SyncRules).
 static volatile DWORD s_gamePortSince;
 
+// ---------------------------------------------------------------- DLC tracks: who may play with whom
+//
+// The game sends the chosen track as its index only (a byte of the game setup object, dlcfs.cpp's DlcOnlineSignature
+// has the details): with [DLC] TracksOnline=1 the indices 15 and up are DLC tracks, which a player without the same
+// pack does not have or has as another track. The host chooses the next track inside a running session (also at
+// random), so the players of one LAN game must all have the same DLC tracks, or none. Every member publishes its
+// signature (lobby member data glimpse_dlc, "<sig>|<names>", published again after every join); between two players
+// whose signatures differ (for a player with DLC tracks also: whose signature is not known yet; one without treats an
+// unknown player as before) only broadcasts pass: the game's session searches go out, but the host's answer, which
+// lists its game, and every datagram to a game port are held back, on the sending and on the receiving side. So
+// neither sees the other's LAN game in the game's list, and nobody ends up in a race whose track one of them lacks.
+// Players without DLC tracks all have "none" and play together as before; so do players with the same pack and fix
+// version. Nothing of the game is changed for it.
+
+static char s_myDlc[24];           // this player's signature, set before the first lobby or later (online thread); "" = not yet
+static char s_myDlcNames[96];
+static volatile LONG s_dlcHeld;    // datagrams held back (10 s counter)
+static volatile LONG s_dlcHidden;  // this player searched for games while a player with other DLC tracks is in the lobby
+
+// this player has no DLC tracks online: it behaves as before towards a player whose tracks are not known (yet) or
+// that is not a member yet; a player with DLC tracks holds such traffic back itself, in both directions
+static bool MyDlcNone() { return !strcmp(s_myDlc, "none"); }
+
+enum DlcMatch { DLC_SAME, DLC_OTHER, DLC_UNKNOWN };
+static DlcMatch PeerDlc(const Peer& p)
+{
+    if (!s_myDlc[0]) return DLC_UNKNOWN;
+    if (!p.dlcKnown) return MyDlcNone() ? DLC_SAME : DLC_UNKNOWN;
+    return strcmp(p.dlc, s_myDlc) ? DLC_OTHER : DLC_SAME;
+}
+
+// a datagram between this player and the one at ip that is held back: logged the first time per player and way
+// (send: this player's, receive: the other's)
+static void DlcHeld(uint32_t ip, const Peer* p, bool send, uint16_t port, int size)
+{
+    InterlockedIncrement(&s_dlcHeld);
+    bool answer = port == kDiscoveryPort;
+    if (!FirstTime(Key(DIAG_DLC, ip, (uint16_t)((send ? 1 : 0) | (answer ? 2 : 0))))) return;
+    char t[20];
+    IpText(ip, t, sizeof(t));
+    char why[200];
+    if (!p) _snprintf_s(why, _TRUNCATE, "%s is not a lobby member yet", t);
+    else if (!p->dlcKnown) _snprintf_s(why, _TRUNCATE, "%s has not reported its DLC tracks yet", t);
+    else _snprintf_s(why, _TRUNCATE, "DLC tracks differ: %s has %s (%s), this player %s (%s)", t, p->dlcNames, p->dlc,
+                     s_myDlcNames, s_myDlc);
+    if (answer && send) Log("online: DLC check: this player's LAN game is not shown to %s (answer to its search held back, %d bytes): %s", t, size, why);
+    else if (answer) Log("online: DLC check: the LAN game of %s is not shown here (its answer held back, %d bytes): %s", t, size, why);
+    else Log("online: DLC check: game traffic %s %s port %u held back (%d bytes): %s", send ? "to" : "from", t, port, size, why);
+}
+
+// receiving side (Pump): a datagram from ip may be delivered; a search (a short datagram to the discovery port) always
+static bool DlcLetIn(uint32_t ip, uint16_t dstPort, int size)
+{
+    if (dstPort == kDiscoveryPort && size < 100) return true;
+    EnterCriticalSection(&s_lock);
+    const Peer* found = NULL;
+    for (const Peer& p : s_peers)
+        if (p.ip == ip) found = &p;
+    bool ok = found ? PeerDlc(*found) == DLC_SAME : MyDlcNone();
+    if (ok) {
+        LeaveCriticalSection(&s_lock);
+        return true;
+    }
+    Peer copy = {};
+    if (found) copy = *found;
+    LeaveCriticalSection(&s_lock);
+    DlcHeld(ip, found ? &copy : NULL, false, dstPort, size);
+    return false;
+}
+
 static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data, int size)
 {
     bool broadcast = to->ip == 0xFFFFFFFF || (to->ip & 0xFF) == 0xFF;
@@ -454,9 +532,27 @@ static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data,
     if (!s_myIp) return;
     EnterCriticalSection(&s_lock);
     std::vector<std::pair<SteamNetworkingIdentity, uint32_t>> targets;
+    bool held = false, otherDlc = false;
+    Peer heldPeer = {};
     for (const Peer& p : s_peers)
-        if (broadcast || p.ip == to->ip) targets.push_back(std::make_pair(p.identity, p.ip));
+        if (broadcast || p.ip == to->ip) {
+            DlcMatch m = PeerDlc(p);
+            otherDlc |= m == DLC_OTHER;
+            if (!broadcast && m != DLC_SAME) {  // other or unknown DLC tracks: only broadcasts pass
+                held = true;
+                heldPeer = p;
+                continue;
+            }
+            targets.push_back(std::make_pair(p.identity, p.ip));
+        }
     LeaveCriticalSection(&s_lock);
+    // this player looks for LAN games while a player with other DLC tracks is in the lobby: the banner says why
+    // that one's game is not listed (online thread; the host's held answers are only logged)
+    if (broadcast && to->port == kDiscoveryPort && otherDlc) InterlockedExchange(&s_dlcHidden, 1);
+    if (held) {
+        DlcHeld(to->ip, &heldPeer, true, to->port, size);
+        return;
+    }
     char t[20];
     IpText(to->ip, t, sizeof(t));
     if (targets.empty() && !broadcast && to->ip != s_myIp && (to->ip >> 24) != 127) {
@@ -749,6 +845,7 @@ static bool Join(uint64_t lobby)
         return false;
     }
     s_lobby = lobby;
+    InterlockedIncrement(&s_lobbySerial);  // SyncRules publishes the member data again
     Log("online: joined lobby %llu", (unsigned long long)lobby);
     return true;
 }
@@ -763,6 +860,7 @@ static bool Create()
         return false;
     }
     s_lobby = created.lobby;
+    InterlockedIncrement(&s_lobbySerial);
     char name[64];
     LobbyKeys(name, sizeof(name));
     S.SetLobbyData(s_mm, s_lobby, "glimpse_lan", kLobbyVersion);
@@ -908,6 +1006,9 @@ static void RefreshMembers()
             if (b.steamID == p.steamID) {
                 p.state = b.state;
                 p.relayed = b.relayed;
+                p.dlcKnown = b.dlcKnown;
+                memcpy(p.dlc, b.dlc, sizeof(p.dlc));
+                memcpy(p.dlcNames, b.dlcNames, sizeof(p.dlcNames));
             }
     s_peers = now;
     LeaveCriticalSection(&s_lock);
@@ -962,7 +1063,7 @@ static void Pump()
                 char t[20];
                 IpText(w.srcIp, t, sizeof(t));
                 if (FirstTime(Key(DIAG_FIRST_IN, w.srcIp, 0))) Log("online: hello from %s, the Steam session is open", t);
-            } else {
+            } else if (DlcLetIn(w.srcIp, w.dstPort, m->size - (int)sizeof(w))) {
                 Deliver(w.srcIp, w.srcPort, w.dstPort, (const char*)m->data + sizeof(w), m->size - (int)sizeof(w));
             }
             S.ReleaseMessage(msgs[i]);
@@ -1070,6 +1171,8 @@ static void LogTraffic()
     if (failed || full || cut || bad || big)
         Log("online: 10 s PROBLEMS: %ld sends refused by Steam (last result %ld), %ld dropped from full queues, %ld cut short, "
             "%ld foreign messages, %ld too big", failed, s_lastSendResult, full, cut, bad, big);
+    if (LONG held = InterlockedExchange(&s_dlcHeld, 0))
+        Log("online: 10 s: %ld datagrams between this player and players with other (or not yet known) DLC tracks held back", held);
     PeerConnections(true);
 }
 
@@ -1093,6 +1196,23 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep)
     const CONTEXT* c = ep->ContextRecord;
     Log("CRASH: eax %08lX ebx %08lX ecx %08lX edx %08lX esi %08lX edi %08lX ebp %08lX esp %08lX", c->Eax, c->Ebx, c->Ecx,
         c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+    // the call chain, as far as a raw stack scan shows it: words that point into the exe's code section (return
+    // addresses and some stale values), the first 24 found within 4 KB
+    char line[512];
+    int len = _snprintf_s(line, _TRUNCATE, "CRASH: stack code addresses:");
+    int found = 0;
+    __try {
+        const DWORD* sp = (const DWORD*)c->Esp;
+        for (int i = 0; i < 1024 && found < 24 && len > 0 && len < (int)sizeof(line) - 12; i++) {
+            DWORD v = sp[i];
+            if (v >= 0x00401000 && v < 0x00B9B000) {
+                len += _snprintf_s(line + len, sizeof(line) - len, _TRUNCATE, " %08lX", v);
+                found++;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    Log("%s", line);
     return s_prevFilter ? s_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1123,8 +1243,11 @@ static void WINAPI Hook_OutputDebugStringA(LPCSTR text)
     if (n) Log("debug text: %s", line);
 }
 
-static void InstallDiagnostics()
+void InstallDiagnostics()
 {
+    static bool done;  // online start and the DLC tracks may both ask
+    if (done) return;
+    done = true;
     s_prevFilter = SetUnhandledExceptionFilter(CrashFilter);
     void** slot = (void**)G(0x00B9B174);  // KERNEL32!OutputDebugStringA import
     HMODULE k32 = GetModuleHandleA("kernel32.dll");
@@ -1165,8 +1288,10 @@ static void ShowBanner(DWORD ms)
     char mode[64] = "";
     if (s_inSession) _snprintf_s(mode, _TRUNCATE, ", mode: %s", s_mode[0] ? s_mode : "not chosen yet");
     else if (s_lobbyMode[0]) _snprintf_s(mode, _TRUNCATE, ", game open: %s", s_lobbyMode);
-    _snprintf_s(s_bannerLines[0], _TRUNCATE, "glimpse_fix online  -  lobby \"%s\", %u/8 players%s", s_lobbyName,
-                (unsigned)players, mode);
+    char dlc[48] = "";  // with DLC tracks: LAN games only with players whose code (signature) is the same
+    if (s_myDlc[0] && strcmp(s_myDlc, "none")) _snprintf_s(dlc, _TRUNCATE, ", DLC tracks %.8s", s_myDlc);
+    _snprintf_s(s_bannerLines[0], _TRUNCATE, "glimpse_fix online  -  lobby \"%s\", %u/8 players%s%s", s_lobbyName,
+                (unsigned)players, mode, dlc);
     char whose[80];
     _snprintf_s(whose, _TRUNCATE, "Rules from %s, for everybody", s_rulesFrom[0] ? s_rulesFrom : "the host");
     _snprintf_s(s_bannerLines[1], _TRUNCATE, "%s: %s", s_inSession ? whose : "Your settings (no LAN session)", rules);
@@ -1212,9 +1337,51 @@ static void UpdatePresence()
     }
 }
 
+// the other members' DLC tracks from their member data (online thread, every second): taken once per member, as
+// they do not change while the game runs. A member of an older release publishes none and cannot have DLC tracks
+// (they came with this version): known from its version alone. One of this version without the value yet waits.
+static void NotePeersDlc(const std::vector<Peer>& peers)
+{
+    for (const Peer& p : peers) {
+        if (p.dlcKnown) continue;
+        const char* v = S.GetMemberData(s_mm, s_lobby, p.steamID, "glimpse_dlc");
+        const char* ver = S.GetMemberData(s_mm, s_lobby, p.steamID, "glimpse_ver");
+        char sig[24] = "", names[96] = "";
+        if (v && *v) {
+            const char* bar = strchr(v, '|');
+            size_t n = bar ? (size_t)(bar - v) : strlen(v);
+            strncpy_s(sig, v, n < sizeof(sig) - 1 ? n : sizeof(sig) - 1);
+            strncpy_s(names, bar ? bar + 1 : sig, _TRUNCATE);
+        } else if (ver && *ver && strcmp(ver, GLIMPSE_VERSION)) {
+            strcpy_s(sig, "none");
+            strcpy_s(names, "none (older glimpse_fix)");
+        } else {
+            continue;
+        }
+        EnterCriticalSection(&s_lock);
+        for (Peer& q : s_peers)
+            if (q.steamID == p.steamID) {
+                strcpy_s(q.dlc, sig);
+                strcpy_s(q.dlcNames, names);
+                q.dlcKnown = true;
+            }
+        LeaveCriticalSection(&s_lock);
+        char t[20];
+        IpText(p.ip, t, sizeof(t));
+        if (!strcmp(sig, s_myDlc))
+            Log("online: DLC check: player %s has the same DLC tracks (%s, %s): LAN games together", t, names, sig);
+        else
+            Log("online: DLC check: player %s has other DLC tracks: %s (%s), this player %s (%s): no LAN game together "
+                "(the track travels as a number); same pack and fix version, or TracksOnline=0 / no track pack on both",
+                t, names, sig, s_myDlcNames, s_myDlc);
+    }
+}
+
 // every member publishes its own rules and whether it hosts the LAN session; the session's rules are the
 // host's (the lobby owner's until a host is known); everybody reports its version and what it applies,
 // and the others' reports are compared (online thread, every second)
+static bool TryTakeOwnDlc();  // below
+
 static void SyncRules()
 {
     if (!s_lobby) return;
@@ -1226,6 +1393,10 @@ static void SyncRules()
 
     EnterCriticalSection(&s_lock);
     std::vector<Peer> peers = s_peers;
+    LeaveCriticalSection(&s_lock);
+    NotePeersDlc(peers);
+    EnterCriticalSection(&s_lock);
+    peers = s_peers;  // with the DLC tracks just learned
     LeaveCriticalSection(&s_lock);
     EnterCriticalSection(&s_showLock);
     bool inSession = s_inSession;
@@ -1285,14 +1456,31 @@ static void SyncRules()
         ShowBanner(10000);
     }
 
+    // this player's DLC tracks, when TakeOwnDlc could not decide them yet: published with everything below
+    if (!s_myDlc[0] && TryTakeOwnDlc()) InterlockedIncrement(&s_lobbySerial);
+
     // own report
-    static uint64_t reportedLobby;
-    static char reported[170], reportedOwn[160];
+    // everything again after every join or create (Steam drops a member's data when it leaves, also when it comes
+    // back to the same lobby), and when Steam no longer shows our version
+    static LONG reportedSerial = -1;
+    static char reported[170], reportedOwn[160], reportedMode[48] = "-";
     static int reportedHost = -1;
-    if (reportedLobby != s_lobby) {
+    const char* ownVer = S.GetMemberData(s_mm, s_lobby, s_mySteamID, "glimpse_ver");
+    if (reportedSerial != s_lobbySerial || (reportedSerial >= 0 && (!ownVer || !*ownVer))) {
+        static LONG goneLogged = -1;
+        if (reportedSerial == s_lobbySerial && goneLogged != s_lobbySerial) {
+            goneLogged = s_lobbySerial;
+            Log("online: this player's member data is gone from the lobby, published again");
+        }
+        if (s_myDlc[0]) {  // not decided yet (TakeOwnDlc): nothing, the others wait for it
+            char dlc[128];
+            _snprintf_s(dlc, _TRUNCATE, "%s|%s", s_myDlc, s_myDlcNames);
+            S.SetMemberData(s_mm, s_lobby, "glimpse_dlc", dlc);  // before the version: a member that has it knows ours
+        }
         S.SetMemberData(s_mm, s_lobby, "glimpse_ver", GLIMPSE_VERSION);
-        reportedLobby = s_lobby;
+        reportedSerial = s_lobbySerial;
         reported[0] = reportedOwn[0] = 0;
+        strcpy_s(reportedMode, "-");
         reportedHost = -1;
     }
     if (strcmp(reportedOwn, mine)) {
@@ -1304,7 +1492,6 @@ static void SyncRules()
         reportedHost = hosting;
     }
     // the host's mode, so the others in the Steam lobby see which game is open
-    static char reportedMode[48] = "-";
     char myMode[48];
     EnterCriticalSection(&s_showLock);
     strcpy_s(myMode, hosting ? s_mode : "");
@@ -1374,11 +1561,27 @@ static void SyncRules()
         if (differ && GetTickCount() - since >= 8000)
             _snprintf_s(warning, _TRUNCATE, "WARNING: player %s plays with other settings: %s", t, d);
     }
+    // other DLC tracks: the one warning that says why a game cannot be joined, so it goes before the others
+    for (const Peer& p : peers)
+        if (PeerDlc(p) == DLC_OTHER) {
+            char t[20];
+            IpText(p.ip, t, sizeof(t));
+            _snprintf_s(warning, _TRUNCATE, "WARNING: player %s has other DLC tracks (%s; you: %s) - no LAN game together",
+                        t, p.dlcNames, s_myDlcNames);
+        }
     EnterCriticalSection(&s_showLock);
     bool changed = strcmp(warning, s_warning) != 0;
     strcpy_s(s_warning, warning);
     LeaveCriticalSection(&s_showLock);
-    if (changed && warning[0]) ShowBanner(15000);
+    // a LAN game was just kept out of the game's list (or this player's from another's): shown again, at most every 20 s
+    static DWORD hiddenShown;
+    bool hidden = InterlockedExchange(&s_dlcHidden, 0) != 0;
+    if (hidden && warning[0] && GetTickCount() - hiddenShown >= 20000) {
+        hiddenShown = GetTickCount();
+        ShowBanner(12000);
+    } else if (changed && warning[0]) {
+        ShowBanner(15000);
+    }
 }
 
 static volatile bool s_started;
@@ -1535,8 +1738,39 @@ static bool JoinFriendLobby(uint64_t lobby)
     return true;
 }
 
+// this player's DLC tracks once DlcRegisterTracks has decided them (online thread); false while it has not
+static bool TryTakeOwnDlc()
+{
+    if (!DlcTracksDecided()) return false;
+    char sig[24], names[96];
+    DlcOnlineSignature(sig, sizeof(sig), names, sizeof(names));
+    InterlockedExchange(&s_dlcHidden, 0);
+    EnterCriticalSection(&s_lock);  // PeerDlc reads them from the network threads (DlcLetIn holds the lock)
+    strcpy_s(s_myDlcNames, names);
+    strcpy_s(s_myDlc, sig);
+    LeaveCriticalSection(&s_lock);
+    if (!strcmp(sig, "none"))
+        Log("online: DLC check: no DLC tracks registered online, LAN games with every player without DLC tracks");
+    else
+        Log("online: DLC check: DLC tracks %s registered online (signature %s): LAN games only with players who have "
+            "the same (same track pack and glimpse_fix version)", names, sig);
+    return true;
+}
+
+// before the first lobby: DlcRegisterTracks runs right after OnlineStart on the game thread. Not decided within
+// 30 s: s_myDlc stays empty and nothing is published (players without DLC tracks treat this one as before; this
+// one lets no game traffic through, as for a player whose tracks are not known); SyncRules tries again every second
+static void TakeOwnDlc()
+{
+    for (int i = 0; i < 3000 && !DlcTracksDecided(); i++) Sleep(10);
+    if (!TryTakeOwnDlc())
+        Log("online: DLC check: the DLC tracks were not decided within 30 s: nothing published yet, LAN game traffic "
+            "held back until they are (checked again every second)");
+}
+
 static DWORD WINAPI OnlineThread(void*)
 {
+    TakeOwnDlc();
     uint64_t invited = LobbyFromCommandLine();
     if (invited) Log("online: started by Steam to join lobby %llu", (unsigned long long)invited);
     bool in = invited && JoinFriendLobby(invited);

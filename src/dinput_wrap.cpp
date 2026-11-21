@@ -326,9 +326,12 @@ public:
         if (!s_pads[m_slot].connected) return DIERR_INPUTLOST;
         DIJOYSTATE2 js;
         XINPUT_GAMEPAD pad = s_pads[m_slot].state.Gamepad;
-        if (CameraBlocksPad()) memset(&pad, 0, sizeof(pad));
-        else if (g_cfg.boost || g_cfg.handbrake) RacePad(m_slot, &pad);
-        BuildState(pad, &js);
+        const bool blocked = CameraBlocksPad();
+        if (blocked) memset(&pad, 0, sizeof(pad));
+        // the D-pad as the player holds it, before RacePad moves D-pad down to Y (MenuPov)
+        WORD held = pad.wButtons;
+        if (!blocked && (g_cfg.boost || g_cfg.handbrake)) RacePad(m_slot, &pad);
+        BuildState(pad, held, &js);
         memcpy(data, &js, size);
         return DI_OK;
     }
@@ -417,12 +420,14 @@ private:
         return (LONG)floor(center + n * half + 0.5);
     }
 
-    void BuildState(const XINPUT_GAMEPAD& g, DIJOYSTATE2* js)
+    void BuildState(const XINPUT_GAMEPAD& g, WORD held, DIJOYSTATE2* js)
     {
         memset(js, 0, sizeof(*js));
         float lx, ly, rx, ry;
         Stick(g.sThumbLX, g.sThumbLY, &lx, &ly);
         Stick(g.sThumbRX, g.sThumbRY, &rx, &ry);
+        WORD pov = g.wButtons;
+        if (g_cfg.menuRepeat) pov = MenuPov(held, pov);
         float lt = Trigger(g.bLeftTrigger), rt = Trigger(g.bRightTrigger);
 
         js->lX = AxisValue(0, lx);
@@ -447,7 +452,7 @@ private:
         for (int i = 0; i < kNumButtons; i++)
             js->rgbButtons[i] = (g.wButtons & buttons[i]) ? 0x80 : 0;
 
-        js->rgdwPOV[0] = PovFromDpad(g.wButtons);
+        js->rgdwPOV[0] = PovFromDpad(pov);
         js->rgdwPOV[1] = js->rgdwPOV[2] = js->rgdwPOV[3] = 0xFFFFFFFF;
 
         WORD prev = m_lastButtons;
@@ -494,12 +499,67 @@ private:
         return table[y + 1][x + 1];
     }
 
+    // MenuRepeat=1. The menus take their directions from the UI input update (0x4D60F0, every frame in
+    // the front end and in a race): the D-pad's (actions 0x19-0x1C, bound to the POV) count only on the
+    // frame they are pressed. So outside a race a held D-pad is reported as a train of presses: after
+    // MenuRepeatDelay ms the POV goes centred for kMenuPovGap ms (a few frames, so every poll of the game
+    // sees the release) and then back, which the game takes as a new press, one step; then every
+    // MenuRepeatRate ms again. Earlier versions pushed the left stick instead, to use the game's own
+    // typematic (0.4 s / 0.1 s); some screens also read the stick themselves, so a step could count twice
+    // and fields were skipped. A POV press is exactly what a tap gives, on every screen. Not in a race (nor
+    // without the race camera hooks that tell a race, RaceRunning). A direction already held when a race
+    // ends or the pause menu opens waits until it is let go. b is the D-pad as the player holds it,
+    // before RacePad moves D-pad down to Y, so a direction held through that remap is seen as held too.
+    // The release lasts kMenuPovGap ms and at least kMenuPovGapReads GetDeviceState calls, so a frame in
+    // which more than one reader polls the pad cannot take all of the gap and miss the release.
+    static const DWORD kMenuPovGap = 40;
+    static const int kMenuPovGapReads = 2;
+    WORD MenuPov(WORD b, WORD pov)
+    {
+        const WORD dpad = XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT;
+        b &= dpad;
+        if (!RaceCameraHooked() || RaceRunning()) {
+            m_menuHeld = b;
+            m_repeatDir = 0;
+            return pov;
+        }
+        m_menuHeld &= b;
+        const WORD r = b & ~m_menuHeld;  // the directions that may repeat
+        const DWORD now = GetTickCount();
+        if (r != m_repeatDir) {          // pressed, released or changed: the press itself is one step
+            m_repeatDir = r;
+            m_gapUntil = 0;
+            m_nextPulse = now + (DWORD)g_cfg.menuRepeatDelay;
+            return pov;
+        }
+        if (!r) return pov;
+        if (m_gapUntil) {
+            if ((LONG)(now - m_gapUntil) < 0 || m_gapReads < kMenuPovGapReads) {  // released for the gap
+                m_gapReads++;
+                return pov & ~r;
+            }
+            m_gapUntil = 0;  // pressed again: one more step
+            m_nextPulse = now + (DWORD)g_cfg.menuRepeatRate;
+            return pov;
+        }
+        if ((LONG)(now - m_nextPulse) >= 0) {
+            m_gapUntil = now + kMenuPovGap;
+            m_gapReads = 1;  // this read is the gap's first
+            return pov & ~r;
+        }
+        return pov;
+    }
+
     LONG m_ref;
     int m_slot;
     DWORD m_formatSize;
     LONG m_min[kNumAxes], m_max[kNumAxes];
     DWORD m_deadzone[kNumAxes], m_saturation[kNumAxes];
     WORD m_lastButtons = 0;
+    WORD m_menuHeld = 0;  // MenuPov: D-pad directions held since before the menus, not repeated
+    WORD m_repeatDir = 0; // MenuPov: the directions being repeated
+    DWORD m_nextPulse = 0, m_gapUntil = 0;
+    int m_gapReads = 0;   // MenuPov: GetDeviceState calls that reported the current gap's release
 };
 
 // ---------------------------------------------------------------- IDirectInput8A wrapper

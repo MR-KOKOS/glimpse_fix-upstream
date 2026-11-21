@@ -349,6 +349,13 @@ static void UnlockDecals()
         pureLogged = true;
     }
     if (done || *kUnlockAnchovy || !SinglePlayerRace()) return;  // or the game has not taken the last request yet
+    // SinglePlayerRace counts one screen while the in-game resources are unreadable (a split screen load);
+    // the front end's race setup (0x453300 returns 0xD6EE78) has the screen count the game's consumer
+    // 0x4BF180 checks (+0x9C > 1: no unlock). Steam build only: the address is not in build_ru.inc.
+    if (CurrentBuild() == BUILD_STEAM) {
+        const int* screens = (const int*)(0x00D6EE78 + 0x9C);
+        if (IsBadReadPtr(screens, sizeof(int)) || *screens > 1) return;
+    }
     BYTE* mgr = *(BYTE**)G(0x00D64E00);
     BYTE* ach = mgr ? mgr + 0x208 : NULL;
     if (!ach || IsBadReadPtr(ach, 0x40) || *(DWORD*)ach != G(0x00C4AAC4) || !ach[4] || !ach[0x3C]) return;
@@ -708,22 +715,13 @@ static void UpdatePromptBar(bool pad)
     }
 }
 
-// Jumps from 'at' to 'hook'; returns a trampoline that runs the 'len' displaced bytes (whole
-// instructions without relative operands) and continues behind them.
-void* Detour(BYTE* at, int len, void* hook)
+// RTTI: vt[-1] is the complete object locator (+0 signature 0, +0xC the type descriptor, its name at +8)
+bool ClassIs(void** vt, DWORD col, const char* name)
 {
-    BYTE* tramp = (BYTE*)VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!tramp) return NULL;
-    memcpy(tramp, at, len);
-    tramp[len] = 0xE9;
-    *(DWORD*)(tramp + len + 1) = (DWORD)(at + len) - (DWORD)(tramp + len + 5);
-
-    BYTE jmp[16];
-    memset(jmp, 0x90, sizeof(jmp));
-    jmp[0] = 0xE9;
-    *(DWORD*)(jmp + 1) = (DWORD)hook - (DWORD)(at + 5);
-    WriteMemory(at, jmp, len);
-    return tramp;
+    const DWORD* c = (const DWORD*)vt[-1];
+    if ((DWORD)c != col || c[0] != 0) return false;
+    const char* n = (const char*)(c[3] + 8);
+    return !IsBadStringPtrA(n, 64) && !strcmp(n, name);
 }
 
 static bool s_promptBarKnown;
@@ -918,7 +916,6 @@ void ApplyQualityCap()
 
 void OnInputFrame()
 {
-    if (g_cfg.profile) ProfilerTick();
     CheckD3DHooks();
     if (g_cfg.steamLan) OnlineFrame();  // before the extras below read their settings
     if (s_knownBuild && (g_cfg.patchMask & PATCH_LOD)) {
@@ -957,6 +954,7 @@ void OnInputFrame()
         DWORD now = GetTickCount();
         if (now - last > 15000) {
             last = now;
+            DlcLogStats();
             BYTE* r = *(BYTE**)G(0x00D64708);
             BYTE* rr = r ? *(BYTE**)(r + 4) : NULL;
             Log("state: quality=%d internal=%dx%d screen=%dx%d LOD high=%.0f mid=%.0f low=%.0f pool level=%d used=%d",
@@ -967,6 +965,17 @@ void OnInputFrame()
         }
     }
     if (g_cfg.log) AudioDiagTick();
+    // [DLC] Music only with a merged overlay that brings Quarry's level audio (the only level it swaps the music
+    // for); otherwise the base game's audio thread is left alone. Decided once: the overlay is merged at DLL load
+    // The same two messages load Deadline's sounds (the DLC's DLCMenu bank) when a Deadline race starts
+    static int s_musicWanted = -1, s_menuWanted = -1;
+    if (s_musicWanted < 0) {
+        s_musicWanted = g_cfg.dlcMusic && g_cfg.dlcOverlays && g_cfg.dlcTracks &&
+                        DlcOverlayHas("Audio/Locales/quarry/quarry_Audio.xml");
+        s_menuWanted = DeadlineMenuWanted();
+    }
+    if (s_musicWanted || s_menuWanted)  // until its two audio thread messages are wrapped (dlcmusic.cpp)
+        DlcMusicTick(s_musicWanted != 0, s_menuWanted != 0);
     // Log=1: the game polls its input but presents no frames (window in the background, device lost, a hang
     // in the drawing): when that starts and ends, with the foreground window's owner
     if (g_cfg.log && g_lastPresent) {
@@ -1050,8 +1059,8 @@ void ApplyGamePatches()
     if (mask & PATCH_FLARES) PatchBloomAndFlares();
     if (mask & PATCH_CAMERA) PatchCamera();
     if (mask & PATCH_CAMERA) PatchDepthOfField();
-    if (g_cfg.profile && CurrentBuild() == BUILD_STEAM) InstallProfiler();  // research tool, made on this build
     if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
+    if (g_cfg.dlcTracks) DlcRegisterTracks();
     CheckOpponentEngineBanks();
     if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
 }

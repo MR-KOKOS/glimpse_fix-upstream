@@ -15,11 +15,15 @@ struct Config {
     float stickDeadzone;     // radial, 0..1
     float triggerDeadzone;   // 0..1
     float rumbleScale;       // multiplier for the game's motor values
+    bool  menuRepeat;        // a held D-pad repeats in menus (outside a race), as repeated presses
+    int   menuRepeatDelay;   // ms before the first repeat
+    int   menuRepeatRate;    // ms between repeats
     GlyphStyle glyphs;
     bool  log;
     bool  dumpTextures;      // [Debug] DumpTextures: write the game's textures as DDS files at the next start, then quit
+    unsigned long long dumpWatchPS[16];  // [Debug] DumpWatchPS: pixel shader hashes whose draws the F9 dump captures (diag.cpp)
+    int   dumpWatchCount;
     bool  testFeed;          // read pad state from shared memory instead of XInput (development)
-    bool  profile;           // count calls of timing-relevant game functions (development)
     int   frameRate;         // 30 (stock) or 60
     int   streamPoolMB;      // sector streaming pool, 0 = stock (57 MB)
     bool  fixIconSize;       // undo the double resolution scaling of the powerplay icons
@@ -44,7 +48,18 @@ struct Config {
     int   qualityCap;        // highest graphics quality level the game may use (3 = any, 0 = Low only)
     bool  shadows;           // false: nothing casts a shadow (the game's own debug switch)
     int   shadowResolution;  // 1 = the game's 1024 per sun shadow cascade, 2 or 4 = that many times as wide and high
+    bool  dlcOverlays;       // experimental: the archives in glimpse_dlc are laid over data\resident.ark
+    bool  dlcTracks;         // experimental: the converted DLC track Quarry gets a track index (dlcfs.cpp)
+    bool  dlcTracksOnline;   // also with SteamLAN=1: every player must have the same tracks
+    bool  dlcMusic;          // Quarry plays the DLC's race music DLC3_Music in Music/Music's place (dlcmusic.cpp)
+    bool  dlcModes;          // experimental: the converted DLC game mode Deadline (TimeTrialPlus) opened in quick play (dlcmode.cpp)
+    bool  dlcPickups;        // experimental: Deadline's green pickup boxes that stop the countdown (dlcpickups.cpp)
+    bool  pickupVignette;    // with dlcPickups: a cyan glow along the screen's edges while the clock is stopped
+    float deadlineBonus;     // seconds added to Deadline's start times without the boxes (Modes=1, Pickups=0)
+    bool  dlcCars;           // experimental: the overlay's DLC cars listed in the front-end car select without UnlockAll (dlccars.cpp)
+    bool  dlcCarsCareer;     // experimental, with dlcCars: also in the career's front-end car select
     int   textureDetail;     // 0 = full; 1-3 skip that many of the textures' top mip levels
+    bool  glassFix;          // car glass: no sun specular from the glass's opacity (G-buffer alpha as on the Xbox, glass.cpp)
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's
@@ -113,7 +128,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "2.2.0"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "2.3.0"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -145,23 +160,42 @@ extern volatile DWORD g_lastPresent;                 // diag.cpp: GetTickCount o
 void RunTextureDump();                               // texdump.cpp: DumpTextures=1, never returns (the game ends)
 void HdrToneMapped();                                // right after the game's tone mapping pass: the gain (stage 2)
 void HdrInstallUiHook();                             // after UltrawideDeviceCreated: Scaleform hook for the HUD copy
+struct IDirect3DSurface9;
+IDirect3DSurface9* HdrGainTarget();                  // this frame's gain target after the tone mapping, or NULL
 void SaveStage0Tracking();     // around a pass of our own that sets samplers (all stages are kept)
+struct IDirect3DBaseTexture9;
+void TextureDetailExclude(IDirect3DBaseTexture9* t);  // diag.cpp: a texture of ours keeps its filter and mip levels
+void TextureDetailForget(IDirect3DBaseTexture9* t);   // the same texture before it is released
 void RestoreStage0Tracking();
 void BeginEdgeClamp();   // until EndEdgeClamp: texture addressing clamped at the edges (motion blur pass)
 void EndEdgeClamp();
+struct IDirect3DPixelShader9;
+unsigned long long PixelShaderHash(IDirect3DPixelShader9* ps);  // diag.cpp: the dump's hash of the runtime's copy, 0 = unreadable
+
+// glass.cpp - GlassFix=1: the car glass draws of the race write specular intensity 0 into the G-buffer, as on the Xbox
+struct GlassSaved {
+    DWORD srcBlendAlpha, colorWrite1;  // as the game had them, put back after the draw
+};
+extern bool g_glassBound;                                // the pixel shader set last is a glass shader
+void GlassDeviceCreated(DWORD flags);                    // before the shader hooks go in
+void GlassShaderCreated(void* ps, unsigned long long hash);  // CreatePixelShader, with the hash of its code
+void GlassPixelShaderSet(IDirect3DPixelShader9* ps);    // SetPixelShader
+void GlassDeviceReset();                                 // after Reset: no pixel shader set
+void GlassSaveTracking();                                // with SaveStage0Tracking / RestoreStage0Tracking
+void GlassRestoreTracking();
+bool GlassBegin(IDirect3DDevice9* dev, GlassSaved* saved, const char* call, UINT prims);  // g_glassBound draws: true = changed
+void GlassEnd(IDirect3DDevice9* dev, const GlassSaved* saved);                           // after a changed draw
+LONG GlassTakeChangedDraws();                            // Log=1: draws changed since the last call
 
 // audio_diag.cpp
 void InstallAudioDiagnostics();
 void AudioDiagTick();
 void PauseGameSound(bool pause);  // photo mode: all sound categories the game has used
+void AudioDiagProjectsChanged();  // dlcmusic.cpp swapped FMOD projects: fetch the music category's group again
 
 // framerate.cpp
 void PatchFrameRate();
 void FramePace();  // after every Present: 60 fps pacing of the main loop
-
-// profile.cpp
-void InstallProfiler();
-void ProfilerTick();
 
 // postfx.cpp
 void PatchMotionBlur();
@@ -174,9 +208,9 @@ void ApplyLensFlare();  // per frame
 extern float g_photoBloom, g_photoExposure, g_photoDof, g_photoFocus;
 
 // boost.cpp
-void BoostTick();
+void BoostTick();        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
 void RacePad(int slot, XINPUT_GAMEPAD* pad);  // the pad as the game sees it in a race: boost/handbrake buttons, Y on D-pad down
-bool RaceRunning();      // camera.cpp: a race camera ran in the last half second (in a race, not paused)        // per input frame: boost on X or BoostKey, power bar fill on LS+RS or PowerBarFillKey
+bool RaceRunning();      // camera.cpp: a race camera ran in the last half second (in a race, not paused)
 float BoostBlurScale();  // motion blur multiplier while boosting (1 = none)
 
 // ultrawide.cpp (UltrawideFix=2)
@@ -195,6 +229,8 @@ void CameraTick();       // per input frame: zoom keys, HUD key, photo mode
 void ApplyExplosionShake();  // per input frame: ExplosionShakeOff=1
 bool SinglePlayerRace(); // a race camera runs on a single screen (not paused)
 bool CameraBlocksPad();  // photo mode drives the camera with the pad: the game sees it idle
+bool RaceCameraHooked(); // the race camera updates are hooked, so RaceRunning() can see a race
+DWORD RaceCameraAge();   // ms since the last race camera update (0xFFFFFFFF: none yet)
 bool RaceCameraPose(float* pos, float* fwd);  // the game's race camera, updated in the last half second
 bool OnlineSession();      // SteamLAN: Quazal's LAN mode is in use (online.cpp)
 
@@ -216,6 +252,9 @@ bool MapEmbedded(DWORD value, DWORD* mapped);  // value is a table address: its 
 bool BytesMatch(const void* at, const char* hex);     // hex string, no spaces; embedded addresses are mapped
 bool CodeMatches(const void* at, const void* expected, size_t len);  // the same with raw bytes
 void WriteMemory(void* at, const void* src, size_t len);
+// the vtable's RTTI complete object locator (vt[-1]) is col and names the class name (".?AV...@@");
+// reads unguarded: call it inside __try
+bool ClassIs(void** vt, DWORD col, const char* name);
 
 // Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x48 Invoke
 struct GFxValue {
@@ -230,7 +269,6 @@ enum { GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
 
 typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* result, const GFxValue* args, unsigned count);
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
-void* Detour(BYTE* at, int len, void* hook);         // returns the trampoline
 void ApplyGamePatches();
 
 // online.cpp - SteamLAN=1 (PROTOTYPE): the game's LAN mode over Steam. A transport for Quazal's
@@ -243,6 +281,11 @@ void OnlinePresent(IDirect3DDevice9* dev);       // draws the lobby banner befor
 enum { OVERLAY_TOP_LEFT, OVERLAY_BOTTOM_RIGHT };
 // overlay.cpp: up to 4 lines of UTF-8 text on a dark panel on the back buffer, colors as D3DCOLOR, alpha 0..1
 void OverlayDraw(IDirect3DDevice9* dev, const char* const* lines, const DWORD* colors, int count, int corner, float alpha);
+// Deadline's pickup feedback: centred lines (size 1 large, 2 medium) from yFrac of the height down, two bars round
+// the first line (barColor, alpha 0 = none), a glow along the screen's edges (edgeColor, alpha 0 = none)
+void OverlayDrawFeedback(IDirect3DDevice9* dev, const char* const* lines, const DWORD* colors, const int* sizes, int count,
+                         float yFrac, DWORD barColor, DWORD edgeColor);
+bool OverlayPreloadFeedback(IDirect3DDevice9* dev, const wchar_t* chars);  // its fonts and glyphs ahead of use
 void OverlayDeviceLost();                        // before Reset
 void OverlayDeviceReset();                       // after a successful Reset
 void MoviePresent(IDirect3DDevice9* dev);        // game.cpp: the movie skip prompt
@@ -253,6 +296,38 @@ void SmaaSceneDone();                            // postfx.cpp: the tone mapper 
 void SmaaBeforeHud();                            // hdr.cpp: a Scaleform movie is about to be drawn
 bool HdrUiHooked();                              // hdr.cpp: the Scaleform hook is in place
 void SmaaPresent(IDirect3DDevice9* dev);         // diag.cpp: start of Present
+void DlcInstall();         // [DLC] Overlays: while the DLL loads (dlcfs.cpp)
+void DlcLogStats();
+void DlcUninstall();
+void DlcRegisterTracks();  // [DLC] Tracks: at ApplyGamePatches, after the exe's static initialisers (dlcfs.cpp)
+bool DlcTracksDecided();   // DlcRegisterTracks has run (or [DLC] Tracks=0): the DLC track set is final
+// the DLC tracks other players need for a LAN game together (online.cpp, its thread, after DlcTracksDecided): sig "none"
+// without a merged track overlay, else 16 hex digits over the fix version, the registered tracks and their files;
+// names "Quarry=15, nem_quarry=16" (dlcfs.cpp; computed once)
+void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize);
+bool DlcOverlayHas(const char* path);  // the merged resident.ark is in use and has this path (dlcfs.cpp)
+void DlcInstallModes();    // [DLC] Modes: right after ApplyGamePatches (dlcmode.cpp)
+struct IDirect3DSurface9;
+// dlcpickups.cpp - [DLC] Pickups=1: Deadline's green pickup boxes (stop the countdown)
+void DlcInstallPickups();  // right after DlcInstallModes
+bool PickupsWanted();      // Pickups=1, Steam build, the merged overlay brings the mode (after DlcInstall; decided once)
+void PickupsDeviceCreated(IDirect3DDevice9* dev);
+void PickupsDeviceLost();                        // before Reset
+void PickupsDepthSet(IDirect3DSurface9* ds);     // diag.cpp's SetDepthStencilSurface hook, before the device's
+void PickupsBeforePost();                        // postfx.cpp's bloom hook, before the game's pass (the scene is done)
+void PickupsAfterToneMap();                      // postfx.cpp's bloom hook, right after the game's tone mapping
+void PickupsPresent(IDirect3DDevice9* dev);      // diag.cpp's Present hook: the fallback "+0,5s" line
+// postfx.cpp's colour cube pass (vignette, gradient, grading): Deadline's "Frozen Time" preset for the call while
+// the clock is frozen; saved: 17 floats (the block's +0x14..+0x57), put back by PickupsGradeEnd after the call
+bool PickupsGradeBegin(unsigned char* params, float* saved);
+void PickupsGradeEnd(unsigned char* params, const float* saved);
+void DlcInstallCars();     // [DLC] Cars: right after DlcInstallModes (dlccars.cpp)
+// [DLC] Music (music) and Deadline's sounds (menu): per input frame, wraps two audio thread messages once (dlcmusic.cpp)
+void DlcMusicTick(bool music, bool menu);
+bool DeadlineMenuWanted();  // dlcpickups.cpp: Deadline's HUD is on and the overlay brings the converted DLCMenu bank
+bool DeadlineRaceNow();     // the race setup's mode is TimeTrialPlus (any thread; read only)
+bool DlcMusicIsDlcEvent(void* evt);  // the FMOD event is one of DLC3_Music's (audio_diag.cpp's log)
+void InstallDiagnostics(); // Log=1: crash lines and the game's debug text in the log (online.cpp; once)
 void ApplyQualityCap();    // QualityCap: before the device is made and every frame (game.cpp)
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
 void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's audio system starts

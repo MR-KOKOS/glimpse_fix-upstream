@@ -940,6 +940,10 @@ void HdrInstallUiHook()
     s_uiHooked = true;
 }
 
+// [DLC] Pickups (dlcpickups.cpp): this frame's gain target, right after the tone mapping (NULL when there is none),
+// so that what the fix draws into the tone mapped picture can write gain 1 there and stay at paper white like the HUD
+IDirect3DSurface9* HdrGainTarget() { return g_cfg.hdr && !s_failed && s_toneDone ? s_gainSurf : NULL; }
+
 #ifdef HDR_TEST  // the offline check (scratch test program) reads the swap chain back
 ID3D11Device* HdrTestDevice11() { return s_dev11; }
 IDXGISwapChain1* HdrTestSwap() { return s_swap; }

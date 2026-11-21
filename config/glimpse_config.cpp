@@ -12,6 +12,8 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shellapi.h>
+#include <shobjidl.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <math.h>
@@ -22,11 +24,13 @@
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")  // the folder picker (IFileOpenDialog)
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 // ---------------------------------------------------------------- options
 
-enum Kind { BOOL_OPT, CHOICE, RANGE, TEXT };  // TEXT: a line of text, at most 32 characters
+enum Kind { BOOL_OPT, CHOICE, RANGE, TEXT, PATH };  // TEXT: a line of text (TextCharOk, TextLimit); PATH: a folder
 
 struct Option {
     const char* section;
@@ -36,6 +40,7 @@ struct Option {
     const char* help;
     const char* def;
     // CHOICE: "value|Text;value|Text;..."   RANGE: min, max, step, decimals
+    // TEXT: choices = the characters allowed besides letters and digits (NULL: - and _), hi = most characters (0: 32)
     const char* choices;
     double lo, hi, step;
     int decimals;
@@ -59,19 +64,23 @@ static Option kOptions[] = {
     { "Controller", "TriggerDeadzone", RANGE, "Trigger deadzone", "Deadzone of LT and RT.", "0.05", 0, 0, 0.5, 0.01, 2 },
     { "Controller", "RumbleStrength", RANGE, "Rumble strength", "Multiplier on the game's rumble. 0 = off.", "1.0", 0, 0, 2, 0.05, 2 },
     { "Controller", "ButtonGlyphs", CHOICE, "Button prompts", "Icons in the prompt bar while the pad is in use. Keyboard = never switch.", "xbox", "xbox|Xbox;playstation|PlayStation;keyboard|Keyboard" },
+    { "Controller", "MenuRepeat", BOOL_OPT, "D-pad repeat in menus", "A held D-pad keeps scrolling in the menus and the car select, one step at a time. For the virtual pads, not for other DirectInput devices. Not during a race; a direction pressed within half a second of opening the pause menu repeats only after pressing it again. Off = one step per press.", "1" },
+    { "Controller", "MenuRepeatDelay", RANGE, "  D-pad repeat delay (ms)", "How long the D-pad is held before it repeats.", "450", 0, 100, 2000, 10, 0 },
+    { "Controller", "MenuRepeatRate", RANGE, "  D-pad repeat rate (ms)", "Time between two repeated steps: a step every this many ms plus a 40 ms release. Higher = slower, more precise.", "160", 0, 80, 1000, 10, 0 },
     // Graphics
     { "Graphics", "FrameRate", CHOICE, "Frame rate", "60 fps with the simulation stepped exactly as at 30 fps.", "60", "60|60 fps;30|30 fps (stock)" },
     { "Graphics", "SMAA", BOOL_OPT, "Anti-aliasing (SMAA)", "Smooths the jagged edges of the 3D picture with SMAA 1x before the game draws its HUD, so text and HUD stay sharp. Costs about 0.1 ms per frame at 4K on an RTX 5090 (at Very High, which renders at twice the resolution, about four times that).", "1" },
     { "Graphics", "QualityCap", CHOICE, "Graphics quality limit", "The highest of the game's graphics quality levels it may use, whatever its menu is set to. The level chosen in the game's menu is kept and applies again once the limit allows it. Below High the sun shadows are simpler and shorter and there is no motion blur; Low also has no depth of field.", "3", "3|None (the game's setting);2|At most High;1|At most Medium;0|Low" },
     { "Graphics", "TextureDetail", CHOICE, "Texture detail", "Full = the textures as the game streams them. Lower draws every texture that has smaller versions of itself at half, a quarter or an eighth of its size. Text stays sharp; menu and HUD pictures that have smaller versions get blurrier too. It changes only what is drawn, not what is loaded.", "0", "0|Full;1|Half;2|Quarter;3|Eighth" },
+    { "Graphics", "GlassFix", BOOL_OPT, "Car glass as on the Xbox 360", "The PC port lets every car window take the sun's shine of whatever lies behind it; the window frames of the converted DLC cars turn flat white in the sun. On = the glass as on the Xbox 360: no sun highlight on it, its reflections stay. The glass of the base cars changes slightly too.", "1" },
     { "Graphics", "Anisotropy", CHOICE, "Anisotropic filtering", "Sharper textures at an angle. Off = the game's plain linear filtering.", "16", "0|Off;2|2x;4|4x;8|8x;16|16x" },
     { "Graphics", "MotionBlurStrength", RANGE, "Motion blur", "Multiplier on the cameras' motion blur (graphics quality High or Very High). 0 = off.", "1.0", 0, 0, 3, 0.1, 1 },
     { "Graphics", "Vignette", BOOL_OPT, "Vignette", "Darkened screen edges of the race cameras.", "0" },
     { "Graphics", "Gradient", BOOL_OPT, "Screen gradient", "The translucent blue band the cameras lay over the top of the screen.", "1" },
     { "Graphics", "Bloom", BOOL_OPT, "Bloom", "Glow around bright areas. Off keeps the tone mapping.", "1" },
-    { "Graphics", "BloomStrength", RANGE, "  Bloom strength", "Glow on bright areas, on top of each camera's value. Applies while the game runs.", "1.0", 0, 0, 5, 0.05, 2 },
-    { "Graphics", "BloomTone", RANGE, "  Bloom tone", "Second bright pass value, a softer effect. Applies while the game runs.", "1.0", 0, 0, 5, 0.05, 2 },
-    { "Graphics", "BloomCurve", RANGE, "  Bloom curve", "How the glow is added; below 1.0 has no effect. Applies while the game runs.", "1.0", 0, 0, 5, 0.05, 2 },
+    { "Graphics", "BloomStrength", RANGE, "  Bloom strength", "Glow on bright areas, on top of each camera's value. Applies while the game runs.", "1.0", 0, 0, 10, 0.05, 2 },
+    { "Graphics", "BloomTone", RANGE, "  Bloom tone", "Second bright pass value, a softer effect. Applies while the game runs.", "1.0", 0, 0, 10, 0.05, 2 },
+    { "Graphics", "BloomCurve", RANGE, "  Bloom curve", "How the glow is added; below 1.0 has no effect. Applies while the game runs.", "1.0", 0, 0, 10, 0.05, 2 },
     { "Graphics", "Exposure", RANGE, "Exposure", "Brightness of the whole picture. Applies while the game runs.", "1.0", 0, 0.25, 3, 0.05, 2 },
     { "Graphics", "LensFlare", BOOL_OPT, "Lens flares", "Flares of the sun and lights, including the screen space flare.", "1" },
     { "Graphics", "ParticleFlare", BOOL_OPT, "Particle flares", "Flares of sparks, explosions and lights.", "1" },
@@ -136,15 +145,34 @@ static Option kOptions[] = {
     // Debug
     { "Debug", "DumpTextures", BOOL_OPT, "Dump textures on the next start", "At the next start the game's textures are written as DDS files to the folder glimpse_textures in the game folder (one folder per archive, each with an index.txt; about 570 MB, roughly 10 seconds). A window shows that the dump is running, then the game closes and this switch goes off again.", "0" },
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
+    { "Debug", "DumpWatchPS", TEXT, "  Frame dump: watched pixel shaders", "Development: pixel shader hashes as the F9 frame dump's log shows them, separated by commas (tools\\dlc\\shaders\\pshash.py lists those of the game's shaders). For the first 4 draws with one of them, the dump saves every render target right before and after the draw, with the draw's textures and shader constants in the log. Empty = none.", "", ",", 0, 271, 0, 0 },
+    // DLC: your own Xbox 360 DLC, converted on this PC (the buttons below the options, see DlcStart)
+    { "DLC", "DumpFolder", PATH, "Xbox DLC folder", "Your own dump of the Split/Second DLC from an Xbox 360: the folder 425607E7 (or its subfolder 00000002) with the packages as the console keeps them. It is only read. Nothing is downloaded: without your own DLC there is nothing to convert.", "" },
+    { "DLC", "Overlays", BOOL_OPT, "Converted DLC (experimental)", "EXPERIMENTAL: the converted archives in glimpse_dlc in the game folder are laid over the game's data: the DLC cars (11) and the Deadline mode, and the tracks below. Off = the game as it is, whatever glimpse_dlc holds.", "0" },
+    { "DLC", "Cars", BOOL_OPT, "DLC cars in the car select without Unlock all", "The converted DLC cars in the car select of quick play and free play, also without \"Everything unlocked\". Not in the career unless the option below is on, not online.", "1" },
+    { "DLC", "CarsCareer", BOOL_OPT, "  DLC cars also in the career car select (experimental)", "EXPERIMENTAL: the DLC cars can also be picked for career events started from the episode screen that have no fixed car. The in-game car select between events still offers only the season's cars.", "0" },
+    { "DLC", "Tracks", BOOL_OPT, "DLC tracks Quarry and Minepit Park (experimental)", "EXPERIMENTAL: the converted DLC tracks get their own track numbers so quick play can load them: Quarry, and Minepit Park (nem_quarry, the Survival track of Survival At The Rock). With Minepit Park also the DLC game mode Survival Race (two players, five laps among the trucks), which the game lists in split screen itself, not online. Needs the DLC overlays ([DLC] Overlays=1), the track overlay glimpse_dlc\\track_*.ark and the converted track files in glimpse_dlc\\quarry\\data and glimpse_dlc\\nem_quarry\\data (or below data). Off by itself with Online over Steam unless the option below is on; not for the game's own LAN mode with players who lack the track.", "0" },
+    { "DLC", "Music", BOOL_OPT, "  DLC race music on Quarry", "In races on Quarry the DLC package's own race music plays, as on the Xbox 360; Minepit Park keeps the game's music. Off = the game's own race music on Quarry too. Needs the DLC overlays and the DLC tracks (both above) built with the track's music (\"Build DLC\" does that), and Virtual pads 1 or more (page Controller).", "1" },
+    { "DLC", "TracksOnline", BOOL_OPT, "DLC track also online", "The DLC tracks also with Online over Steam. The game sends only the track's number, so you then see and join only the LAN games of players with the same DLC tracks (same track pack and fix version), and they yours; the in-game banner says when a game is not shown. Players without DLC tracks play with each other as before.", "0" },
+    // page "Deadline mode" (PageOf): the DLC game mode
+    { "DLC", "Modes", BOOL_OPT, "Deadline game mode (experimental)", "EXPERIMENTAL: opens the entry of the DLC game mode Deadline (a countdown time trial) in quick play; nothing else is unlocked. Single player. Also shows Survival Race's own quick play movie (the mode itself comes with the DLC tracks). Needs the converted DLC (page DLC), built with the mode (\"Build DLC\" does that).", "0" },
+    { "DLC", "Pickups", BOOL_OPT, "  Deadline pickups (experimental)", "EXPERIMENTAL: the time pickups of the game mode Deadline: the Xbox 360's hexagonal tokens (their model comes from your own DLC; plain cubes if it is missing), and the Xbox's HUD: the timer turns cyan while the clock stands, \"+0,5s\" / \"+2,0s\" at the top centre and the Xbox's pickup sounds when you collect one.", "0" },
+    { "DLC", "PickupVignette", BOOL_OPT, "  Frozen Time look while the clock is stopped", "While a pickup holds the Deadline clock, the screen gets the Xbox's Frozen Time look (cyan edges, the colour grade off). Off = no such look; the clock stops all the same.", "1" },
+    { "DLC", "DeadlineBonus", RANGE, "  Deadline extra start time (without pickups)", "The converted Deadline mode starts with the Xbox times, which count on the pickups for more time. Without pickups these seconds are added to the start time so the races can be finished. With the pickups on, the Xbox rules apply and nothing is added.", "50", 0, 0, 300, 5, 0 },
 };
 static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
 // the pages in the sidebar; an option's page is its INI section, split up where a section is long (PageOf)
 static const char* const kPages[] = { "Presets", "Controller", "Display", "Effects", "World", "Camera",
-                                      "Gameplay", "Boost and handbrake", "AI", "Audio", "Online", "Debug" };
+                                      "Gameplay", "Boost and handbrake", "AI", "Audio", "Online", "DLC", "Deadline mode",
+                                      "Debug" };
 static const int kPageCount = sizeof(kPages) / sizeof(kPages[0]);
+static const int kDlcPage = 11;  // its options, then the build and install buttons (CreateControls)
+// [DLC] keys of the DLC game modes, on a page of their own (PageOf); a new mode's keys go here too
+static const char* const kDlcModeKeys[] = { "Modes", "Pickups", "PickupVignette", "DeadlineBonus" };
+static const int kDlcExtraRows = 3;  // the buttons and the two-line state below them, in rows of kRowH
 
 // options the presets do not touch
-static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online"); }
+static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online") || !strcmp(o.section, "DLC"); }
 
 // the page an option is shown on: its INI section; [Graphics] is split into the display and the effects,
 // [Gameplay] into the game, the boost and handbrake, and the AI boost
@@ -161,6 +189,9 @@ static const char* PageOf(const Option& o)
         if (!strncmp(o.key, "AIBoost", 7)) return "AI";
         if (!strncmp(o.key, "Boost", 5) || !strncmp(o.key, "Handbrake", 9)) return "Boost and handbrake";
     }
+    if (!strcmp(o.section, "DLC"))
+        for (const char* k : kDlcModeKeys)
+            if (!strcmp(o.key, k)) return "Deadline mode";
     return o.section;
 }
 
@@ -303,12 +334,17 @@ static const COLORREF kBack = RGB(24, 25, 28), kSide = RGB(32, 33, 38), kSideSel
 static HBRUSH s_backBrush, s_sideBrush, s_fieldBrush;
 static HFONT s_font, s_fontBold, s_fontTitle, s_fontBrand, s_fontSmall;
 
-enum Role { R_NONE, R_LABEL, R_VALUE, R_DIM, R_TITLE, R_BRAND, R_SIDEDIM, R_NAV, R_PRESET, R_ACTION, R_TOGGLE, R_SELECT };
+enum Role { R_NONE, R_LABEL, R_VALUE, R_DIM, R_TITLE, R_BRAND, R_SIDEDIM, R_NAV, R_PRESET, R_ACTION, R_TOGGLE, R_SELECT,
+            R_LAUNCH };
 
 static bool s_infoWarn;  // the help text shown is a warning
 static const int kPresetCount = 5;
 static HWND s_wnd, s_status, s_info, s_title, s_subtitle, s_nav[kPageCount], s_preset[kPresetCount],
-    s_presetText[kPresetCount], s_undo, s_undoText;
+    s_presetText[kPresetCount], s_undo, s_undoText, s_launch;
+// the DLC page: the folder's "..." button, Build DLC / Install / Open log, and the state line below them
+static HWND s_dlcBrowse, s_dlcBuild, s_dlcInstall, s_dlcUninstall, s_dlcLog, s_dlcState;
+static std::string s_dlcText;  // what the state line shows
+static bool s_dlcWarn;         // ... in red: the last build or install failed
 static int s_dpi = 96;
 static int s_page;
 static bool s_loading;
@@ -360,7 +396,7 @@ static int WindowDpi(HWND wnd)
 }
 
 // layout, in 96 dpi pixels
-static const int kWidth = 880, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100;
+static const int kWidth = 880, kSideW = 210, kContentX = 240, kLabelW = 300, kRowH = 33, kRowTop = 100, kPathLabelW = 150;
 // the sidebar: the pages from 90 on, kNavStep apart; the presets page: a row for each preset (its button
 // and what it sets), then the way back to the settings from before a preset
 static const int kNavTop = 90, kNavStep = 36, kNavH = 34, kPresetRowH = 96, kPresetRowAvg = 76;
@@ -375,8 +411,9 @@ static void FitHeight()
         while (page < kPageCount - 1 && strcmp(kPages[page], PageOf(o))) page++;
         if (++rows[page] > most) most = rows[page];
     }
+    if (rows[kDlcPage] + kDlcExtraRows > most) most = rows[kDlcPage] + kDlcExtraRows;
     int content = kRowTop + most * kRowH + 8 + 130;  // the rows, a gap, help text and buttons
-    int presets = kRowTop + kPresetCount * kPresetRowAvg + 48 + 130;  // rows as tall as their text, on average
+    int presets = kRowTop + kPresetCount * kPresetRowAvg + 48 + 130;  // rows as tall as their text on average, plus the way back
     if (presets > content) content = presets;
     int side = kNavTop + kPageCount * kNavStep + 16;  // the pages end there
     kHeight = 600;
@@ -484,14 +521,22 @@ static void ShowValue(Option& o, double v)
     else if (!strcmp(o.key, "BoostAcceleration") || !strcmp(o.key, "HandbrakeStrength")) text += " m/s per s";
     else if (!strcmp(o.key, "HandbrakeDrift")) text += " rad/s  " + std::to_string((int)(v * 57.29578 + 0.5)) + " deg/s";
     else if (!strcmp(o.key, "HDRPeakBrightness") || !strcmp(o.key, "HDRPaperWhite")) text += " nits";
+    else if (!strcmp(o.key, "DeadlineBonus")) text += " s";
     else if (strstr(o.key, "Strength") || strstr(o.key, "Blur") || strstr(o.key, "Bloom") || strstr(o.key, "Scale") ||
              !strcmp(o.key, "Exposure") || !strcmp(o.key, "FOV"))
         text += "x";
     SetWindowTextA(o.value, text.c_str());
 }
 
-// TEXT: what may be typed (the INI and Steam's lobby filter take it as it is)
-static bool TextCharOk(char c) { return isalnum((unsigned char)c) || c == '-' || c == '_'; }
+// TEXT: what may be typed (the INI and Steam's lobby filter take it as it is), and how much
+// PATH: what a folder name may hold (no control characters, none of " < > | * ?), up to MAX_PATH
+static bool TextCharOk(const Option& o, char c)
+{
+    if (o.kind == PATH) return (unsigned char)c >= 0x20 && !strchr("\"<>|*?", c);
+    return isalnum((unsigned char)c) || (c && strchr(o.choices ? o.choices : "-_", c));
+}
+static int TextLimit(const Option& o) { return o.kind == PATH ? MAX_PATH - 1 : o.hi > 0 ? (int)o.hi : 32; }
+static bool IsText(const Option& o) { return o.kind == TEXT || o.kind == PATH; }
 
 static bool IsOn(const char* key)
 {
@@ -511,6 +556,12 @@ static void UpdateEnables()
         { "AIBoostLevel", ai && !chaos }, { "AIBoostUnlimited", ai && !chaos },
         { "AIBoostStraightOnly", ai && !chaos }, { "AIBoostChaos", ai },
         { "FriendsOnly", IsOn("SteamLAN") }, { "LobbyName", IsOn("SteamLAN") && !IsOn("FriendsOnly") },
+        { "DumpWatchPS", IsOn("Log") },
+        { "Cars", IsOn("Overlays") }, { "CarsCareer", IsOn("Overlays") && IsOn("Cars") }, { "Modes", IsOn("Overlays") }, { "Pickups", IsOn("Overlays") && IsOn("Modes") },
+        { "PickupVignette", IsOn("Overlays") && IsOn("Modes") && IsOn("Pickups") },
+        { "DeadlineBonus", IsOn("Overlays") && IsOn("Modes") && !IsOn("Pickups") },
+        { "Tracks", IsOn("Overlays") }, { "TracksOnline", IsOn("Overlays") && IsOn("Tracks") },
+        { "Music", IsOn("Overlays") && IsOn("Tracks") },
     };
     for (auto& r : rules) {
         Option* o = Find(r.key);
@@ -541,10 +592,10 @@ static void LoadControls()
         if (o.kind == BOOL_OPT) {
             s_toggle[IndexOf(o)] = atoi(v.c_str()) != 0;
             InvalidateRect(o.ctrl, NULL, TRUE);
-        } else if (o.kind == TEXT) {
+        } else if (IsText(o)) {
             std::string t;
             for (char c : v)
-                if (TextCharOk(c) && t.size() < 32) t += c;
+                if (TextCharOk(o, c) && (int)t.size() < TextLimit(o)) t += c;
             SetWindowTextA(o.ctrl, t.c_str());
         } else if (o.kind == CHOICE) {
             auto items = Choices(o);
@@ -576,8 +627,8 @@ static void Changed(Option& o)
     std::string v;
     if (o.kind == BOOL_OPT) {
         v = s_toggle[IndexOf(o)] ? "1" : "0";
-    } else if (o.kind == TEXT) {
-        char buf[64];
+    } else if (IsText(o)) {
+        char buf[512];  // DumpWatchPS: up to 16 hashes, 271 characters; a PATH up to MAX_PATH
         GetWindowTextA(o.ctrl, buf, sizeof(buf));
         v = buf;
     } else if (o.kind == CHOICE) {
@@ -600,11 +651,596 @@ static void Changed(Option& o)
     Status(msg);
 }
 
+// ---------------------------------------------------------------- DLC: build and install
+//
+// "Build DLC" runs tools\dlc\build_all.py on the folder of [DLC] DumpFolder, "Install" and "Uninstall" run
+// tools\dlc\install_dlc.py (first without --apply, to show what it would do, then with it, for the same game folder).
+// They run with Python through the py launcher in a
+// console without a window (CREATE_NO_WINDOW), inside a job object that ends them together with this program. Their
+// output goes to build.log / install.log in %LOCALAPPDATA%\glimpse_fix\dlc_work, their state to a status file next to
+// it (lines "state", "step", "text", "detail", see build_all.py), read twice a second. The converted files stay on
+// this PC: build_all.py writes them to %LOCALAPPDATA%\glimpse_fix\dlc_staging, install_dlc.py copies them into
+// glimpse_dlc in the game folder after a copy of the saves.
+
+// PLAN / UPLAN: the dry runs of the install and the uninstall
+enum DlcTask { DLC_NONE, DLC_BUILD, DLC_PLAN, DLC_INSTALL, DLC_UPLAN, DLC_UNINSTALL };
+static DlcTask s_task;
+static HANDLE s_taskProc, s_taskJob;
+static DWORD s_taskStart;
+static bool s_taskStopped, s_taskRan;
+static std::string s_taskStatus, s_dlcLogPath;  // the running task's status file, the last task's log
+static std::string s_taskGame;  // the game folder of the dry run, which the --apply run after it uses as well
+static const UINT_PTR kDlcTimer = 1;
+// where the tools are when they are not next to this program (asked once, kept in the INI; not shown as an option)
+static Option s_toolsOpt = { "DLC", "ToolsFolder", PATH, "", "", "" };
+static const char kDlcManifest[] = "glimpse_dlc_manifest.tsv", kDlcInstalled[] = "glimpse_dlc_installed.tsv";
+static const char kNoPython[] =
+    "Python 3 was not found. The DLC is converted on this PC by the converters of glimpse_fix, which are Python "
+    "scripts.\n\n"
+    "1. Install Python 3.8 or newer from python.org (keep \"py launcher\" ticked).\n"
+    "2. Then, in a command prompt: py -3 -m pip install numpy\n\n"
+    "The track Quarry also needs vgmstream-cli and ffmpeg (see the README, \"Your own Xbox DLC\").";
+
+static bool DlcBusy() { return s_task != DLC_NONE; }
+
+static bool FileExists(const std::string& p)
+{
+    DWORD a = GetFileAttributesA(p.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static bool DirExists(const std::string& p)
+{
+    DWORD a = GetFileAttributesA(p.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static std::string EnvVar(const char* name)
+{
+    char buf[MAX_PATH];
+    DWORD n = GetEnvironmentVariableA(name, buf, MAX_PATH);
+    return n && n < MAX_PATH ? buf : "";
+}
+
+static std::string LocalAppData()
+{
+    std::string d = EnvVar("LOCALAPPDATA");
+    return d.empty() ? EnvVar("USERPROFILE") + "\\AppData\\Local" : d;
+}
+
+static std::string DlcWork() { return LocalAppData() + "\\glimpse_fix\\dlc_work"; }
+static std::string DlcStaging() { return LocalAppData() + "\\glimpse_fix\\dlc_staging"; }
+
+// the game folder: where the INI is
+static std::string GameDir()
+{
+    std::string d = s_path;
+    size_t slash = d.find_last_of("\\/");
+    return slash == std::string::npos ? "." : d.substr(0, slash);
+}
+
+static std::string NoTrailingSlash(std::string p)
+{
+    while (p.size() > 3 && (p.back() == '\\' || p.back() == '/')) p.pop_back();
+    return p;
+}
+
+// one command line argument, quoted as the C runtime reads it back (backslashes before a quote doubled)
+static std::string Quote(const std::string& a)
+{
+    std::string out = "\"";
+    size_t bs = 0;
+    for (char c : a) {
+        if (c == '\\') {
+            bs++;
+            continue;
+        }
+        out.append(c == '"' ? bs * 2 + 1 : bs, '\\');
+        bs = 0;
+        out += c;
+    }
+    out.append(bs * 2, '\\');
+    return out + "\"";
+}
+
+static std::string Utf8ToAnsi(const std::string& s)
+{
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+    if (n <= 0) return s;
+    std::vector<wchar_t> w(n);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), w.data(), n);
+    int m = WideCharToMultiByte(CP_ACP, 0, w.data(), n, NULL, 0, NULL, NULL);
+    std::string out(m > 0 ? m : 0, '\0');
+    if (m > 0) WideCharToMultiByte(CP_ACP, 0, w.data(), n, &out[0], m, NULL, NULL);
+    return out;
+}
+
+// the lines of a small text file, also while another process writes it
+static std::vector<std::string> ReadLines(const std::string& fn)
+{
+    std::vector<std::string> out;
+    HANDLE h = CreateFileA(fn.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    std::string all;
+    char buf[4096];
+    DWORD n;
+    while (all.size() < (1 << 20) && ReadFile(h, buf, sizeof(buf), &n, NULL) && n) all.append(buf, n);
+    CloseHandle(h);
+    all = Utf8ToAnsi(all);
+    size_t p = 0;
+    while (p < all.size()) {
+        size_t e = all.find('\n', p);
+        std::string l = all.substr(p, e == std::string::npos ? std::string::npos : e - p);
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        out.push_back(l);
+        if (e == std::string::npos) break;
+        p = e + 1;
+    }
+    return out;
+}
+
+// the value of "key<TAB>value" in a status file or manifest ("" if none)
+static std::string TsvValue(const std::vector<std::string>& lines, const char* key)
+{
+    std::string k = std::string(key) + "\t";
+    for (const std::string& l : lines)
+        if (!l.compare(0, k.size(), k)) return l.substr(k.size());
+    return "";
+}
+
+struct DlcStatus {
+    std::string state, step, text;
+    std::vector<std::string> details, others;  // others: archives in glimpse_dlc that are not from this build
+};
+
+static DlcStatus ReadDlcStatus(const std::string& fn)
+{
+    DlcStatus st;
+    std::vector<std::string> lines = ReadLines(fn);
+    st.state = TsvValue(lines, "state");
+    st.step = TsvValue(lines, "step");
+    st.text = TsvValue(lines, "text");
+    for (const std::string& l : lines) {
+        if (!l.compare(0, 7, "detail\t")) st.details.push_back(l.substr(7));
+        if (!l.compare(0, 6, "other\t")) st.others.push_back(l.substr(6));
+    }
+    return st;
+}
+
+static void DlcSetText(const std::string& text, bool warn)
+{
+    s_dlcText = text;
+    s_dlcWarn = warn;
+    SetWindowTextA(s_dlcState, text.c_str());
+    InvalidateRect(s_dlcState, NULL, TRUE);
+}
+
+static void DlcButtons()
+{
+    SetWindowTextA(s_dlcBuild, DlcBusy() && s_task == DLC_BUILD ? "Stop" : "Build DLC");
+    EnableWindow(s_dlcBuild, !DlcBusy() || s_task == DLC_BUILD);
+    EnableWindow(s_dlcInstall, !DlcBusy());
+    EnableWindow(s_dlcUninstall, !DlcBusy());
+    for (HWND h : { s_dlcBuild, s_dlcInstall, s_dlcUninstall }) InvalidateRect(h, NULL, TRUE);
+}
+
+// what is built and installed, while nothing runs and nothing ran yet
+static void DlcRefresh()
+{
+    if (DlcBusy() || s_taskRan) return;
+    std::vector<std::string> staged = ReadLines(DlcStaging() + "\\" + kDlcManifest);
+    std::vector<std::string> inst = ReadLines(GameDir() + "\\glimpse_dlc\\" + kDlcInstalled);
+    std::string text;
+    if (!staged.empty()) text = "Converted DLC ready to install (built " + TsvValue(staged, "built") + ").";
+    if (!inst.empty()) {
+        std::string when = TsvValue(inst, "installed");
+        text += (text.empty() ? "" : " ") + (when == "in progress" ? std::string("The last install was interrupted: run Install again.")
+                                                                    : "Installed " + when + ".");
+    }
+    if (text.empty()) text = "Pick your Xbox DLC folder, then Build DLC. Install then copies the result into the game folder.";
+    DlcSetText(text, false);
+}
+
+// py.exe in PATH (not the current folder), else where the python.org installer puts it
+static std::string FindPy()
+{
+    std::vector<char> path(32768);
+    DWORD n = GetEnvironmentVariableA("PATH", path.data(), (DWORD)path.size());
+    char hit[MAX_PATH];
+    if (n && n < path.size() && SearchPathA(path.data(), "py.exe", NULL, MAX_PATH, hit, NULL)) return hit;
+    std::string more[] = { LocalAppData() + "\\Programs\\Python\\Launcher\\py.exe", EnvVar("SystemRoot") + "\\py.exe" };
+    for (const std::string& p : more)
+        if (FileExists(p)) return p;
+    return "";
+}
+
+// a folder through Windows' own folder picker; the path in the ANSI code page this program works in
+static bool PickFolder(HWND owner, const wchar_t* title, std::string& path)
+{
+    IFileOpenDialog* d = NULL;
+    if (FAILED(CoCreateInstance(__uuidof(FileOpenDialog), NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&d)))) return false;
+    DWORD opt = 0;
+    d->GetOptions(&opt);
+    d->SetOptions(opt | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    d->SetTitle(title);
+    if (!path.empty()) {
+        wchar_t w[MAX_PATH];
+        IShellItem* start = NULL;
+        if (MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, w, MAX_PATH) &&
+            SUCCEEDED(SHCreateItemFromParsingName(w, NULL, IID_PPV_ARGS(&start)))) {
+            d->SetFolder(start);
+            start->Release();
+        }
+    }
+    bool ok = false;
+    IShellItem* item = NULL;
+    if (SUCCEEDED(d->Show(owner)) && SUCCEEDED(d->GetResult(&item))) {
+        PWSTR w = NULL;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &w))) {
+            char a[MAX_PATH];
+            BOOL lossy = FALSE;
+            if (WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w, -1, a, MAX_PATH, NULL, &lossy) && !lossy) {
+                path = a;
+                ok = true;
+            } else {
+                MessageBoxA(owner, "This folder's name has characters this program cannot pass on. Copy or rename the folder "
+                                   "(for example to C:\\xbox_dlc) and pick it again.", "glimpse_fix", MB_OK | MB_ICONWARNING);
+            }
+            CoTaskMemFree(w);
+        }
+        item->Release();
+    }
+    d->Release();
+    return ok;
+}
+
+// the folder with build_all.py and install_dlc.py: [DLC] ToolsFolder, else tools\dlc next to this program or a few
+// folders up (the repository's build folder), else asked for once
+static std::string FindTools(HWND owner)
+{
+    std::vector<std::string> cand;
+    std::string set = NoTrailingSlash(GetValue(s_toolsOpt));
+    if (!set.empty()) cand.insert(cand.end(), { set, set + "\\dlc", set + "\\tools\\dlc" });
+    char exe[MAX_PATH];
+    GetModuleFileNameA(NULL, exe, MAX_PATH);
+    std::string d = exe;
+    for (int up = 0; up < 4; up++) {
+        size_t s = d.find_last_of('\\');
+        if (s == std::string::npos) break;
+        d = d.substr(0, s);
+        cand.insert(cand.end(), { d + "\\tools\\dlc", d + "\\glimpse_tools\\dlc" });
+    }
+    for (const std::string& c : cand)
+        if (FileExists(c + "\\build_all.py") && FileExists(c + "\\install_dlc.py")) return c;
+    MessageBoxA(owner, "The DLC converter of glimpse_fix (tools\\dlc\\build_all.py) is not next to this program.\n\n"
+                       "In the next window, pick the folder \"tools\" of glimpse_fix (the one that holds the folder dlc).",
+                "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+    std::string pick = set;
+    if (!PickFolder(owner, L"The folder tools of glimpse_fix (with dlc\\build_all.py)", pick)) return "";
+    for (const std::string& c : { pick, pick + "\\dlc", pick + "\\tools\\dlc" })
+        if (FileExists(c + "\\build_all.py") && FileExists(c + "\\install_dlc.py")) {
+            SetValue(s_toolsOpt, NoTrailingSlash(pick));
+            SaveIni();
+            return c;
+        }
+    MessageBoxA(owner, "There is no dlc\\build_all.py in that folder.", "glimpse_fix", MB_OK | MB_ICONWARNING);
+    return "";
+}
+
+static void OpenDlcLog(HWND wnd)
+{
+    std::string log = s_dlcLogPath;
+    if (log.empty() || !FileExists(log)) {
+        // the newer of the two logs of an earlier session
+        std::string b = DlcWork() + "\\build.log", i = DlcWork() + "\\install.log";
+        WIN32_FILE_ATTRIBUTE_DATA fb = {}, fi = {};
+        bool hb = GetFileAttributesExA(b.c_str(), GetFileExInfoStandard, &fb) != 0;
+        bool hi = GetFileAttributesExA(i.c_str(), GetFileExInfoStandard, &fi) != 0;
+        log = hb && (!hi || CompareFileTime(&fb.ftLastWriteTime, &fi.ftLastWriteTime) >= 0) ? b : hi ? i : "";
+    }
+    if (log.empty()) {
+        Status("No DLC build or install has run yet");
+        return;
+    }
+    ShellExecuteA(wnd, "open", "notepad.exe", Quote(log).c_str(), NULL, SW_SHOWNORMAL);
+}
+
+static bool DlcStart(HWND wnd, DlcTask task, const std::string& script, const std::string& args)
+{
+    std::string py = FindPy();
+    if (py.empty()) {
+        MessageBoxA(wnd, kNoPython, "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+    std::string work = DlcWork();
+    CreateDirectoryA((LocalAppData() + "\\glimpse_fix").c_str(), NULL);
+    CreateDirectoryA(work.c_str(), NULL);
+    s_dlcLogPath = work + (task == DLC_BUILD ? "\\build.log" : "\\install.log");
+    s_taskStatus = work + (task == DLC_BUILD ? "\\build_status.txt" : "\\install_status.txt");
+    DeleteFileA(s_taskStatus.c_str());
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };  // the handles below are inherited by Python
+    HANDLE log = CreateFileA(s_dlcLogPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (log == INVALID_HANDLE_VALUE) {
+        std::string m = "Could not write " + s_dlcLogPath;
+        MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    HANDLE nul = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+    std::string cmd = Quote(py) + " -3 -I -X utf8 " + Quote(script) + " " + args + " --status " + Quote(s_taskStatus);
+    std::vector<char> line(cmd.begin(), cmd.end());
+    line.push_back(0);
+    STARTUPINFOA si = { sizeof(si) };
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nul;
+    si.hStdOutput = si.hStdError = log;
+    PROCESS_INFORMATION pi = {};
+    BOOL ok = CreateProcessA(NULL, line.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, NULL, work.c_str(), &si, &pi);
+    DWORD err = GetLastError();
+    CloseHandle(log);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+    if (!ok) {
+        char m[MAX_PATH + 100];
+        sprintf(m, "Could not start Python (%.*s, error %lu).", MAX_PATH, py.c_str(), err);
+        MessageBoxA(wnd, m, "glimpse_fix", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    // the job ends Python and everything it starts when this program goes
+    s_taskJob = CreateJobObjectA(NULL, NULL);
+    if (s_taskJob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li = {};
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(s_taskJob, JobObjectExtendedLimitInformation, &li, sizeof(li));
+        if (!AssignProcessToJobObject(s_taskJob, pi.hProcess)) {
+            CloseHandle(s_taskJob);
+            s_taskJob = NULL;
+        }
+    }
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+    s_taskProc = pi.hProcess;
+    s_task = task;
+    s_taskStart = GetTickCount();
+    s_taskStopped = false;
+    s_taskRan = true;
+    SetTimer(wnd, kDlcTimer, 500, NULL);
+    DlcButtons();
+    DlcSetText(task == DLC_BUILD ? "Building: starting Python" : "Installing: starting Python", false);
+    return true;
+}
+
+static void DlcStop()
+{
+    if (!DlcBusy()) return;
+    s_taskStopped = true;
+    if (s_taskJob) TerminateJobObject(s_taskJob, 1);
+    else TerminateProcess(s_taskProc, 1);
+}
+
+static void DlcInstall(HWND wnd, bool apply, bool moveOthers = false);
+static void DlcUninstall(HWND wnd, bool apply);
+
+// the [DLC] keys the staged build needs ("ini" lines of its manifest), turned on after asking
+static void DlcOfferIni(HWND wnd)
+{
+    std::vector<Option*> off;
+    std::string names;
+    for (const std::string& l : ReadLines(DlcStaging() + "\\" + kDlcManifest)) {
+        if (l.compare(0, 4, "ini\t")) continue;
+        std::string kv = l.substr(4);
+        size_t tab = kv.find('\t');
+        if (tab == std::string::npos) continue;
+        Option* o = Find(kv.substr(0, tab).c_str());
+        if (!o || strcmp(o->section, "DLC") || o->kind != BOOL_OPT || kv.substr(tab + 1) != "1" || IsOn(o->key)) continue;
+        off.push_back(o);
+        names += std::string(names.empty() ? "" : ", ") + o->text;
+    }
+    if (off.empty()) return;
+    std::string q = "Turn on " + names + " now?\n\nThe converted DLC is only used with these on (this page).";
+    if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    for (Option* o : off) SetValue(*o, "1");
+    LoadControls();
+    Status(SaveIni() ? "Saved: the converted DLC is on" : "Could not write the INI");
+}
+
+static void DlcFailed(HWND wnd, const std::string& text, const std::vector<std::string>& details)
+{
+    std::string m = text;
+    for (size_t i = 0; i < details.size() && i < 10; i++) m += (i ? "\n" : "\n\n") + details[i];
+    m += "\n\nOpen the log?";
+    if (MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_YESNO | MB_ICONWARNING) == IDYES) OpenDlcLog(wnd);
+}
+
+static void DlcFinished(HWND wnd, DlcTask task, DWORD code, const DlcStatus& st)
+{
+    if (s_taskStopped) {
+        DlcSetText(task == DLC_BUILD ? "Build stopped. Build DLC starts it again; finished steps are kept."
+                                     : "Stopped.", false);
+        return;
+    }
+    if (st.state.empty() || st.state == "RUNNING") {
+        char m[160];
+        sprintf(m, "Python did not finish the %s (exit code %lu). See the log.",
+                task == DLC_BUILD ? "build" : task == DLC_UPLAN || task == DLC_UNINSTALL ? "uninstall" : "install", code);
+        DlcSetText(m, true);
+        std::string q = std::string(m) + "\n\nIs Python 3 installed? " + kNoPython;
+        DlcFailed(wnd, q, std::vector<std::string>());
+        return;
+    }
+    bool ok = st.state == "OK" || st.state == "WARN";
+    if (!ok) {
+        DlcSetText(st.text, true);
+        DlcFailed(wnd, st.text, st.details);
+        return;
+    }
+    if (task == DLC_BUILD) {
+        DlcSetText(st.text, false);
+        Status("DLC built");
+        if (st.state == "WARN") {
+            std::string m = st.text;
+            for (const std::string& d : st.details) m += "\n\n" + d;
+            MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        }
+    } else if (task == DLC_PLAN) {
+        std::string q = "Install the converted DLC into\n" + s_taskGame + "\\glimpse_dlc?\n\n" + st.text + "\n";
+        for (size_t i = 0; i < st.details.size() && i < 18; i++) q += "\n" + st.details[i];
+        if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+            DlcSetText("Not installed. " + st.text, false);
+            return;
+        }
+        // archives in glimpse_dlc that are not from this build are laid over the game too: offer to move them away
+        bool moveOthers = false;
+        if (!st.others.empty()) {
+            std::string list;
+            for (const std::string& n : st.others) list += "\n    " + n;
+            std::string m = "glimpse_dlc also holds archives that are not from this build:" + list +
+                            "\n\nThe game lays them over its data as well, and an older copy of the same cars or track can "
+                            "hide parts of the new one. Move them to glimpse_dlc_replaced_<date> in the game folder? "
+                            "(Uninstall puts them back.)";
+            int r = MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_YESNOCANCEL | MB_ICONWARNING);
+            if (r == IDCANCEL) {
+                DlcSetText("Not installed. " + st.text, false);
+                return;
+            }
+            moveOthers = r == IDYES;
+        }
+        DlcInstall(wnd, true, moveOthers);
+    } else if (task == DLC_INSTALL) {
+        DlcSetText(st.text, false);
+        Status("DLC installed");
+        if (st.state == "WARN" || !st.details.empty()) {
+            std::string m = st.text;
+            for (const std::string& d : st.details) m += "\n\n" + d;
+            MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | (st.state == "WARN" ? MB_ICONWARNING : MB_ICONINFORMATION));
+        }
+        DlcOfferIni(wnd);
+    } else if (task == DLC_UPLAN) {
+        std::string q = "Remove the converted DLC from\n" + s_taskGame + "\\glimpse_dlc?\n\n" + st.text + "\n";
+        for (size_t i = 0; i < st.details.size() && i < 18; i++) q += "\n" + st.details[i];
+        q += "\n\nYour saves are copied first.";
+        if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) DlcUninstall(wnd, true);
+        else DlcSetText("Nothing removed.", false);
+    } else {
+        DlcSetText(st.text, st.state == "WARN");
+        Status("DLC removed");
+        std::string m = st.text;
+        for (const std::string& d : st.details) m += "\n\n" + d;
+        if (IsOn("Overlays")) {
+            m += "\n\nTurn off \"Converted DLC\" now?";
+            if (MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                SetValue(*Find("Overlays"), "0");
+                LoadControls();
+                Status(SaveIni() ? "Saved: the converted DLC is off" : "Could not write the INI");
+            }
+        } else {
+            MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        }
+    }
+}
+
+static const char* DlcTaskVerb(DlcTask t)
+{
+    switch (t) {
+    case DLC_BUILD: return "Building";
+    case DLC_PLAN: return "Checking the install";
+    case DLC_INSTALL: return "Installing";
+    case DLC_UPLAN: return "Checking the uninstall";
+    default: return "Removing";
+    }
+}
+
+// WM_TIMER while a task runs: its state on the page, and what follows once it has ended
+static void DlcPoll(HWND wnd)
+{
+    if (!DlcBusy()) return;
+    bool ended = WaitForSingleObject(s_taskProc, 0) == WAIT_OBJECT_0;
+    DlcStatus st = ReadDlcStatus(s_taskStatus);
+    if (!ended) {
+        DWORD secs = (GetTickCount() - s_taskStart) / 1000;
+        char head[96];
+        sprintf(head, "%s (%lu:%02lu%s%s): ", DlcTaskVerb(s_task), secs / 60, secs % 60, st.step.empty() ? "" : ", step ",
+                st.step.c_str());
+        DlcSetText(head + (st.text.empty() ? std::string("starting Python") : st.text), false);
+        return;
+    }
+    DWORD code = 1;
+    GetExitCodeProcess(s_taskProc, &code);
+    CloseHandle(s_taskProc);
+    s_taskProc = NULL;
+    if (s_taskJob) CloseHandle(s_taskJob);
+    s_taskJob = NULL;
+    KillTimer(wnd, kDlcTimer);
+    DlcTask task = s_task;
+    s_task = DLC_NONE;
+    DlcButtons();
+    DlcFinished(wnd, task, code, st);
+}
+
+static void DlcBuild(HWND wnd)
+{
+    if (DlcBusy()) {
+        if (s_task == DLC_BUILD &&
+            MessageBoxA(wnd, "Stop the DLC build? The steps finished so far are kept.", "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES)
+            DlcStop();
+        return;
+    }
+    Option* o = Find("DumpFolder");
+    std::string dump = NoTrailingSlash(GetValue(*o));
+    if (dump.empty() || !DirExists(dump)) {
+        MessageBoxA(wnd, dump.empty() ? "Pick your Xbox DLC folder first: the folder 425607E7 of your Xbox 360 dump (or its "
+                                        "subfolder 00000002)."
+                                      : "The Xbox DLC folder does not exist. Pick it again.",
+                    "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::string game = GameDir();
+    if (!FileExists(game + "\\data\\resident.ark")) {
+        std::string m = "This INI is not in the Split/Second folder (there is no data\\resident.ark next to it):\n" + std::string(s_path) +
+                        "\n\nOpen the SplitSecondPad.ini in the game folder (Open INI...).";
+        MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::string tools = FindTools(wnd);
+    if (tools.empty()) return;
+    if (DlcStart(wnd, DLC_BUILD, tools + "\\build_all.py", "--dump " + Quote(dump) + " --game " + Quote(game)))
+        Status("DLC build started; this window can stay open or be used meanwhile");
+}
+
+// the dry run first (for the game folder of this INI), then, after the question, --apply for that same folder
+static void DlcInstall(HWND wnd, bool apply, bool moveOthers)
+{
+    if (DlcBusy()) return;
+    if (!FileExists(DlcStaging() + "\\" + kDlcManifest)) {
+        MessageBoxA(wnd, "There is nothing to install yet: Build DLC first.", "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::string tools = FindTools(wnd);
+    if (tools.empty()) return;
+    if (!apply) s_taskGame = GameDir();
+    DlcStart(wnd, apply ? DLC_INSTALL : DLC_PLAN, tools + "\\install_dlc.py",
+             "--game " + Quote(s_taskGame) + (apply ? " --apply" : "") + (moveOthers ? " --move-others" : ""));
+}
+
+static void DlcUninstall(HWND wnd, bool apply)
+{
+    if (DlcBusy()) return;
+    if (!apply) s_taskGame = GameDir();
+    if (!FileExists(s_taskGame + "\\glimpse_dlc\\" + kDlcInstalled)) {
+        MessageBoxA(wnd, "There is nothing to remove: the converted DLC was not installed into this game folder by this "
+                         "program.", "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::string tools = FindTools(wnd);
+    if (tools.empty()) return;
+    DlcStart(wnd, apply ? DLC_UNINSTALL : DLC_UPLAN, tools + "\\install_dlc.py",
+             "--game " + Quote(s_taskGame) + " --uninstall" + (apply ? " --apply" : ""));
+}
+
 static const char* const kPageText[kPageCount] = {
-    "Ready-made settings for every page but Online and Debug. The one that matches is outlined.",
-    "Pads, triggers and button prompts.",
+    "Ready-made settings for every page but Online, DLC, Deadline mode and Debug. The one that matches is outlined.",
+    "Pads, triggers, button prompts and the D-pad repeat in menus.",
     "Frame rate, quality limit, texture detail and filtering, SMAA, HDR output and the icon size.",
-    "Motion blur, bloom, flares and the screen overlays. Bloom and exposure apply while the game runs.",
+    "Motion blur, bloom, flares and the screen overlays. * applies while the game runs.",
     "Streaming, draw distance, shadows, pop-in and the opponents' car detail.",
     "Field of view, ultrawide screens, camera shake, zoom, photo mode and the HUD key.",
     "Unlocks, cutscenes and boot movies, respot time and the power play bar.",
@@ -612,6 +1248,8 @@ static const char* const kPageText[kPageCount] = {
     "Boost for the AI cars (experimental).",
     "The opponents' engines and the console's reverb.",
     "Online play over Steam (experimental). Presets leave this page alone.",
+    "Your own Xbox 360 DLC, converted on this PC (experimental). Presets leave this page alone.",
+    "The DLC game mode Deadline, from your converted DLC (experimental). Presets leave this page alone.",
     "For bug reports, and the texture dump.",
 };
 
@@ -634,6 +1272,9 @@ static void ShowPage(int page)
     ShowWindow(s_undo, presets);
     ShowWindow(s_undoText, presets);
     if (page == 0) UpdateUndo();
+    int dlc = page == kDlcPage ? SW_SHOW : SW_HIDE;
+    for (HWND h : { s_dlcBrowse, s_dlcBuild, s_dlcInstall, s_dlcUninstall, s_dlcLog, s_dlcState }) ShowWindow(h, dlc);
+    if (page == kDlcPage) DlcRefresh();
     s_infoWarn = false;
     SetWindowTextA(s_info, page == 0 ? "Before a preset is applied, your own settings are kept, and \"Back to your settings\" "
                                        "puts them back. Presets change only this INI, never the game's own options or your profile."
@@ -650,7 +1291,7 @@ struct Preset {
 };
 static const Preset kPresets[kPresetCount] = {
     { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off.", "" },
-    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, the PC's car glass, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
       "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",
@@ -816,8 +1457,10 @@ static HWND Child(const char* cls, const char* text, DWORD style, int x, int y, 
     return h_;
 }
 
-enum { ID_NAV0 = 10, ID_PRESET0 = 40, ID_OPEN = 30, ID_CLOSE = 31, ID_RESTORE = 32, ID_UNDO = 33, ID_OPTION0 = 100 };
-static_assert(ID_NAV0 + kPageCount <= ID_OPEN && ID_PRESET0 + kPresetCount <= ID_OPTION0, "control ids overlap");
+enum { ID_NAV0 = 10, ID_PRESET0 = 40, ID_OPEN = 30, ID_CLOSE = 31, ID_RESTORE = 32, ID_UNDO = 33, ID_LAUNCH = 34,
+       ID_DLCBROWSE = 35, ID_DLCBUILD = 36, ID_DLCINSTALL = 37, ID_DLCLOG = 38, ID_DLCUNINSTALL = 39, ID_OPTION0 = 100 };
+static_assert(ID_NAV0 + kPageCount <= ID_OPEN && ID_DLCUNINSTALL < ID_PRESET0 && ID_PRESET0 + kPresetCount <= ID_OPTION0,
+              "control ids overlap");
 
 
 static void CreateControls()
@@ -828,6 +1471,9 @@ static void CreateControls()
     for (int i = 0; i < kPageCount; i++)
         s_nav[i] = Child("BUTTON", kPages[i], WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, S(kNavTop) + i * S(kNavStep),
                          S(kSideW), S(kNavH), ID_NAV0 + i, R_NAV, s_font);
+    // bottom left in the sidebar, after the pages in the tab order: start the game through Steam
+    s_launch = Child("BUTTON", "Launch game", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(18), S(kHeight - 48), S(174),
+                     S(32), ID_LAUNCH, R_LAUNCH, s_font);
     // the presets page: each preset's button with what it sets beside it, then the way back
     // each row as tall as its text (at most kPresetRowH, which FitHeight counts with)
     const int textX = kContentX + 190, textW = kWidth - textX - 24;
@@ -865,14 +1511,23 @@ static void CreateControls()
         const char* text = o.text;
         int indent = 0;
         while (*text == ' ') text++, indent += S(9);
-        o.label = Child("STATIC", text, SS_LEFT | SS_CENTERIMAGE | SS_NOTIFY, S(kContentX) + indent, y, S(kLabelW) - indent,
+        // a folder: a shorter label, a wide field and its "..." button at the right
+        int labelW = o.kind == PATH ? kPathLabelW : kLabelW;
+        o.label = Child("STATIC", text, SS_LEFT | SS_CENTERIMAGE | SS_NOTIFY, S(kContentX) + indent, y, S(labelW) - indent,
                         S(26), 0, R_LABEL, s_font);
-        if (o.kind == BOOL_OPT) {
+        if (o.kind == PATH) {
+            int fieldX = kContentX + kPathLabelW, browseX = kWidth - 24 - 40;
+            o.ctrl = Child("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, S(fieldX) + S(12), y + S(5), S(browseX - 8 - fieldX - 24), S(20), id,
+                           R_NONE, s_font);
+            SendMessageA(o.ctrl, EM_LIMITTEXT, TextLimit(o), 0);
+            s_dlcBrowse = Child("BUTTON", "...", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(browseX), y, S(40), S(28), ID_DLCBROWSE,
+                                R_ACTION, s_font);
+        } else if (o.kind == BOOL_OPT) {
             o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y + S(2), S(46), S(22), id, R_TOGGLE, s_font);
         } else if (o.kind == TEXT) {
             // a borderless edit inside a field the window paints (WM_ERASEBKGND), like the lists' fields
             o.ctrl = Child("EDIT", "", WS_TABSTOP | ES_AUTOHSCROLL, S(ctrlX) + S(12), y + S(5), S(226), S(20), id, R_NONE, s_font);
-            SendMessageA(o.ctrl, EM_LIMITTEXT, 32, 0);
+            SendMessageA(o.ctrl, EM_LIMITTEXT, TextLimit(o), 0);
         } else if (o.kind == CHOICE) {
             o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y, S(250), S(28), id, R_SELECT, s_font);
         } else {
@@ -881,6 +1536,20 @@ static void CreateControls()
             o.value = Child("STATIC", "", SS_LEFT | SS_CENTERIMAGE, S(ctrlX) + S(200), y, S(140), S(26), 0, R_VALUE, s_font);
         }
     }
+    // the DLC page: after its options the buttons, then the state of the last build or install (kDlcExtraRows)
+    int dlcY = S(kRowTop) + row[kDlcPage] * S(kRowH) + S(10);
+    s_dlcBuild = Child("BUTTON", DlcBusy() && s_task == DLC_BUILD ? "Stop" : "Build DLC", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
+                       S(kContentX), dlcY, S(130), S(32), ID_DLCBUILD, R_ACTION, s_font);
+    s_dlcInstall = Child("BUTTON", "Install", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX + 140), dlcY, S(110), S(32),
+                         ID_DLCINSTALL, R_ACTION, s_font);
+    s_dlcUninstall = Child("BUTTON", "Uninstall", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX + 260), dlcY, S(110), S(32),
+                           ID_DLCUNINSTALL, R_ACTION, s_font);
+    s_dlcLog = Child("BUTTON", "Open log", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX + 380), dlcY, S(110), S(32), ID_DLCLOG,
+                     R_ACTION, s_font);
+    s_dlcState = Child("STATIC", s_dlcText.c_str(), SS_LEFT | SS_NOPREFIX, S(kContentX), dlcY + S(42), S(kWidth - kContentX - 24),
+                       S(46), 0, R_LABEL, s_font);
+    EnableWindow(s_dlcInstall, !DlcBusy());
+    EnableWindow(s_dlcUninstall, !DlcBusy());
     s_info = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(kHeight - 122), S(kWidth - kContentX - 24), S(72), 0,
                    R_DIM, s_font);
     s_status = Child("STATIC", "", WS_VISIBLE | SS_LEFT | SS_PATHELLIPSIS | SS_CENTERIMAGE, S(kContentX), S(kHeight - 46),
@@ -1031,11 +1700,11 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
         if (focus) FocusOutline(dc, r, S(8));
         return;
     }
-    // presets and actions: outlined pills, filled while pressed
-    FillRect(dc, &r, s_backBrush);
+    // presets and actions: outlined pills, filled while pressed (the launch button on the sidebar)
+    FillRect(dc, &r, role == R_LAUNCH ? s_sideBrush : s_backBrush);
     bool current = role == R_PRESET && PresetMatches(kPresets[GetDlgCtrlID(di->hwndItem) - ID_PRESET0]);
-    COLORREF line = current ? kAccent : disabled ? kField : kBorder;
-    RoundRect(dc, r, S(10), pressed ? kSideSel : kField, line);
+    COLORREF line = current || role == R_LAUNCH ? kAccent : disabled ? kField : kBorder;
+    RoundRect(dc, r, S(10), pressed ? kSideSel : role == R_LAUNCH ? kSide : kField, line);
     SelectObject(dc, current ? s_fontBold : s_font);
     SetTextColor(dc, disabled ? kOff : kText);
     DrawTextA(dc, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
@@ -1187,6 +1856,31 @@ static void ShowHelpFor(HWND hwnd)
     static HWND last;
     if (hwnd == last) return;
     last = hwnd;
+    if (hwnd == s_launch && s_launch) {
+        s_infoWarn = false;
+        SetWindowTextA(s_info, "Starts Split/Second through Steam. Every change here is saved already.");
+        InvalidateRect(s_info, NULL, TRUE);
+        return;
+    }
+    struct { HWND h; const char* text; } dlc[] = {
+        { s_dlcBrowse, "Pick the Xbox DLC folder." },
+        { s_dlcBuild, "Converts your DLC on this PC with Python (tools\\dlc\\build_all.py; a few minutes, about 10 the first "
+                      "time; this window can be used meanwhile). The result goes to %LOCALAPPDATA%\\glimpse_fix\\dlc_staging; "
+                      "the game folder is not changed. Nothing is downloaded or sent anywhere." },
+        { s_dlcInstall, "Shows what it will do, then copies the converted files into glimpse_dlc in the game folder, after "
+                        "a copy of your saves (Split Second backup_<date>_dlc). It only ever replaces or removes files it "
+                        "installed itself." },
+        { s_dlcUninstall, "Shows what it will do, then removes the files Install copied into glimpse_dlc (after a copy of your "
+                          "saves) and puts back what Install moved aside. Files that were there before stay." },
+        { s_dlcLog, "The log of the last build, install or uninstall." },
+    };
+    for (auto& d : dlc)
+        if (hwnd == d.h && d.h) {
+            s_infoWarn = false;
+            SetWindowTextA(s_info, d.text);
+            InvalidateRect(s_info, NULL, TRUE);
+            return;
+        }
     for (Option& o : kOptions)
         if (hwnd == o.ctrl || hwnd == o.label || hwnd == o.value) {
             // a help text starting with '!' is a warning, shown in red
@@ -1212,7 +1906,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         DeleteObject(b);
         for (int i = 0; i < kOptionCount; i++) {  // the fields of the text options on this page
             const Option& o = kOptions[i];
-            if (o.kind != TEXT || !o.ctrl || !IsWindowVisible(o.ctrl)) continue;
+            if (!IsText(o) || !o.ctrl || !IsWindowVisible(o.ctrl)) continue;
             RECT f;
             GetWindowRect(o.ctrl, &f);
             MapWindowPoints(NULL, wnd, (POINT*)&f, 2);
@@ -1254,13 +1948,13 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                     Changed(o);
                 }
             }
-            if (o.kind == TEXT && code == EN_CHANGE && !s_loading) {
-                // only the characters a lobby name may have; the rest is dropped as it is typed
-                char buf[64], clean[64];
+            if (IsText(o) && code == EN_CHANGE && !s_loading) {
+                // only the characters the option may have; the rest is dropped as it is typed
+                char buf[512], clean[512];
                 GetWindowTextA(o.ctrl, buf, sizeof(buf));
                 int n = 0;
                 for (const char* c = buf; *c; c++)
-                    if (TextCharOk(*c)) clean[n++] = *c;
+                    if (TextCharOk(o, *c)) clean[n++] = *c;
                 clean[n] = 0;
                 if (strcmp(buf, clean)) {
                     DWORD at = 0;
@@ -1273,13 +1967,34 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                 }
                 Changed(o);
             }
-            if (code == BN_SETFOCUS || (o.kind == TEXT && code == EN_SETFOCUS)) ShowHelpFor(o.ctrl);
+            if (code == BN_SETFOCUS || (IsText(o) && code == EN_SETFOCUS)) ShowHelpFor(o.ctrl);
         } else if (id >= ID_NAV0 && id < ID_NAV0 + kPageCount) {
             ShowPage(id - ID_NAV0);
         } else if (id >= ID_PRESET0 && id < ID_PRESET0 + kPresetCount && code == BN_CLICKED) {
             char q[200];
             sprintf(q, "Set every option to \"%s\"?", kPresets[id - ID_PRESET0].name);
             if (MessageBoxA(wnd, q, "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) ApplyPreset(kPresets[id - ID_PRESET0]);
+        } else if (id == ID_LAUNCH && code == BN_CLICKED) {
+            // Steam's own link for the game (app 297860); Steam starts it as from the library
+            INT_PTR r = (INT_PTR)ShellExecuteA(wnd, "open", "steam://rungameid/297860", NULL, NULL, SW_SHOWNORMAL);
+            Status(r > 32 ? "Starting Split/Second through Steam" : "Could not open Steam (is it installed?)");
+        } else if (id == ID_LAUNCH && code == BN_SETFOCUS) {
+            ShowHelpFor(s_launch);
+        } else if (id >= ID_DLCBROWSE && id <= ID_DLCUNINSTALL && code == BN_SETFOCUS) {
+            ShowHelpFor((HWND)lp);
+        } else if (id == ID_DLCBROWSE && code == BN_CLICKED) {
+            Option* o = Find("DumpFolder");
+            std::string dir = NoTrailingSlash(GetValue(*o));
+            if (PickFolder(wnd, L"Your Xbox 360 DLC folder (425607E7 or its subfolder 00000002)", dir))
+                SetWindowTextA(o->ctrl, dir.c_str());  // EN_CHANGE saves it
+        } else if (id == ID_DLCBUILD && code == BN_CLICKED) {
+            DlcBuild(wnd);
+        } else if (id == ID_DLCINSTALL && code == BN_CLICKED) {
+            DlcInstall(wnd, false);
+        } else if (id == ID_DLCUNINSTALL && code == BN_CLICKED) {
+            DlcUninstall(wnd, false);
+        } else if (id == ID_DLCLOG && code == BN_CLICKED) {
+            OpenDlcLog(wnd);
         } else if (id == ID_UNDO && code == BN_CLICKED) {
             RestoreUndo(wnd);
         } else if (id == ID_RESTORE) {
@@ -1287,10 +2002,30 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         } else if (id == ID_OPEN) {
             if (PickIni(wnd)) Open();
         } else if (id == ID_CLOSE) {
-            DestroyWindow(wnd);
+            SendMessageA(wnd, WM_CLOSE, 0, 0);
         }
         return 0;
     }
+    case WM_TIMER:
+        if (wp == kDlcTimer) DlcPoll(wnd);
+        return 0;
+    case WM_CLOSE:
+        // a DLC build or a dry run may be stopped (a build keeps its finished steps); an install or uninstall is let finish
+        if (s_task == DLC_INSTALL || s_task == DLC_UNINSTALL) {
+            MessageBoxA(wnd, s_task == DLC_INSTALL ? "The DLC is being installed. Please wait until it is done."
+                                                   : "The DLC is being removed. Please wait until it is done.",
+                        "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        if (DlcBusy()) {
+            const char* q = s_task == DLC_BUILD ? "The DLC build is still running. Stop it and close?"
+                                                : "The DLC install is still being checked (nothing has been changed yet). "
+                                                  "Stop and close?";
+            if (MessageBoxA(wnd, q, "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return 0;
+            DlcStop();
+        }
+        DestroyWindow(wnd);
+        return 0;
     case WM_HSCROLL:
         // while dragging only the value shown follows; the INI is written once the drag ends
         for (Option& o : kOptions)
@@ -1321,6 +2056,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         COLORREF col = kText;
         if (role == R_BRAND) col = kAccent;
         else if (c == s_info && s_infoWarn) col = kWarn;
+        else if (c == s_dlcState && s_dlcWarn) col = kWarn;
         else if (role == R_DIM || role == R_SIDEDIM) col = kDim;
         else if (role == R_VALUE || role == R_LABEL) {
             bool dim = false;
@@ -1336,8 +2072,10 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         MakeFonts();
         EnumChildWindows(wnd, DestroyChild, 0);
         for (Option& o : kOptions) o.label = o.ctrl = o.value = NULL;
-        s_undo = s_undoText = NULL;
+        s_undo = s_undoText = s_launch = NULL;
+        s_dlcBrowse = s_dlcBuild = s_dlcInstall = s_dlcUninstall = s_dlcLog = s_dlcState = NULL;
         CreateControls();
+        DlcButtons();
         LoadControls();
         ShowPage(s_page);
         const RECT* r = (const RECT*)lp;
@@ -1355,6 +2093,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show)
 {
     DpiAware();
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);  // the folder picker
     s_dpi = WindowDpi(NULL);
     EnableDarkMenus();
     INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES };

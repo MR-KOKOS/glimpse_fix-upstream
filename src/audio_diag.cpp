@@ -4,9 +4,14 @@
 //  - photo mode: the top level category of every event that starts is kept, so all of them can be
 //    paused while the world is held still (EventCategory::setPaused, FMOD's own API).
 //  - Log=1, sound output: FMOD's output type, speaker mode and mixer format, the level of every output
-//    channel (the subwoofer's LFE included) measured in FMOD's own mix every 10 s, every change of a
-//    category's pause, mute or volume (what the pause menu does), and the built-in properties of the
-//    first events by index (their speaker levels, to see whether any event sends to the LFE).
+//    channel (the subwoofer's LFE included) measured in FMOD's final mix (System::getWaveData) and the level of
+//    the music category's own mix every 10 s, every change of a category's pause, mute or volume (what the pause
+//    menu does), and the built-in properties of the first events by index (their speaker levels, to see whether
+//    any event sends to the LFE). Music events are logged every time with their group (and [DLC3_Music] when
+//    they come from the DLC's project, dlcmusic.cpp).
+//    The master channel group's getWaveData (used before) answers FMOD_OK with silence in this FMOD Ex (4.28,
+//    checked with the game's DLLs: the event system's categories mix into the output past it), so the 10 s line
+//    read 0.000 on every channel; System::getWaveData and the categories' channel groups carry the signal.
 //    Only FMOD's exported functions are called (fmod_event.dll, fmodex.dll); nothing is changed.
 #include "common.h"
 #include <math.h>
@@ -45,6 +50,10 @@ typedef int(__stdcall* SysGetPtr_t)(void* system, void** value);
 typedef int(__stdcall* SysGetFormat_t)(void* system, int* rate, int* format, int* outChannels, int* maxIn, int* resampler,
                                        int* bits);
 typedef int(__stdcall* CgGetWave_t)(void* group, float* data, int count, int channelOffset);
+typedef int(__stdcall* CgGetVolume_t)(void* group, float* volume);
+typedef int(__stdcall* SysGetWave_t)(void* system, float* data, int count, int channelOffset);
+typedef int(__stdcall* EvGetParentGroup_t)(void* evt, void** group);
+typedef int(__stdcall* GrGetInfo_t)(void* group, int* index, char** name);
 static CatGetChannelGroup_t s_catGetChannelGroup;
 static CatGetNum_t s_catGetNum;
 static CatGetByIndex_t s_catGetByIndex;
@@ -55,8 +64,17 @@ static SysGetInt_t s_sysGetOutput, s_sysGetSpeakerMode;
 static SysGetPtr_t s_sysGetMaster;
 static SysGetFormat_t s_sysGetFormat;
 static CgGetWave_t s_cgGetWave;
+static CgGetVolume_t s_cgGetVolume;
+static SysGetWave_t s_sysGetWave;
+static EvGetParentGroup_t s_evGetParentGroup;
+static GrGetInfo_t s_grGetInfo;
 static void* s_fmodSystem;
 static void* s_master;
+// the channel group of the category 'music'. Shared between threads: found on the thread that starts events,
+// dropped by AudioDiagProjectsChanged on the audio thread (dlcmusic.cpp, before every project unload), read by
+// the per-frame meter; always read once into a local and written with InterlockedExchangePointer. The meter may
+// still use a group it read just before a drop for that one call (Log=1 diagnostics only).
+static void* volatile s_musicGroup;
 static int s_outChannels;
 static void* s_rootCategory;
 
@@ -113,10 +131,22 @@ static bool IsMusic(const char* n)
 // 4 surround, 5 5.1, 6 7.1)
 static const char* SpeakerName(int mode, int ch)
 {
-    static const char* const n51[] = { "FL", "FR", "C", "LFE", "SL", "SR", "SBL", "SBR" };
+    static const char* const n51[] = { "FL", "FR", "C", "LFE", "BL", "BR", "SL", "SR" };
     static const char* const n2[] = { "L", "R" };
+    static const char* const nQuad[] = { "FL", "FR", "BL", "BR" };
+    static const char* const nSurround[] = { "FL", "FR", "C", "BL", "BR" };
+    if (mode == 1 && ch < 1) return "M";
     if (mode == 2 && ch < 2) return n2[ch];
+    if (mode == 3 && ch < 4) return nQuad[ch];
+    if (mode == 4 && ch < 5) return nSurround[ch];
     return ch < 8 ? n51[ch] : "?";
+}
+
+// dlcmusic.cpp swapped FMOD projects: the music category's channel group is fetched again with the next music
+// event (FMOD keeps the categories over an unload, as tested, but the pointer is not kept on trust)
+void AudioDiagProjectsChanged()
+{
+    InterlockedExchangePointer((void* volatile*)&s_musicGroup, NULL);
 }
 
 static void FindFmodSystem(void* evt)
@@ -139,8 +169,9 @@ static void FindFmodSystem(void* evt)
     if (s_sysGetSpeakerMode) s_sysGetSpeakerMode(system, &mode);
     if (s_sysGetFormat) s_sysGetFormat(system, &rate, &format, &s_outChannels, &maxIn, &resampler, &bits);
     if (s_sysGetMaster) s_sysGetMaster(system, &s_master);
-    Log("audio: FMOD output type %d (2 = DirectSound), speaker mode %d (5 = 5.1), mixer %d Hz, %d output channels", output,
-        mode, rate, s_outChannels);
+    Log("audio: FMOD output type %d (6 = DirectSound, 8 = WASAPI), speaker mode %d (5 = 5.1), mixer %d Hz, %d output "
+        "channels; first Event::start on thread %lu",
+        output, mode, rate, s_outChannels, GetCurrentThreadId());
 }
 
 static void WatchCategories(void* cat, int depth, int* count)
@@ -182,22 +213,47 @@ static void WatchCategories(void* cat, int depth, int* count)
         }
 }
 
-// the level of every output channel in FMOD's master mix: the largest and the mean RMS of 10 s
+static float WaveRms(const float* wave, int n)
+{
+    double e = 0;
+    for (int i = 0; i < n; i++) e += (double)wave[i] * wave[i];
+    return (float)sqrt(e / n);
+}
+
+// the level of every output channel in FMOD's final mix and of the music category (front left and right):
+// the largest and the mean RMS of 10 s. The game's dynamic mixer (Audio/XML/DynamicMixer.xml: the Game stack,
+// NemesisTruckLevel, the SideChain* ducks) sets the categories' channel group volumes (ChannelGroup::setVolume, an
+// import of the exe), not the category volume; the music group's volume is logged beside its level (lowest/mean,
+// in dB), as the wave data may be read before that volume
 static void MeasureOutput()
 {
-    static float peak[8], sum[8];
-    static unsigned frames;
+    static float peak[8], sum[8], musicPeak, musicSum, musicVolMin, musicVolSum;
+    static unsigned frames, musicFrames, musicVolFrames;
     static DWORD since;
-    if (!s_master || !s_cgGetWave || s_outChannels <= 0) return;
+    if (!s_fmodSystem || !s_sysGetWave || s_outChannels <= 0) return;
     int channels = s_outChannels < 8 ? s_outChannels : 8;
     for (int c = 0; c < channels; c++) {
         float wave[256];
-        if (s_cgGetWave(s_master, wave, 256, c) != 0) return;
-        double e = 0;
-        for (float v : wave) e += (double)v * v;
-        float rms = (float)sqrt(e / 256);
+        if (s_sysGetWave(s_fmodSystem, wave, 256, c) != 0) return;
+        float rms = WaveRms(wave, 256);
         if (rms > peak[c]) peak[c] = rms;
         sum[c] += rms;
+    }
+    void* musicGroup = s_musicGroup;  // set to NULL on the audio thread after a project swap
+    if (musicGroup && s_cgGetWave) {
+        float l[256], r[256];
+        if (s_cgGetWave(musicGroup, l, 256, 0) == 0 && s_cgGetWave(musicGroup, r, 256, 1) == 0) {
+            float rms = (WaveRms(l, 256) + WaveRms(r, 256)) * 0.5f;
+            if (rms > musicPeak) musicPeak = rms;
+            musicSum += rms;
+            musicFrames++;
+        }
+    }
+    float musicVol;
+    if (musicGroup && s_cgGetVolume && s_cgGetVolume(musicGroup, &musicVol) == 0) {
+        if (!musicVolFrames || musicVol < musicVolMin) musicVolMin = musicVol;
+        musicVolSum += musicVol;
+        musicVolFrames++;
     }
     frames++;
     DWORD now = GetTickCount();
@@ -212,8 +268,17 @@ static void MeasureOutput()
         strcat_s(text, one);
         peak[c] = sum[c] = 0;
     }
-    Log("audio out (10 s, RMS max/mean): %s", text);
-    frames = 0;
+    char music[64] = "not seen yet";
+    if (musicFrames) _snprintf_s(music, _TRUNCATE, "%.3f/%.3f", musicPeak, musicSum / musicFrames);
+    char mixer[64] = "";
+    if (musicVolFrames) {
+        float mean = musicVolSum / musicVolFrames;
+        _snprintf_s(mixer, _TRUNCATE, ", mixer volume min/mean %.1f/%.1f dB", musicVolMin > 0 ? 20.0f * log10f(musicVolMin) : -99.0f,
+                    mean > 0 ? 20.0f * log10f(mean) : -99.0f);
+    }
+    Log("audio out (10 s, RMS max/mean): %s; music category L+R %s%s", text, music, mixer);
+    musicPeak = musicSum = musicVolMin = musicVolSum = 0;
+    frames = musicFrames = musicVolFrames = 0;
     since = now;
 }
 
@@ -282,7 +347,9 @@ static int __stdcall Hook_EventStart(void* evt)
         }
         Log("audio: event '%s' properties%s", name, line);
     }
-    if (IsMusic(name)) {
+    bool music = IsMusic(name);
+    char where[96] = "";
+    if (music) {
         for (Tracked& t : s_tracked) {
             if (t.evt) continue;
             t.evt = evt;
@@ -290,8 +357,24 @@ static int __stdcall Hook_EventStart(void* evt)
             lstrcpynA(t.name, name, sizeof(t.name));
             break;
         }
+        // its group (Quarry_Track, InGame_Track_05, PreRace ...) and whether it is DLC3_Music's
+        void* group = NULL;
+        char* gname = NULL;
+        int gi = -1;
+        if (s_evGetParentGroup && s_grGetInfo && s_evGetParentGroup(evt, &group) == 0 && group)
+            s_grGetInfo(group, &gi, &gname);
+        _snprintf_s(where, _TRUNCATE, " group '%s'%s", gname ? gname : "?", DlcMusicIsDlcEvent(evt) ? " [DLC3_Music]" : "");
+        // the music category's channel group, for the level in the 10 s line
+        void* cat = NULL;
+        char* cname = NULL;
+        int ci;
+        void* musicGroup = NULL;
+        if (!s_musicGroup && s_getCategory && s_catGetInfo && s_catGetChannelGroup && s_getCategory(evt, &cat) == 0 && cat &&
+            s_catGetInfo(cat, &ci, &cname) == 0 && cname && !strcmp(cname, "music") &&
+            s_catGetChannelGroup(cat, &musicGroup) == 0 && musicGroup)
+            InterlockedExchangePointer((void* volatile*)&s_musicGroup, musicGroup);
     }
-    // engine and tyre loops restart constantly; log each name only until it has started 3 times
+    // engine and tyre loops restart constantly; log each name only until it has started 3 times (music always)
     static struct { char name[48]; int count; } seen[256];
     static int nseen;
     int i = 0;
@@ -301,8 +384,8 @@ static int __stdcall Hook_EventStart(void* evt)
         lstrcpynA(seen[nseen].name, name ? name : "?", sizeof(seen[0].name));
         seen[nseen++].count = 0;
     }
-    if ((i < 256 && seen[i].count++ < 3) || r != 0)
-        Log("fmod event start '%s' (#%d) -> %d", name ? name : "?", index, r);
+    if ((i < 256 && seen[i].count++ < 3) || r != 0 || music)
+        Log("fmod event start '%s' (#%d) -> %d%s", name ? name : "?", index, r, where);
     return r;
 }
 
@@ -323,7 +406,8 @@ void InstallAudioDiagnostics()
     s_getCategory = (GetPtr_t)GetProcAddress(ev, "?getCategory@Event@FMOD@@QAG?AW4FMOD_RESULT@@PAPAVEventCategory@2@@Z");
     s_catGetVolume = (GetFloat_t)GetProcAddress(ev, "?getVolume@EventCategoryI@FMOD@@UAG?AW4FMOD_RESULT@@PAM@Z");
     s_catGetInfo = (CatGetInfo_t)GetProcAddress(ev, "?getInfo@EventCategoryI@FMOD@@UAG?AW4FMOD_RESULT@@PAHPAPAD@Z");
-    s_catGetParent = (GetPtr_t)GetProcAddress(ev, "?getParentCategory@EventCategoryI@FMOD@@UAG?AW4FMOD_RESULT@@PAPAV12@@Z");
+    s_catGetParent =
+        (GetPtr_t)GetProcAddress(ev, "?getParentCategory@EventCategoryI@FMOD@@UAG?AW4FMOD_RESULT@@PAPAVEventCategory@2@@Z");
     s_catSetPaused = (SetBool_t)GetProcAddress(ev, "?setPaused@EventCategoryI@FMOD@@UAG?AW4FMOD_RESULT@@_N@Z");
     s_catGetPaused = (GetBool_t)GetProcAddress(ev, "?getPaused@EventCategoryI@FMOD@@UAG?AW4FMOD_RESULT@@PA_N@Z");
     if (g_cfg.log) {
@@ -342,7 +426,11 @@ void InstallAudioDiagnostics()
             s_sysGetMaster = (SysGetPtr_t)GetProcAddress(ex, "_FMOD_System_GetMasterChannelGroup@8");
             s_sysGetFormat = (SysGetFormat_t)GetProcAddress(ex, "_FMOD_System_GetSoftwareFormat@28");
             s_cgGetWave = (CgGetWave_t)GetProcAddress(ex, "_FMOD_ChannelGroup_GetWaveData@16");
+            s_cgGetVolume = (CgGetVolume_t)GetProcAddress(ex, "_FMOD_ChannelGroup_GetVolume@8");
+            s_sysGetWave = (SysGetWave_t)GetProcAddress(ex, "_FMOD_System_GetWaveData@16");
         }
+        s_evGetParentGroup = (EvGetParentGroup_t)GetProcAddress(ev, "_FMOD_Event_GetParentGroup@8");
+        s_grGetInfo = (GrGetInfo_t)GetProcAddress(ev, "_FMOD_EventGroup_GetInfo@12");
     }
     Log("fmod exports: state=%p vol=%p cat=%p catvol=%p catinfo=%p parent=%p", s_getState, s_getVolume, s_getCategory,
         s_catGetVolume, s_catGetInfo, s_catGetParent);
