@@ -90,6 +90,21 @@ static void RefreshSlot(int slot)
     if (was != p.connected) Log("pad %d %s", slot, p.connected ? "connected" : "disconnected");
 }
 
+// VirtualPads=0: the frame hook refreshes the slots that the pad-driven extras read, and notes pad use
+// for the prompt bar glyphs (with virtual pads their GetDeviceState does both)
+void RefreshPadSlots()
+{
+    for (int i = 0; i < XUSER_MAX_COUNT && pXInputGetState; i++) {
+        WORD prev = s_pads[i].state.Gamepad.wButtons;
+        RefreshSlot(i);
+        const XINPUT_GAMEPAD& g = s_pads[i].state.Gamepad;
+        if (s_pads[i].connected && ((g.wButtons & ~prev) || g.bLeftTrigger > 127 || g.bRightTrigger > 127 ||
+                                    abs(g.sThumbLX) > 16384 || abs(g.sThumbLY) > 16384 || abs(g.sThumbRX) > 16384 ||
+                                    abs(g.sThumbRY) > 16384))
+            NotePadActivity();
+    }
+}
+
 bool PadSlotConnected(int slot)
 {
     return slot >= 0 && slot < XUSER_MAX_COUNT && s_pads[slot].connected;

@@ -891,8 +891,8 @@ static const BYTE* const kInputUpdateAnchor = (const BYTE*)G(0x00558969);
 static BOOL WINAPI Hook_PeekMessageA(LPMSG msg, HWND wnd, UINT min, UINT max, UINT remove)
 {
     if (_ReturnAddress() == s_framePeekReturn) {
-        ApplyCarDetail();
-        ScaleShadowDistance();
+        RefreshPadSlots();  // the pad-driven extras read the XInput pads; no virtual device polls them
+        OnInputFrame();
     }
     return s_peekMessage(msg, wnd, min, max, remove);
 }
@@ -902,34 +902,35 @@ static const BYTE* Rel32CallTarget(const BYTE* call)
     return call + 5 + *(const LONG*)(call + 1);
 }
 
-// Without virtual pads, use the first PeekMessageA in the game's input update. The main loop
-// calls this update once per pass, before simulation and rendering at both frame rates.
-static void HookWorldLodWithoutPads()
+// Without virtual pads no virtual device is polled, so the per-frame extras (OnInputFrame) run from the
+// first PeekMessageA in the game's input update instead. The main loop calls this update once per pass,
+// before simulation and rendering at both frame rates.
+static void HookFrameWithoutPads()
 {
     if (!BytesMatch(kInputUpdateAnchor + 0x22, "8B0D") || !BytesMatch(kInputUpdateAnchor + 0x28, "E8") ||
         !BytesMatch(kInputUpdateAnchor + 0x2D, "8B178B4214568BCFFFD0"))
-        return Log("world LOD: main loop signature mismatch, hook skipped");
+        return Log("frame hook: main loop signature mismatch, hook skipped");
     if (!BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28), "83EC20538B1D") ||
         !BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28) + 0x0A, "566A016A006A006A008D44241C508BF1FFD385C0"))
-        return Log("world LOD: input update signature mismatch, hook skipped");
+        return Log("frame hook: input update signature mismatch, hook skipped");
 
     const BYTE* update = Rel32CallTarget(kInputUpdateAnchor + 0x28);
     auto slot = *(decltype(&PeekMessageA)* const*)(update + 6);  // mov ebx, [PeekMessageA IAT slot]
     const auto peek = (decltype(&PeekMessageA))GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
     decltype(&PeekMessageA) current;
     if (!peek || !ReadProcessMemory(GetCurrentProcess(), slot, &current, sizeof(current), NULL) || current != peek)
-        return Log("world LOD: PeekMessageA import not where expected, hook skipped");
+        return Log("frame hook: PeekMessageA import not where expected, hook skipped");
 
     DWORD old;
     if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old))
-        return Log("world LOD: cannot make PeekMessageA import writable, hook skipped (error %lu)", GetLastError());
+        return Log("frame hook: cannot make PeekMessageA import writable, hook skipped (error %lu)", GetLastError());
     s_peekMessage = peek;
     s_framePeekReturn = update + 0x1C;
     const bool hooked = InterlockedCompareExchangePointer((void**)slot, (void*)Hook_PeekMessageA, (void*)peek) == (void*)peek;
     if (!VirtualProtect(slot, sizeof(*slot), old, &old))
-        Log("world LOD: cannot restore PeekMessageA import protection (error %lu)", GetLastError());
-    Log(hooked ? "world LOD: hooked input update for car detail and shadow distance"
-               : "world LOD: PeekMessageA import changed during installation, hook skipped");
+        Log("frame hook: cannot restore PeekMessageA import protection (error %lu)", GetLastError());
+    Log(hooked ? "frame hook: per-frame extras run from the input update (VirtualPads=0)"
+               : "frame hook: PeekMessageA import changed during installation, hook skipped");
 }
 
 // Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
@@ -970,10 +971,8 @@ void OnInputFrame()
     if (s_knownBuild && (g_cfg.patchMask & PATCH_LOD)) {
         static unsigned frame;
         ScaleLodDistances();
-        if (g_cfg.virtualPads > 0) {
-            ApplyCarDetail();
-            ScaleShadowDistance();
-        }
+        ApplyCarDetail();
+        ScaleShadowDistance();
         if (frame++ % 30 == 0) ScalePowerplayDrawDists();
         // Precomputed visibility: each track sector lists what can be seen from it, and the rest is
         // skipped, so buildings pop in at sector borders whatever their distance. The game's own
@@ -1098,8 +1097,7 @@ void ApplyGamePatches()
     s_knownBuild = true;
     Log("SplitSecond.exe build recognised (%s)", BuildName());
     const unsigned mask = g_cfg.patchMask;
-    if (!g_cfg.virtualPads && (mask & PATCH_LOD) && (g_cfg.carDetail || g_cfg.shadowDistance != 1.0f))
-        HookWorldLodWithoutPads();
+    if (!g_cfg.virtualPads) HookFrameWithoutPads();
     if (g_cfg.separateTriggers && (mask & PATCH_TRIGGERS)) PatchTriggerPreset();
     if (mask & PATCH_RUMBLE) HookRumble();
     if ((g_cfg.skipIntro > 0 || g_cfg.cutsceneSkip) && (mask & PATCH_INTRO)) HookIntroSkip();

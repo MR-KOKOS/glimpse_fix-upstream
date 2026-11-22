@@ -143,6 +143,7 @@ extern XInputSetState_t pXInputSetState;
 // dinput_wrap.cpp
 IDirectInput8A* WrapDirectInput8A(IDirectInput8A* real);
 bool PadSlotConnected(int slot);
+void RefreshPadSlots();
 
 // diag.cpp
 void InstallD3DHooks();
@@ -339,5 +340,5 @@ void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's
 void CheckOpponentEngineBanks();
 void FixReverbPresets();       // at DLL load: the console's reverb presets (Log=1: logged)
 void PatchPadNames();
-void OnInputFrame();       // called from the virtual device poll, on the game thread
+void OnInputFrame();       // called from the virtual device poll (VirtualPads=0: the input update), on the game thread
 void NotePadActivity();
