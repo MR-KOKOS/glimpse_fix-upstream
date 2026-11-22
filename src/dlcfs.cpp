@@ -384,7 +384,11 @@ void DlcInstall()
 {
     if (!g_cfg.dlcOverlays) return;
     // the converted data and every [DLC] part were made for the Steam build 1.0.0.1 (German/English depot): the
-    // Russian depot's build and unknown exes get the game's own data only, like the rest of [DLC]
+    // Russian depot's build and unknown exes get the game's own data only, like the rest of [DLC].
+    // Deliberately left out for the Russian build: every [DLC] module (dlcfs, dlcmode, dlccars, dlcpickups,
+    // dlcrivals, dlcmusic) uses raw Steam addresses (vtable slots, game functions, data) that are not mapped in
+    // src\build_ru.inc. Enabling it there would mean mapping and checking all of them against the Russian dump,
+    // as was done for the base features, and testing it in the game.
     if (CurrentBuild() != BUILD_STEAM) {
         Log("DLC: overlays not used: not the Steam build (%s)", BuildName());
         return;
