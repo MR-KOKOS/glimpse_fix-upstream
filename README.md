@@ -160,7 +160,8 @@ nothing to convert, and the converted files stay on your PC. Please do not share
 **Compatibility:** the Steam version 1.0.0.1 (German and English depots), not the Russian depot; on any
 other executable the fix leaves the converted DLC off. The Russian depot is left out on purpose: the DLC
 part relies on game addresses that are only worked out for the Steam build. All other features of the
-fix work there as before.
+fix work there as before. Support for the Russian depot may follow later, depending on how the beta
+tests go.
 
 Converted so far, from whichever of these packages your dump has:
 
