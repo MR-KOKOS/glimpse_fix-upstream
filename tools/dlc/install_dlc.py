@@ -5,9 +5,10 @@
 #
 # Without --apply nothing is changed: it only prints what it would do (state WARN when other archives lie in
 # glimpse_dlc or the last install was interrupted). With --apply:
-#   1. leftover <name>.glimpse_part files of an interrupted install are removed;
-#   2. the save folder (Documents\Disney Interactive Studios\Split Second, or --saves) is copied to
-#      "Split Second backup_<date>_dlc" next to it, before anything in the game folder is changed;
+#   1. the save folder (Documents\Disney Interactive Studios\Split Second, or --saves) is copied to
+#      "Split Second backup_<date>_dlc" next to it (checked by file sizes), before anything in the game folder is
+#      changed;
+#   2. leftover <name>.glimpse_part files of an interrupted install are removed;
 #   3. every staged file is copied into <game>\glimpse_dlc\ (to <name>.glimpse_part first, then renamed). A file that
 #      is there already with the same content is left as it is and recorded as "adopted". A file of the same name with
 #      other content is replaced only if this script copied it and it still has the content it was copied with;
@@ -15,7 +16,7 @@
 #   4. --move-others: the other *.ark in glimpse_dlc (not from this build; the game lays them over its data too) are
 #      moved there as well;
 #   5. files it copied before that are no longer staged are removed (only with the content it copied); adopted files
-#      are never removed;
+#      are never removed. A file an earlier install moved aside from such a name is put back there;
 #   6. glimpse_dlc\glimpse_dlc_installed.tsv lists every file (copied or adopted) and every file moved aside.
 # --uninstall removes the files it copied (with the content it copied), leaves the adopted ones, moves the files it
 # moved aside back where their name is free, and removes the list. The game must not be running. The INI is not
@@ -163,9 +164,11 @@ def plan_install(game, staging):
                          origin=origin.get(rel, 'adopted')))
     others = []
     if os.path.isdir(gd):
-        known = staged | set(rec)
+        # as Windows compares names: a foreign DLC_Cars.ark has the staged dlc_cars.ark's name (replace-foreign above
+        # moves it aside), it is not another archive that --move-others would move a second time
+        known = {k.lower() for k in staged | set(rec)}
         for n in sorted(os.listdir(gd)):
-            if n.lower().endswith('.ark') and os.path.isfile(os.path.join(gd, n)) and n not in known:
+            if n.lower().endswith('.ark') and os.path.isfile(os.path.join(gd, n)) and n.lower() not in known:
                 others.append(n)
     interrupted = bool(part_files(gd)) or bool(old and old['meta'].get('installed') == 'in progress')
     return m, old, plan, others, interrupted
@@ -201,11 +204,46 @@ def move_aside(src, game, folder, rel, aside, record):
     """Moves src to folder\\rel; the move is in the list (record() rewrites it) before it happens, so an install that
     stops right after it can still be undone (uninstall skips an aside entry whose file is not there)."""
     to = os.path.join(folder, *rel.split('/'))
+    if os.path.exists(to):   # os.replace would overwrite it: a file moved aside is never lost to a second move
+        raise BuildError('Cannot move %s aside: %s is there already. Nothing was overwritten; run Install again.'
+                         % (rel, to))
     aside.append((rel, os.path.relpath(to, game).replace(os.sep, '/'), os.path.getsize(src)))
     record()
     os.makedirs(os.path.dirname(to), exist_ok=True)
     os.replace(src, to)
     say('  moved aside  %s -> %s' % (rel, to))
+
+
+def plain_rel(rel):
+    """A relative path that stays below its folder. Unlike safe_rel it allows any file name Windows has: an archive
+    moved aside with --move-others is the user's own and may be called "dlc cars (old).ark"."""
+    return bool(rel) and not rel.startswith('/') and ':' not in rel and '\\' not in rel and \
+        all(p and p not in ('.', '..') for p in rel.split('/'))
+
+
+def name_on_disk(path):
+    """The file's name as the folder lists it (DLC_Cars.ark for dlc_cars.ark), so a file moved aside keeps its spelling."""
+    want = os.path.basename(path).lower()
+    try:
+        for n in os.listdir(os.path.dirname(path)):
+            if n.lower() == want:
+                return n
+    except OSError:
+        pass
+    return os.path.basename(path)
+
+
+def aside_ok(to):
+    """An aside entry's place as this script writes it: below <game>\\glimpse_dlc_replaced_<date>."""
+    return plain_rel(to) and '/' in to and to.split('/')[0].lower().startswith('glimpse_dlc_replaced_')
+
+
+def prune_empty(d, game):
+    """Removes d and its parents below the game folder while they are empty (an emptied glimpse_dlc_replaced_<date>)."""
+    while (build_all.inside(d, game) and build_all.norm(d) != build_all.norm(game) and os.path.isdir(d)
+           and not os.listdir(d)):
+        os.rmdir(d)
+        d = os.path.dirname(d)
 
 
 def install(a, status):
@@ -256,6 +294,7 @@ def install(a, status):
     aside = list(old['aside']) if old else []
     folder = replaced_dir(game, stamp)
     moved = []   # this run's moves only
+    returned = []   # files an earlier install moved aside, put back because their name is no longer installed
     try:
         os.makedirs(gd, exist_ok=True)
         for fn in part_files(gd):   # an interrupted copy: never a finished file
@@ -285,8 +324,9 @@ def install(a, status):
                     cur[p['rel']] = (p['rel'], p['size'], p['sha'], p['what'])
                     org[p['rel']] = 'copied'
                 if p['act'] == 'replace-foreign':
-                    move_aside(p['dst'], game, folder, p['rel'], aside, record)
-                    moved.append(p['rel'])
+                    own = '/'.join(p['rel'].split('/')[:-1] + [name_on_disk(p['dst'])])   # as its owner spelled it
+                    move_aside(p['dst'], game, folder, own, aside, record)
+                    moved.append(own)
                 else:
                     record()
                 status.write('RUNNING', 'Copying %s (%s)' % (p['rel'], human(p['size'])))
@@ -303,7 +343,22 @@ def install(a, status):
                 say('  copied       %s' % p['rel'])
             elif p['act'] == 'remove':
                 os.remove(p['dst'])
+                cur.pop(p['rel'], None)
+                org.pop(p['rel'], None)
                 say('  removed      %s' % p['rel'])
+                # the name is free again: the file an earlier install moved aside from it (the newest one) returns,
+                # as an uninstall would put it back. Its entry goes only after the move, so a stop in between leaves
+                # an entry without a file, which the uninstall skips.
+                for e in reversed(aside):
+                    src = os.path.join(game, *e[1].split('/'))
+                    if e[0].lower() == p['rel'].lower() and aside_ok(e[1]) and os.path.isfile(src):
+                        os.replace(src, os.path.join(gd, *e[0].split('/')))   # under its own spelling
+                        aside.remove(e)
+                        returned.append(p['rel'])
+                        say('  put back     %s (moved aside by an earlier install)' % p['rel'])
+                        prune_empty(os.path.dirname(src), game)
+                        break
+                record()
             elif p['act'].startswith('leave'):
                 say('  left alone   %s (%s)' % (p['rel'], WORDS[p['act']]))
         if a.move_others:
@@ -316,19 +371,24 @@ def install(a, status):
     for d in build_all.data_dirs(p['rel'] for p in plan):   # quarry\, nem_quarry\, deadline\ ...: empty folders go
         if os.path.isdir(os.path.join(gd, d)):
             build_all.remove_empty_dirs(os.path.join(gd, d))
-    keep =[p for p in plan if p['src'] or p['act'] == 'leave-changed']
-    final = [(p['rel'], p['size'], p['sha'], p['what']) for p in keep]
-    meta['installed'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    write_manifest(gd, final, m['ini'], meta, INSTALLED, origin={p['rel']: p['origin'] for p in keep}, aside=aside)
+    # checked before the list says "installed": after a failure it still says "in progress" and Install runs again
     status.step('Checking the installed files')
     bad = [p['rel'] for p in plan if p['src'] and (not os.path.isfile(p['dst']) or os.path.getsize(p['dst']) != p['size'])]
     if bad:
-        raise BuildError('Installed files are missing or wrong: %s' % ', '.join(bad))
+        raise BuildError('Installed files are missing or wrong: %s. The install is incomplete; run Install again.'
+                         % ', '.join(bad))
+    keep = [p for p in plan if p['src'] or p['act'] == 'leave-changed']
+    final = [(p['rel'], p['size'], p['sha'], p['what']) for p in keep]
+    meta['installed'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    write_manifest(gd, final, m['ini'], meta, INSTALLED, origin={p['rel']: p['origin'] for p in keep}, aside=aside)
     say('')
     say('Installed into %s: %s.' % (gd, summary))
     say('Turn on SplitSecondPad.ini [DLC] %s (now %s).' % (want, now))
     details = ['Saves backed up to %s' % bak if bak else 'No save folder found (nothing backed up).',
                'SplitSecondPad.ini [DLC] needs %s (now %s).' % (want, now)]
+    if returned:
+        details.insert(0, 'Put back into glimpse_dlc (moved aside by an earlier install, the name is free again): %s'
+                       % ', '.join(returned))
     if moved:
         details.insert(0, 'Moved to %s: %s' % (folder, ', '.join(moved)))
     left = [n for n in others if n not in moved]
@@ -360,16 +420,17 @@ def uninstall(a, status):
     for rel, to, size in old['aside']:
         src = os.path.join(game, *to.split('/'))
         dst = os.path.join(gd, *rel.split('/'))
-        if not safe_rel(rel) or not build_all.inside(src, game) or not build_all.inside(dst, gd):
+        # only places this script moves files to (glimpse_dlc_replaced_<date>): a damaged list never moves a game file
+        if not plain_rel(rel) or not aside_ok(to) or not build_all.inside(src, game) or not build_all.inside(dst, gd):
             continue
         back.append((rel, src, dst))
-    removing = {d for _, d in rm}
+    removing = {build_all.norm(d) for _, d in rm}
     for rel, _ in rm:
         say('  remove  glimpse_dlc\\%s' % rel.replace('/', '\\'))
     for rel, why in keep:
         say('  leave   glimpse_dlc\\%s (%s)' % (rel.replace('/', '\\'), why))
     for rel, src, dst in back:
-        free = not os.path.exists(dst) or dst in removing
+        free = not os.path.exists(dst) or build_all.norm(dst) in removing
         say('  %s glimpse_dlc\\%s from %s' % ('put back' if os.path.isfile(src) and free else 'cannot put back', rel, src))
     if not a.apply:
         say('Dry run: nothing was changed. Run again with --apply.')
@@ -392,10 +453,7 @@ def uninstall(a, status):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 os.replace(src, dst)
                 restored.append(rel)
-                d = os.path.dirname(src)
-                while build_all.inside(d, game) and build_all.norm(d) != build_all.norm(game) and not os.listdir(d):
-                    os.rmdir(d)   # the emptied glimpse_dlc_replaced_<date> folder
-                    d = os.path.dirname(d)
+                prune_empty(os.path.dirname(src), game)   # the emptied glimpse_dlc_replaced_<date> folder
             else:
                 missed.append(rel)
         for d in build_all.data_dirs(rel for rel, _, _, _ in old['files']):   # quarry\, nem_quarry\, deadline\ ...

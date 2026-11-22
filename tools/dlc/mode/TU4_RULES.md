@@ -59,8 +59,8 @@ Registration: pickup params 0x8838F960, rival/countdown 0x88E76200.., pickup deb
   delta < 0, i.e. **the clock is stopped while frozen time > 0**. A positive delta (red/penalty) is ignored by
   the countdown, so red pickups have no clock effect in TU4 (Deadline sets the penalty to 0 and has no red boxes
   anyway). Clamp 0..3600. Deadline numbers: plain hit 0.5 s stopped, hit while drifting 0.5 * 4 = 2.0 s (matches
-  TEXT_TIMETRIALPLUS_OBJECTIVE1/2: "driving into pickups only stops the clock for 0.5s", "drift into pickups to
-  stop the clock for 2.0s").
+  the two hint texts TEXT_TIMETRIALPLUS_OBJECTIVE1/2, which name 0.5 s for a plain hit and 2.0 s for a hit in a
+  drift; the texts themselves are game data and not quoted here).
 - **Countdown start**: countdown reset 0x88379E10 and update use `TimeTrialPlusCountdown` instead of
   `Initial Countdown` when mode == 8 (the PC stage-1 mode puts the same value into `Initial Countdown`).
 

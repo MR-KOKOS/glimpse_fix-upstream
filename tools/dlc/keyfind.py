@@ -6,11 +6,11 @@ import os
 import struct
 import sys
 
-# GAME_DIR overrides the default Steam path (as in tools/ishot.sh and tools/test_race.sh)
-GAME = os.environ.get('GAME_DIR', 'G:/SteamLibrary/steamapps/common/SplitSecond')
+# GAME_DIR: the Split/Second folder
+GAME = os.environ.get('GAME_DIR', '')
 PC = os.path.join(GAME, 'data').replace('\\', '/')
-if not os.path.isdir(PC):
-    sys.exit('keyfind: no game data folder at %s (set GAME_DIR to the Split/Second folder)' % PC)
+if not GAME or not os.path.isdir(PC):
+    sys.exit('keyfind: no game data folder at %s (set GAME_DIR to the Split/Second folder)' % (PC if GAME else '?'))
 DLC = sys.argv[1:]
 
 

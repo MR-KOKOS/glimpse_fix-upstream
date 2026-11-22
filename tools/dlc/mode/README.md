@@ -479,8 +479,10 @@ dictionary, but the PC resident.ark has none.
 
 ## Limits and open points
 
-- Without `[DLC] Pickups=1` (or with a pack built before stage 2) there are no boxes: the countdown only runs down,
-  from the Xbox start time plus `[DLC] DeadlineBonus`. Packs built with the old build_pack default
+- Without `[DLC] Pickups=1` there are no boxes: the countdown only runs down, from the Xbox start time plus
+  `[DLC] DeadlineBonus`. The bonus is added only with `Pickups=0`: with `Pickups=1` and a pack built before stage 2
+  (or a track without its `.pkps`, which the install log names) there are neither boxes nor the bonus, so the Xbox
+  start time is hardly enough for the lap; rebuild the pack or set `Pickups=0`. Packs built with the old build_pack default
   (`--mode-extra-seconds 50`) carry the 50 s themselves: a start time above 100 s gets no DeadlineBonus (logged);
   with `Pickups=1` they give the boxes plus 50 s, so rebuild them for the Xbox times.
 - Locked in quick play unless `[DLC] Modes=1` (or DLCUnlocks11/12, `UnlockAll=1`); see Unlock. The unlock is

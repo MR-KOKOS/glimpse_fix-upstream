@@ -146,7 +146,7 @@ static void LoadConfig()
     if (g_cfg.menuRepeatDelay < 100) g_cfg.menuRepeatDelay = 100;
     if (g_cfg.menuRepeatDelay > 2000) g_cfg.menuRepeatDelay = 2000;
     g_cfg.menuRepeatRate = IniInt("Controller", "MenuRepeatRate", 160);
-    if (g_cfg.menuRepeatRate < 80) g_cfg.menuRepeatRate = 80;  // a press and its 40 ms release must fit
+    if (g_cfg.menuRepeatRate < 80) g_cfg.menuRepeatRate = 80;  // the D-pad is held this long between two releases
     if (g_cfg.menuRepeatRate > 1000) g_cfg.menuRepeatRate = 1000;
     char glyphs[32];
     IniString("Controller", "ButtonGlyphs", "xbox", glyphs, sizeof(glyphs));
@@ -323,6 +323,11 @@ extern "C" HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version
         LogEnvironment();  // here, not in DllMain: it reads files, the registry and the module list
         LoadXInput();
         ApplyGamePatches();
+        // [DLC] Tracks: here and not inside ApplyGamePatches, which leaves early on an exe it does not recognise by
+        // its code: the track overlay was merged at DLL load by the build's time stamp alone (DlcInstall), and
+        // unregistered its tracks would be listed without an index. Checks build, overlay and tables itself; the
+        // online thread (OnlineStart, above) waits for it (DlcTracksDecided).
+        if (g_cfg.dlcTracks) DlcRegisterTracks();
         DlcInstallModes();  // [DLC] Modes: same moment as DlcRegisterTracks, checks build and overlay itself
         DlcInstallPickups();  // [DLC] Pickups / DeadlineBonus: the same, checks build and overlay itself
         DlcInstallCars();   // [DLC] Cars: the same, checks build, UnlockAll and overlay itself

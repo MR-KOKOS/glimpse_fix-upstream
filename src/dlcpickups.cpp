@@ -1023,7 +1023,10 @@ static bool HudText(int id, bool teaching, float seconds, int style)
     }
     char text[256];
     if (id == kMsgObjective2) {
-        if (!Text("TEXT_TIMETRIALPLUS_OBJECTIVE2", text, sizeof(text))) return false;  // pack without the TU4 texts
+        // a pack without the TU4 texts (every build from a dump with the released tools): the fix's own wording,
+        // not the game's text, so the hint still comes up
+        if (!Text("TEXT_TIMETRIALPLUS_OBJECTIVE2", text, sizeof(text)))
+            strcpy_s(text, "DRIFT THROUGH A PICKUP: THE CLOCK STOPS FOUR TIMES AS LONG");
     } else {
         PickupText(id == kMsgDriftPickup, text, sizeof(text));
     }
@@ -1082,7 +1085,7 @@ static void HudFrame(float prev, float now, float dt)
         s_hint2Shown = true;
         bool shown = HudText(kMsgObjective2, true, 4.0f, 1);
         if (g_cfg.log) Log("DLC modes: Deadline hint 2 (%s)%s", plain ? "3 boxes without a drift" : "after hint 1",
-                           shown ? "" : ": no text (TEXT_TIMETRIALPLUS_OBJECTIVE2 not in the dictionary or no HUD)");
+                           shown ? "" : ": not shown (no HUD message queue)");
     }
     // the timer, the sound and the "+x,xs" message
     int msg = 0;
@@ -1382,6 +1385,12 @@ static void GradeLoad()
             kPresetPath[i], p.fadeIn, p.fadeOut, p.cube ? "overwritten" : "kept", p.cubeEnabled, p.cubeBlend, p.cubeInput,
             p.vignette ? "overwritten" : "kept", p.vig[0], p.vig[1], p.vig[2], p.vig[3], p.vig[4], p.vig[5], p.vig[6],
             p.gradient ? "overwritten" : "kept");
+    }
+    // without the hook on the game's colour cube pass (PatchMask, or the pass was not recognised) the presets would
+    // never show: the DLL's edge glow stays the look then
+    if (ok && !GradePassHooked()) {
+        Log("DLC pickups: the game's colour grading pass is not hooked, the Frozen Time look is the DLL's edge glow");
+        ok = false;
     }
     s_gradeOn = ok;
     if (ok) Log("DLC pickups: the Frozen Time look is TU4's post presets on the game's colour cube pass (no edge glow)");

@@ -200,6 +200,7 @@ void FramePace();  // after every Present: 60 fps pacing of the main loop
 // postfx.cpp
 void PatchMotionBlur();
 void PatchVignette();
+bool GradePassHooked();  // the colour grading pass is hooked (after PatchVignette): Deadline's Frozen Time presets show
 void PatchBloomAndFlares();
 void PatchDepthOfField();  // PhotoMode=1: the depth of field pass, used by the photo mode only
 void ApplyLensFlare();  // per frame
@@ -230,6 +231,7 @@ void ApplyExplosionShake();  // per input frame: ExplosionShakeOff=1
 bool SinglePlayerRace(); // a race camera runs on a single screen (not paused)
 bool CameraBlocksPad();  // photo mode drives the camera with the pad: the game sees it idle
 bool RaceCameraHooked(); // the race camera updates are hooked, so RaceRunning() can see a race
+bool RaceSceneRunning(); // a crash or takedown camera of the race runs (a car is wrecked): still the race
 DWORD RaceCameraAge();   // ms since the last race camera update (0xFFFFFFFF: none yet)
 bool RaceCameraPose(float* pos, float* fwd);  // the game's race camera, updated in the last half second
 bool OnlineSession();      // SteamLAN: Quazal's LAN mode is in use (online.cpp)
@@ -299,7 +301,7 @@ void SmaaPresent(IDirect3DDevice9* dev);         // diag.cpp: start of Present
 void DlcInstall();         // [DLC] Overlays: while the DLL loads (dlcfs.cpp)
 void DlcLogStats();
 void DlcUninstall();
-void DlcRegisterTracks();  // [DLC] Tracks: at ApplyGamePatches, after the exe's static initialisers (dlcfs.cpp)
+void DlcRegisterTracks();  // [DLC] Tracks: right after ApplyGamePatches, after the exe's static initialisers (dlcfs.cpp)
 bool DlcTracksDecided();   // DlcRegisterTracks has run (or [DLC] Tracks=0): the DLC track set is final
 // the DLC tracks other players need for a LAN game together (online.cpp, its thread, after DlcTracksDecided): sig "none"
 // without a merged track overlay, else 16 hex digits over the fix version, the registered tracks and their files;

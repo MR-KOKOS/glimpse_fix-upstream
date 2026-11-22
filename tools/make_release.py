@@ -46,7 +46,9 @@ DLC_EXTRA = ('README_build.md', 'xenos/LICENSE-rexglue.txt')
 # shipped when present, also before a converter imports them (their data, e.g. the TU4 text JSON, never is)
 DLC_OPTIONAL = ('mode/tu4text.py',)
 FILES_LIST = 'glimpse_tools_files.tsv'  # build_all.FILES_LIST
-SKIP_DIRS = {'__pycache__', 'ghidra'}
+# xex: the local-only XEX2 / title update tools (tools\dlc\xex is not in the repository; xex2.py holds Microsoft's XEX
+# key): never traced, never shipped
+SKIP_DIRS = {'__pycache__', 'ghidra', 'xex'}
 # (zip path, repo path); None = optional
 TOP = (('dinput8.dll', 'build/dinput8.dll'), ('glimpse_config.exe', 'build/glimpse_config.exe'),
        ('setlaa.exe', 'build/setlaa.exe'), ('SplitSecondPad.ini', 'SplitSecondPad.ini'), ('LICENSE', 'LICENSE'),
@@ -128,6 +130,9 @@ def converter_set():
         for name in imp | scripts:
             if name in mods and mods[name] not in seen:
                 todo.append(mods[name])
+    local_only = sorted(r for r in seen if r.split('/')[0] in SKIP_DIRS)
+    if local_only:   # cannot happen while tool_modules skips them: a second lock on the release
+        raise Fail('local-only tools must never be shipped: %s' % ', '.join(local_only))
     return sorted(seen)
 
 

@@ -96,6 +96,9 @@ static void __fastcall Hook_GradeRender(BYTE* self, void*, void* a, void* b, voi
     *alpha = gradient;
 }
 
+// [DLC] Pickups: Deadline's Frozen Time presets reach the picture only through Hook_GradeRender
+bool GradePassHooked() { return s_origGrade != NULL; }
+
 void PatchVignette()
 {
     if (g_cfg.vignette && g_cfg.gradient && !PickupsWanted()) return;  // Deadline's Frozen Time look uses this pass

@@ -120,15 +120,17 @@ Without `--apply` it checks the staging folder and prints the plan, per staged f
 `glimpse_dlc` (the game lays them over its data too; each is named in an `other` line) or the last install was
 interrupted (a `*.glimpse_part` file or an unfinished list).
 
-With `--apply`, in this order: refuses while `SplitSecond.exe` runs or the game drive lacks the space; removes leftover
-`*.glimpse_part` files; copies the save folder (`Documents` as Windows has it, also when moved to OneDrive,
-`\Disney Interactive Studios\Split Second`) to `Split Second backup_<date>_dlc` next to it and compares the copy;
+With `--apply`, in this order: refuses while `SplitSecond.exe` runs or the game drive lacks the space; copies the save
+folder (`Documents` as Windows has it, also when moved to OneDrive, `\Disney Interactive Studios\Split Second`) to
+`Split Second backup_<date>_dlc` next to it and compares the copy's file sizes; removes leftover `*.glimpse_part` files;
 keeps `glimpse_dlc\glimpse_dlc_installed.tsv` up to date before every step (a file to be copied is listed as `copied`
 with the staged content, a file to be moved aside gets its `aside` line, both before it happens), so an install that
 stops anywhere can be undone with `--uninstall`; copies each file to `<name>.glimpse_part` and renames it; moves replaced files of others (and with `--move-others` the other `.ark` files)
 to `<game>\glimpse_dlc_replaced_<date>` (`_2`, `_3` ... if that name is taken; only created when something is moved);
-removes its own files that are no longer staged; writes the final list. A file error ends it with the message "the
-install is incomplete; run Install again", and the next run completes it.
+removes its own files that are no longer staged and puts a file that an earlier install moved aside from such a name
+back there; checks the installed files and then writes the final list. A file moved aside keeps its own spelling
+(`DLC_Cars.ark`); names are compared as Windows compares them, and nothing is ever moved onto an existing file. A file
+error ends it with the message "the install is incomplete; run Install again", and the next run completes it.
 
 `glimpse_dlc_installed.tsv`: as the staging manifest, each `file` line with its origin, `copied` or `adopted` (it was
 there already with exactly the staged content), and an `aside <path> <where it went> <size>` line per file moved away.

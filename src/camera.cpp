@@ -529,6 +529,9 @@ static bool InRaceScene()
            now - (s_wreckSeen & ~1u) < 1000;
 }
 
+// for the D-pad's menu repeat: the race goes on while its crash and takedown cameras run
+bool RaceSceneRunning() { return InRaceScene(); }
+
 static bool GameHasFocus()
 {
     DWORD pid = 0;

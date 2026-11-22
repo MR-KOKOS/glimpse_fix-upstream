@@ -71,6 +71,7 @@ struct DlcTrackState {
     bool complete;    // its required files are there (data or glimpse_dlc\<dir>\data)
     int elsewhere;    // how many of its files lie only below glimpse_dlc\<dir>\data
     int index;        // given track index, -1 = not registered
+    int requiredElsewhere;  // how many of those files are required ones (the level archives)
 };
 static DlcTrackState s_track[kNumDlcTracks];
 static int s_registered;          // DLC tracks registered (indices 15 .. 15 + s_registered - 1)
@@ -100,12 +101,13 @@ static bool TrackFilesPresent(int t, bool logMissing)
     const DlcTrack& d = kDlcTracks[t];
     char alt[MAX_PATH];
     AltDirOf(d.dir, alt);
-    s_track[t].elsewhere = 0;
+    s_track[t].elsewhere = s_track[t].requiredElsewhere = 0;
     for (int i = 0; i < 6 && d.files[i]; i++) {
         std::string inData = std::string(s_dataDir) + d.files[i], inAlt = std::string(alt) + d.files[i];
         if (Exists(inData.c_str())) continue;
         if (Exists(inAlt.c_str())) {
             s_track[t].elsewhere++;
+            if (i < kRequiredFiles) s_track[t].requiredElsewhere++;
             continue;
         }
         if (logMissing)
@@ -323,9 +325,11 @@ static void Install()
             Log("DLC: kernel32's CreateFileA/W or FindFirstFileA are not import thunks, the files in glimpse_dlc\\<name>\\data "
                 "cannot be used (put them below data)");
             s_altCount = 0;
+            // only a level archive that lies there makes the track unusable: without its bank or movie (the optional
+            // files) the race runs without them
             if (tracks)
                 for (int t = 0; t < kNumDlcTracks; t++)
-                    if (s_track[t].listed && s_track[t].elsewhere) s_track[t].complete = false;
+                    if (s_track[t].listed && s_track[t].requiredElsewhere) s_track[t].complete = false;
             bool broken = false;
             for (int t = 0; t < kNumDlcTracks; t++) broken |= s_track[t].listed && !s_track[t].complete;
             if (broken) {  // a listed track lost its files: no track overlay, as above
@@ -352,7 +356,7 @@ static void Install()
     // on the two failures below the overlays are not used: the name redirect (if it went in) comes out again,
     // IoUninstall puts back every slot swapped so far
     if (!IoAddVirtualFile(base, va)) {
-        Log("DLC: resident.ark not found");
+        Log("DLC: resident.ark cannot be opened or identified (no file id on this volume, or 4 GB and more), overlays not used");
         delete va;
         IoUninstall();
         s_altCount = 0;

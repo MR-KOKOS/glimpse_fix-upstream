@@ -518,7 +518,7 @@ private:
     {
         const WORD dpad = XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT | XINPUT_GAMEPAD_DPAD_RIGHT;
         b &= dpad;
-        if (!RaceCameraHooked() || RaceRunning()) {
+        if (!RaceCameraHooked() || RaceRunning() || RaceSceneRunning()) {  // also a crash camera of the race
             m_menuHeld = b;
             m_repeatDir = 0;
             return pov;

@@ -517,13 +517,6 @@ static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data,
         s_hosting = true;
         Log("online: this player answered a session search: it hosts the LAN game");
     }
-    if (!broadcast && to->port != kDiscoveryPort && !s_hosting && !s_sessionHost && to->ip != s_myIp &&
-        (to->ip >> 24) != 127) {
-        s_sessionHost = to->ip;
-        char h[20];
-        IpText(to->ip, h, sizeof(h));
-        Log("online: this player joined the LAN game of %s", h);
-    }
     if (broadcast) InterlockedIncrement(&s_sentBroadcast);
     if (broadcast || to->ip == s_myIp || (to->ip >> 24) == 127) {
         if (!broadcast) InterlockedIncrement(&s_sentLocal);
@@ -552,6 +545,15 @@ static void SendDatagram(uint16_t srcPort, const Endpoint* to, const char* data,
     if (held) {
         DlcHeld(to->ip, &heldPeer, true, to->port, size);
         return;
+    }
+    // game traffic that really goes out to another player: this player joined that one's game (after the DLC check:
+    // a datagram held back above reached nobody, and its target's rules must not become the session's)
+    if (!broadcast && to->port != kDiscoveryPort && !s_hosting && !s_sessionHost && to->ip != s_myIp &&
+        (to->ip >> 24) != 127) {
+        s_sessionHost = to->ip;
+        char h[20];
+        IpText(to->ip, h, sizeof(h));
+        Log("online: this player joined the LAN game of %s", h);
     }
     char t[20];
     IpText(to->ip, t, sizeof(t));

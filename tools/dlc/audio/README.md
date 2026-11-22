@@ -61,7 +61,7 @@ fmodcheck.exe <game dir> fevprops <media dir\> <name.fev>  dump all event proper
 PC resident.ark (the four `_cartypespecific` files) are left out. `quarry_streamed.fsb` is byte-identical to
 the Xbox `graveyard_streamed.fsb`, so the PC `graveyard_streamed.fsb` is copied. Samples of a DLC bank whose
 XMA data equals a base-game sample are taken from the PC base bank (13 of 58 in quarry.fsb).
-Needs vgmstream-cli (`D:\vgmstream`) and ffmpeg (`D:\Program Files (x86)\ffmpeg\bin`); `fmodcheck.exe` is
+Needs vgmstream-cli and ffmpeg (in `PATH`, or where `build_all.py` looks, see `../README_build.md`); `fmodcheck.exe` is
 32-bit (`build_fmodcheck.bat`, VS 2022 Build Tools). Base-game pairs come from `../pair_lib.py` paths.
 
 Loop and sync points: Layer II decoding delays the audio by exactly 481 samples (measured on FMOD's own

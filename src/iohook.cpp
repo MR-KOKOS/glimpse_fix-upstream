@@ -269,10 +269,14 @@ int IoInstallKernel32Slots()
         const BYTE* p = (const BYTE*)GetProcAddress(k32, names[i]);
         if (!p || p[0] != 0xFF || p[1] != 0x25) return 0;  // not a jmp [slot] thunk: leave everything alone
         slots[i] = *(void***)(p + 2);
-        // the slot must be kernel32's own (its import table), and still hold a function outside kernel32
-        HMODULE owner = NULL;
+        // the slot must be kernel32's own (its import table), and still hold a function outside kernel32 (an empty
+        // slot or one that points back into kernel32 would become the "real" function every read and close goes to)
+        HMODULE owner = NULL, target = NULL;
         if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                (LPCSTR)slots[i], &owner) || owner != k32)
+                                (LPCSTR)slots[i], &owner) || owner != k32 || !*slots[i])
+            return 0;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)*slots[i], &target) && target == k32)
             return 0;
     }
     // a second call: the slots hold our hooks already, which must not become the "real" functions (endless recursion)
@@ -280,6 +284,7 @@ int IoInstallKernel32Slots()
     for (int i = 0; i < 4; i++)
         if (*slots[i] == hooks[i]) ours++;
     if (ours) return ours == 4 ? 4 : 0;
+    s_saved.reserve(s_saved.size() + 4);  // before any slot changes: a swapped slot is always in the list
     int done = 0;
     for (int i = 0; i < 4; i++) {
         *real[i] = *slots[i];  // KernelBase's function
@@ -309,17 +314,15 @@ static HANDLE WINAPI Hook_CreateFileA(LPCSTR name, DWORD access, DWORD share, LP
 static HANDLE WINAPI Hook_CreateFileW(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES sa, DWORD disp,
                                       DWORD flags, HANDLE tmpl)
 {
-    // Bink and FMOD may open their files wide: only plain ASCII names are offered for redirection
+    // Bink and FMOD may open their files wide: names the ANSI code page holds exactly are offered for redirection
+    // (a game folder with umlauts included; the redirect and the rest of the fix work with ANSI paths)
     char a[MAX_PATH], other[MAX_PATH];
     WCHAR w[MAX_PATH];
     if (name && s_redirect) {
-        size_t n = 0;
-        while (n < MAX_PATH - 1 && name[n] && name[n] < 0x80) a[n] = (char)name[n], n++;
-        if (n < MAX_PATH - 1 && !name[n]) {
-            a[n] = 0;
-            if (s_redirect(a, other, sizeof(other)) && MultiByteToWideChar(CP_ACP, 0, other, -1, w, MAX_PATH))
-                name = w;
-        }
+        BOOL lossy = FALSE;
+        if (WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, name, -1, a, MAX_PATH, NULL, &lossy) && !lossy &&
+            s_redirect(a, other, sizeof(other)) && MultiByteToWideChar(CP_ACP, 0, other, -1, w, MAX_PATH))
+            name = w;
     }
     return s_realCreateFileW(name, access, share, sa, disp, flags, tmpl);
 }
@@ -363,6 +366,7 @@ int IoInstallCreateFileRedirect(IoRedirect_t fn)
                                 (LPCSTR)slots[i], &owner) || owner != k32 || !*slots[i])
             return 0;
     }
+    s_saved.reserve(s_saved.size() + 3);  // before any slot changes: a swapped slot is always in the list
     s_redirect = fn;
     int done = 0;
     for (int i = 0; i < 3; i++) {

@@ -317,11 +317,22 @@ void RivalsObjectives(BYTE* info)
 }
 
 // ---------------------------------------------------------------- time left
+// The end screen hands its time text to the movie as it is (0x8085A3..0x8085C7, no dictionary lookup, unlike the
+// result rows' 0x802420), so the DNF text is looked up here: the game's dictionary ([0xD64E28], 0xA15BF0, which
+// gives the key back when it has no text). Inside the caller's __try.
+static const char* DnfText()
+{
+    typedef const char*(__thiscall* DictLookup_t)(void* dict, const char* key);
+    void* dict = *(void* const*)0x00D64E28;
+    const char* t = dict ? ((DictLookup_t)0x00A15BF0)(dict, "TEXT_DNF") : NULL;
+    return t && *t && strcmp(t, "TEXT_DNF") ? t : "DNF";
+}
+
 static void FormatLeft(void* str, unsigned __int64 used, float start)
 {
     const unsigned __int64 cd = (unsigned __int64)(int)start * 100;  // TU4: (int)Countdown * 100
     if (used >= cd) {
-        kStrFormat(str, "TEXT_DNF");
+        kStrFormat(str, "%s", DnfText());
         return;
     }
     const unsigned __int64 left = cd - used;
