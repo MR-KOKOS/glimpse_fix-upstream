@@ -125,9 +125,11 @@ shadow cascades from the global `Lighting/CSM_Max` settings (chosen at 0x88A3E0,
 both. The three cascades then cover a longer distance, so close shadows get a little softer. Split
 screen and the Low and Medium levels keep their per-level settings.
 
-With `VirtualPads=0`, `CarDetail` and `ShadowDistance` are reapplied on the game thread at 30
-and 60 fps. The fix uses the first `PeekMessageA` call in the input update once per main-loop
-pass. It checks the call site and the import slot before installing the hook.
+With `VirtualPads=0`, the fix uses the first `PeekMessageA` call in the game's input update
+to reapply `CarDetail` and `ShadowDistance`. In the Steam image, the main loop calls that update
+before simulation and rendering. The hook checks the call site and import slot at startup and
+logs whether installation succeeds with `Log=1`. Gameplay validation at 30 and 60 fps and
+verification of the Russian depot's hook signatures are pending.
 
 **Shadow resolution.** In single player all three cascades go into one depth texture of 1024x3072
 (INTZ, or the first of RAWZ, DF24, DF16, D24S8 the device takes), one above the other, drawn through
@@ -454,7 +456,7 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with `UltrawideFix=2` and its `Invoke`
   with `SteamLAN=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
-  `Event::start`), read-only
+  `Event::start`, and `PeekMessageA` with `VirtualPads=0`), read-only
   strings and constants (prompt bar icon paths, route marker size),
 * the Direct3D device's vtable, and calls into the game's own functions (dictionary lookup,
   Scaleform `Invoke`/`SetVariable` for the prompt bar, `SetVisible` for the photo mode's overlays,
@@ -586,6 +588,7 @@ the Russian build's place from `src/build_ru.inc`.
 | `0x004DADE0` | `cLayer_PromptBar`: sets the PC key frames and captions |
 | `0x00CFA5E0` / `0x00CFA6E0` | JOY_AXIS_* / JOY_BUTTON_* name tables |
 | `0x00558880` | Main loop: measure frame time, accumulate ticks, `Update(ticks)`, `Render` |
+| `0x00558991` → `0x00410380` | Main-loop call to the input update. Its first `PeekMessageA` call returns to `0x0041039C` via import slot `0x00B9B270`. |
 | `0x00D747F4`, `0x00D747F0`, `0x00D199D8` | Main loop accumulator, its tick counter (`Sleep(5)` at 5), "max ticks" tweakable (10) |
 | `0x00BA0C14` | 1/30, shared by the main loop, the AI steering controller `0x524AC0`, AI look-ahead grids and data conversions |
 | `0x00BC0BC0` | `cAIPlayer` vtable slot of the AI player update `0x51A8B0`; the AI's skill (0–1) at +0x24 |

@@ -886,6 +886,7 @@ static void ScaleShadowDistance()
 
 static decltype(&PeekMessageA) s_peekMessage;
 static const void* s_framePeekReturn;
+static const BYTE* const kInputUpdateAnchor = (const BYTE*)G(0x00558969);
 
 static BOOL WINAPI Hook_PeekMessageA(LPMSG msg, HWND wnd, UINT min, UINT max, UINT remove)
 {
@@ -896,25 +897,39 @@ static BOOL WINAPI Hook_PeekMessageA(LPMSG msg, HWND wnd, UINT min, UINT max, UI
     return s_peekMessage(msg, wnd, min, max, remove);
 }
 
+static const BYTE* Rel32CallTarget(const BYTE* call)
+{
+    return call + 5 + *(const LONG*)(call + 1);
+}
+
 // Without virtual pads, use the first PeekMessageA in the game's input update. The main loop
 // calls this update once per pass, before simulation and rendering at both frame rates.
 static void HookWorldLodWithoutPads()
 {
-    const BYTE* call = (const BYTE*)G(0x00558969) + 0x28;  // main loop's call to the input update
-    const char* mismatch = "world LOD: input update not recognised, car detail and shadow distance left alone";
-    if (!BytesMatch(call - 6, "8B0D") || !BytesMatch(call, "E8") || !BytesMatch(call + 5, "8B178B4214568BCFFFD0"))
-        return Log("%s", mismatch);
-    // Follow the call and the import operand to use the addresses in this build's code.
-    const BYTE* update = call + 5 + *(const LONG*)(call + 1);
-    if (!BytesMatch(update, "83EC20538B1D") || !BytesMatch(update + 10, "566A016A006A006A008D44241C508BF1FFD385C0"))
-        return Log("%s", mismatch);
+    if (!BytesMatch(kInputUpdateAnchor + 0x22, "8B0D") || !BytesMatch(kInputUpdateAnchor + 0x28, "E8") ||
+        !BytesMatch(kInputUpdateAnchor + 0x2D, "8B178B4214568BCFFFD0"))
+        return Log("world LOD: main loop signature mismatch, hook skipped");
+    if (!BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28), "83EC20538B1D") ||
+        !BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28) + 0x0A, "566A016A006A006A008D44241C508BF1FFD385C0"))
+        return Log("world LOD: input update signature mismatch, hook skipped");
+
+    const BYTE* update = Rel32CallTarget(kInputUpdateAnchor + 0x28);
     auto slot = *(decltype(&PeekMessageA)* const*)(update + 6);  // mov ebx, [PeekMessageA IAT slot]
     const auto peek = (decltype(&PeekMessageA))GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
-    if (!peek || !CodeMatches(slot, &peek, sizeof(peek))) return Log("%s", mismatch);
+    decltype(&PeekMessageA) current;
+    if (!peek || !ReadProcessMemory(GetCurrentProcess(), slot, &current, sizeof(current), NULL) || current != peek)
+        return Log("world LOD: PeekMessageA import not where expected, hook skipped");
+
+    DWORD old;
+    if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old))
+        return Log("world LOD: cannot make PeekMessageA import writable, hook skipped (error %lu)", GetLastError());
     s_peekMessage = peek;
     s_framePeekReturn = update + 0x1C;
-    void* hook = (void*)Hook_PeekMessageA;
-    WriteMemory(slot, &hook, sizeof(hook));
+    const bool hooked = InterlockedCompareExchangePointer((void**)slot, (void*)Hook_PeekMessageA, (void*)peek) == (void*)peek;
+    if (!VirtualProtect(slot, sizeof(*slot), old, &old))
+        Log("world LOD: cannot restore PeekMessageA import protection (error %lu)", GetLastError());
+    Log(hooked ? "world LOD: hooked input update for car detail and shadow distance"
+               : "world LOD: PeekMessageA import changed during installation, hook skipped");
 }
 
 // Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
