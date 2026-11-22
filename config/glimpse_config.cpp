@@ -679,7 +679,9 @@ static const char kNoPython[] =
     "scripts.\n\n"
     "1. Install Python 3.8 or newer from python.org (keep \"py launcher\" ticked).\n"
     "2. Then, in a command prompt: py -3 -m pip install numpy\n\n"
-    "The track Quarry also needs vgmstream-cli and ffmpeg (see the README, \"Your own Xbox DLC\").";
+    "The track Quarry also needs vgmstream-cli and ffmpeg (see the README, \"Your own Xbox DLC\").\n\n"
+    "Or run setup_deps.bat in the folder glimpse_tools\\dlc with -Install: it installs Python, numpy, vgmstream-cli, "
+    "ffmpeg and D3DCompiler_41 in their current versions.";
 
 static bool DlcBusy() { return s_task != DLC_NONE; }
 

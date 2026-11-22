@@ -104,6 +104,8 @@ CAR_MODELS = {'deadline': ('Musclecar_17', 'Musclecar_18', 'Musclecar_19', 'Truc
 EXE_DIRS = (os.path.join(os.path.dirname(HERE), 'bin'),                          # glimpse_tools\bin next to dlc
             os.path.join(os.environ.get('LOCALAPPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Local'),
                          'glimpse_fix', 'tools'))
+# the helper that installs the programs above in their current versions (setup_deps.ps1 next to this script)
+SETUP_HINT = ' Run setup_deps.bat -Install (next to build_all.py) to get it.'
 NEED_FREE_WORK = 4 << 30     # extracted packages, intermediate archives and the staging copy
 # Havok class layouts (havok/convhkx.py): read on this PC from SplitSecond.exe and the PC archives into
 # <work>\hkref.json (convhkx.py learn, about 15 s), never shipped; GLIMPSE_HKREF points the converters at it.
@@ -521,7 +523,7 @@ def requirements(a, want_track):
         ffm = find_exe(a.ffmpeg, 'ffmpeg')
         if not vgm or not ffm:
             warnings.append('The DLC tracks left out: their sound banks need %s (see tools\\dlc\\README_build.md). Only the cars '
-                            'are built.' % ' and '.join(n for n, x in (('vgmstream-cli', vgm), ('ffmpeg', ffm)) if not x))
+                            'are built.%s' % (' and '.join(n for n, x in (('vgmstream-cli', vgm), ('ffmpeg', ffm)) if not x), SETUP_HINT))
             want_track = False
         else:
             say('vgmstream-cli: %s' % vgm)
@@ -530,13 +532,13 @@ def requirements(a, want_track):
         # the track's shaders are translated with the compiler the PC shaders were made with; fxc.exe (d3dcompiler_47)
         # makes wrong code for some of them (xenos/d3dcomp.py), so it is never used instead
         warnings.append('The DLC tracks left out: D3DCompiler_41.dll (DirectX End-User Runtime, June 2010) is not installed. '
-                        'Only the cars are built.')
+                        'Only the cars are built.' + SETUP_HINT)
         want_track = False
     flags = ['-I']
     if want_track:
         flags = python_flags()
         if flags is None:
-            warnings.append('The DLC tracks left out: numpy is missing (py -3 -m pip install numpy). Only the cars are built.')
+            warnings.append('The DLC tracks left out: numpy is missing (py -3 -m pip install numpy). Only the cars are built.' + SETUP_HINT)
             want_track, flags = False, ['-I']
         else:
             say('numpy found (steps run with %s)' % ' '.join(flags))

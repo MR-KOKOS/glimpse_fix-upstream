@@ -43,7 +43,7 @@ DLC = os.path.join(REPO, 'tools', 'dlc')
 TOOLS_DIR = 'glimpse_tools'             # in the zip and the game folder; glimpse_config.exe looks for <it>\dlc
 DLC_ENTRIES = ('build_all.py', 'install_dlc.py')
 # shipped besides the traced scripts (paths below tools\dlc)
-DLC_EXTRA = ('README_build.md', 'xenos/LICENSE-rexglue.txt')
+DLC_EXTRA = ('README_build.md', 'xenos/LICENSE-rexglue.txt', 'setup_deps.bat', 'setup_deps.ps1')
 # shipped when present, also before a converter imports them (their data, e.g. the TU4 text JSON, never is)
 DLC_OPTIONAL = ('mode/tu4text.py',)
 FILES_LIST = 'glimpse_tools_files.tsv'  # build_all.FILES_LIST
@@ -59,7 +59,7 @@ TOP = (('dinput8.dll', 'build/dinput8.dll'), ('glimpse_config.exe', 'build/glimp
        ('LICENSE-SMAA.txt', 'third_party/smaa/LICENSE.txt'), ('THIRD_PARTY.txt', 'THIRD_PARTY.txt'),
        (TOOLS_DIR + '/docs/INI.md', 'docs/INI.md'))
 DATA_EXT = ('.ark', '.pkl', '.fsb', '.fev', '.bik', '.json', '.exe', '.dll', '.xex', '.xexp', '.bin', '.dds', '.wav')
-TEXT_EXT = ('.py', '.md', '.txt', '.tsv')
+TEXT_EXT = ('.py', '.md', '.txt', '.tsv', '.bat', '.ps1')
 # a developer's PC in a shipped file. PERSONAL (user folders with the account name, the scratchpad, the source
 # folder) is an error: it would publish the account name and the build would depend on folders only that PC has.
 # MACHINE (a fixed game library or tool folder as a manual run's default) is listed: build_all.py passes every such

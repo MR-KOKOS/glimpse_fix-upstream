@@ -191,7 +191,8 @@ What you need:
 * The converters: the folder `glimpse_tools` of the release zip, copied into the game folder with
   `glimpse_config.exe` (from the source: `tools\dlc`; if they are somewhere else, the settings
   program asks for the folder the first time).
-* These programs (glimpse_fix does not include or download them):
+* These programs (glimpse_fix does not include them; `glimpse_tools\dlc\setup_deps.bat` checks them and,
+  with `-Install`, downloads and installs each in its current version from its official source):
 
 | Program | Used for | Without it |
 |---|---|---|
@@ -200,6 +201,11 @@ What you need:
 | vgmstream-cli (the vgmstream project's command line tool for Windows) | decoding Quarry's sound banks (XMA on the Xbox) | Quarry is left out (WARN) |
 | ffmpeg (a Windows build of FFmpeg) | encoding them for the PC | Quarry is left out (WARN) |
 | `D3DCompiler_41.dll` (DirectX End-User Runtime, June 2010; the game's installer normally puts it in place) | compiling the translated Quarry shaders | Quarry is left out (WARN) |
+
+`setup_deps.bat` alone only shows what is there and what is missing; `-Install` installs what is
+missing (Python with winget, numpy with pip, vgmstream-cli and ffmpeg portable into
+`%LOCALAPPDATA%\glimpse_fix\tools`, the DirectX End-User Runtime from Microsoft, which asks for admin
+rights); `-Update` also updates what is there.
 
 vgmstream-cli and ffmpeg are found in `PATH`, in `glimpse_tools\bin` or in
 `%LOCALAPPDATA%\glimpse_fix\tools`. `py -3 -I glimpse_tools\dlc\build_all.py --preflight --game <game
