@@ -173,6 +173,12 @@ Converted so far, from whichever of these packages your dump has:
 
 All cars go into one car pack. *Master Unlock* is not needed.
 
+**Texts.** The DLC's official texts (the help lines of Deadline and Survival Race, the pickup message and hint in
+the game's language, the car descriptions, the rivals' names) are not in the DLC packages: the Xbox's Title
+Update 4 carries them inside its program. A normal build therefore uses glimpse_fix's own texts, which explain the
+same rules in other words. The official texts need a TU4 text table that the release cannot produce (it is made
+with a local development tool that is not part of glimpse_fix); without it the converters write their own texts.
+
 What you need:
 
 * Your own DLC from the Xbox 360, copied off the console as it stores it: the folder `425607E7`

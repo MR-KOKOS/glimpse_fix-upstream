@@ -303,10 +303,13 @@ void DlcLogStats();
 void DlcUninstall();
 void DlcRegisterTracks();  // [DLC] Tracks: right after ApplyGamePatches, after the exe's static initialisers (dlcfs.cpp)
 bool DlcTracksDecided();   // DlcRegisterTracks has run (or [DLC] Tracks=0): the DLC track set is final
-// the DLC tracks other players need for a LAN game together (online.cpp, its thread, after DlcTracksDecided): sig "none"
-// without a merged track overlay, else 16 hex digits over the fix version, the registered tracks and their files;
-// names "Quarry=15, nem_quarry=16" (dlcfs.cpp; computed once)
+// the DLC content other players need for a LAN game together (online.cpp, its thread, after DlcTracksDecided): sig
+// "none" without a merged track overlay and without DLC cars the game itself lists online (UnlockAll=1 and an overlay
+// with DLC cars), else 16 hex digits over the fix version, the registered tracks and their files, and with those cars
+// their IDs and every merged overlay; names "Quarry=15, nem_quarry=16; 11 DLC cars (UnlockAll)" (dlcfs.cpp; once)
 void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize);
+// the converter's DLC cars the merged overlay brings (dlccars.cpp): their count, the IDs comma separated into ids
+int DlcCarsInOverlay(char* ids, size_t idsSize);
 bool DlcOverlayHas(const char* path);  // the merged resident.ark is in use and has this path (dlcfs.cpp)
 void DlcInstallModes();    // [DLC] Modes: right after ApplyGamePatches (dlcmode.cpp)
 struct IDirect3DSurface9;

@@ -77,6 +77,7 @@ static DlcTrackState s_track[kNumDlcTracks];
 static int s_registered;          // DLC tracks registered (indices 15 .. 15 + s_registered - 1)
 static bool s_trackMerged;        // a track overlay is part of the merged resident.ark
 static std::vector<std::string> s_trackOverlays;  // the merged glimpse_dlc\track_*.ark, in merge order
+static std::vector<std::string> s_overlays;       // every merged glimpse_dlc\*.ark, in merge order (online check)
 static volatile LONG s_tracksDecided;  // DlcRegisterTracks has run (online.cpp waits for it)
 
 static char s_dataDir[MAX_PATH];  // the game's data folder
@@ -374,6 +375,7 @@ static void Install()
         Log("DLC: overlay %s", o.c_str());
         const char* fn = strrchr(o.c_str(), '\\');
         if (tracks && !_strnicmp(fn ? fn + 1 : o.c_str(), "track_", 6)) s_trackOverlays.push_back(o);  // for the online check
+        s_overlays.push_back(o);
     }
     Log("DLC: resident.ark shown with %u extra bytes of index, %u bytes in all", va->Delta(), va->Size());
 }
@@ -781,11 +783,26 @@ void DlcRegisterTracks()
 // session (and Quazal migrates the host when it leaves), so "only the chosen track" cannot be checked in time; the
 // players of one LAN game must all have the same DLC tracks or none.
 //
-// The signature: "none" while no track overlay is merged (TracksOnline=0, no pack, SteamLAN=1 without it); else 16
-// hex digits of a 64-bit FNV-1a over the fix version, the registered tracks (index, name, letter, path), their four
-// level archives (size, CRC-32 of the first MB and of the last 64 KB; data or glimpse_dlc\<dir>\data; not the sound
-// bank or the movie, which are local) and every merged
-// track_*.ark (size, the same CRCs; not its name). Computed once, on the online thread, after DlcRegisterTracks.
+// The cars travel by name, not by record index (static RE 2026-11-22): every player's cATVNetDOPlayerSetup carries
+// the dataset cATVNetDSVehicleData {mVehicleName string, mColour int32} (DDL at 0xD44A3D; dataset 2 at DO +0x80,
+// serialised by 0x87D220/0x87D2F0/0x87D3C0/0x87D4D0), filled by 0x883160 from a car struct: at the session start
+// (0x8737A0) from the network manager [0xD64E18] +0x75C/+0x760, which is the profile's online car (slot 1: 0x41AA90
+// when slot 1 changes, 0x41A840 when the profile loads), later from the race setup's car (lobby 0x477390 ->
+// 0x870000). Slot 1 is chosen only on the online car select (game types 6/7, where dlccars.cpp adds nothing). Each player
+// takes the name into his race setup (player entries of 200 bytes at +0x348, the car's name at entry +0x40) and looks
+// it up in his own vehicle database (0x518FA0/0x518CA0 -> 0x51A1E0 -> 0x51BBE0); a name it lacks gives "Couldn't
+// find vehicle info for %s" and a NULL vehicle record (+0x3C0). So the record indices (the Placeholder slots the car
+// pack fills) do not matter, the names do: a player without the pack cannot race against a DLC car. The fix's own
+// car hook never lists them online (dlccars.cpp); with UnlockAll=1 the game's all-records branch does, so then the
+// cars are part of the signature, and only players with the same car pack (and the same DLC tracks) play together.
+//
+// The signature: "none" while no track overlay is merged (TracksOnline=0, no pack, SteamLAN=1 without it) and no DLC
+// car can be chosen online (UnlockAll=0, or no overlay with DLC cars); else 16 hex digits of a 64-bit FNV-1a over the
+// fix version, the registered tracks (index, name, letter, path), their four level archives (size, CRC-32 of the
+// first MB and of the last 64 KB; data or glimpse_dlc\<dir>\data; not the sound bank or the movie, which are local)
+// and every merged track_*.ark (size, the same CRCs; not its name); with DLC cars online also the car IDs and every
+// merged overlay (size and CRCs: the car pack's records and models). Computed once, on the online thread, after
+// DlcRegisterTracks.
 
 bool DlcTracksDecided()
 {
@@ -847,11 +864,14 @@ void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize
         done = true;
         strcpy_s(s_sig, "none");
         strcpy_s(s_names, "none");
-        if (s_trackMerged) {
+        // the DLC cars the game itself lists on the online car select (UnlockAll=1; the fix's hook never does)
+        char carIds[200] = "";
+        int cars = g_cfg.unlockAll && s_resident ? DlcCarsInOverlay(carIds, sizeof(carIds)) : 0;
+        if (s_trackMerged || cars) {
             try {
                 std::string m = "glimpse_fix " GLIMPSE_VERSION "\n", list;
                 char line[512];
-                for (int t = 0; t < kNumDlcTracks; t++) {
+                for (int t = 0; s_trackMerged && t < kNumDlcTracks; t++) {
                     if (s_track[t].index < 0) continue;
                     const DlcTrack& d = kDlcTracks[t];
                     sprintf_s(line, "track %d %s %s %s\n", s_track[t].index, d.name, d.letter, d.path);
@@ -863,11 +883,18 @@ void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize
                         m += line;
                     }
                 }
-                if (!s_registered) {
+                if (s_trackMerged && !s_registered) {
                     m += "listed, no track index\n";  // TrackTableIntact failed: a pick would lead nowhere
                     list = "listed but not registered";
                 }
                 for (const std::string& o : s_trackOverlays) m += "merged track overlay " + FileDigest(o.c_str()) + "\n";
+                if (cars) {
+                    // the cars travel by name: the same IDs from the same records and models (every merged overlay)
+                    m += std::string("cars online (UnlockAll=1) ") + carIds + "\n";
+                    for (const std::string& o : s_overlays) m += "merged overlay " + FileDigest(o.c_str()) + "\n";
+                    sprintf_s(line, "%s%d DLC cars (UnlockAll)", list.empty() ? "" : "; ", cars);
+                    list += line;
+                }
                 uint64_t h = 0xCBF29CE484222325ull;
                 for (unsigned char c : m) h = (h ^ c) * 0x100000001B3ull;
                 sprintf_s(s_sig, "%016llX", (unsigned long long)h);
@@ -881,9 +908,13 @@ void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize
                 strcpy_s(s_names, "unreadable");
             }
         }
-        Log("DLC tracks online: signature %s (%s)%s", s_sig, s_names,
+        Log("DLC tracks online: signature %s (%s)%s%s", s_sig, s_names,
             s_trackMerged ? " over the fix version, the registered tracks, their four level archives and the merged "
-                            "track_*.ark (sizes, CRC-32 of the first MB and the last 64 KB)" : "");
+                            "track_*.ark (sizes, CRC-32 of the first MB and the last 64 KB)" : "",
+            cars ? (s_trackMerged ? "; with the DLC cars the game lists online (UnlockAll=1) and every merged overlay"
+                                  : " over the fix version, the DLC cars the game lists online (UnlockAll=1) and every "
+                                    "merged overlay (sizes, CRC-32 of the first MB and the last 64 KB)")
+                 : "");
     }
     strcpy_s(sig, sigSize, s_sig);
     strcpy_s(names, namesSize, s_names);

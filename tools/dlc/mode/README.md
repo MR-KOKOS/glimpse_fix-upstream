@@ -76,15 +76,11 @@ Air / waves (`PowerBar/King`, `Scoring/KingWave`, `Num Waves`, end conditions), 
 Nemesis respot options, `StartPosition` survival hacks, prototype leaderboard, lesson `EventCustomData`. The PC
 parser would ignore them (below), so leaving them out changes nothing now; the pickup stage adds what it needs.
 
-Texts (names are upper case on the PC; no translated name is known, so DEADLINE everywhere, as for the DLC cars):
-
-| language | name | help lines 1-3 (lines 4-5 `BLANK`, as TimeTrial) |
-|---|---|---|
-| ENGLISH_NTSC | DEADLINE | BEAT THE CLOCK - THE TIMER COUNTS DOWN FROM THE START. / FINISH THE LAP BEFORE THE COUNTDOWN HITS ZERO. / DRIFT & DODGE POWER PLAYS TO KEEP YOUR SPEED UP! |
-| GERMAN | DEADLINE | SCHLAGE DIE UHR - DER TIMER LÄUFT AB DEM START RÜCKWÄRTS. / BEENDE DIE RUNDE, BEVOR DER COUNTDOWN NULL ERREICHT. / DRIFTE UND WEICHE POWERPLAYS AUS, UM SCHNELL ZU BLEIBEN! |
-| FRENCH_NTSC | DEADLINE | BATS LE CHRONO : LE COMPTE À REBOURS DÉMARRE AU DÉPART / TERMINE LE TOUR AVANT QUE LE CHRONO ATTEIGNE ZÉRO / DÉRAPE ET ÉVITE LES ATTAQUES POUR GARDER TA VITESSE ! |
-| ITALIAN | DEADLINE | BATTI IL CRONOMETRO: IL CONTO ALLA ROVESCIA PARTE DAL VIA. / COMPLETA IL GIRO PRIMA CHE IL TEMPO ARRIVI A ZERO. / DERAPA ED EVITA I POWER PLAY PER RESTARE VELOCE! |
-| SPANISH_NTSC | DEADLINE | BATE AL RELOJ: LA CUENTA ATRÁS EMPIEZA EN LA SALIDA / TERMINA LA VUELTA ANTES DE QUE EL TIEMPO LLEGUE A CERO / ¡DERRAPA Y ESQUIVA JUGADAS PARA MANTENER LA VELOCIDAD! |
+Texts: glimpse_fix's own (`TEXTS` in `deadline_mode.py`, five languages), used when no TU4 text table is set. They
+explain the same rules as the official texts in other words: the name DEADLINE, three help lines (one lap against
+the countdown; a pickup holds the clock for 2 s in a drift; without a drift only half a second), and under the TU4
+keys the DLL asks the dictionary for, the pickup messages (`+0.5s` / `+2.0s`, with the language's decimal sign) and
+the two hint lines. With a TU4 text table (below) the official texts take their place.
 
 StringIDs maps each key to its lower-case form.
 
@@ -462,19 +458,20 @@ after the event objectives screen has set its kind and before the race end scree
 the info's setup (+0x1CF8) is Deadline on one screen, offline (logged). The timeout path (DNF) is unchanged: it sets
 the Disqualified record and cEndGame's +0xA in the racing frame the clock runs out, with kind 1.
 
-## Official texts (`tu4text.py`, development only)
+## Official texts (`tu4text.py`, optional)
 
 Title Update 4's `default.xex` has a built-in table of 75 texts for the DLC content (the car names and
 descriptions `TEXT_PLACEHOLDER_NN` / `TEXT_CARDESCR_Placeholder_NN`, the mode names and help lines of Deadline,
 Survival Race and Onslaught, the Deadline pickup texts, Quarry track names, loading tips 57-60, wave texts): records
 of 0x20 bytes at 0x88EC80D8 (hash, language 0 = "", EN, FR, IT, DE, ES, RU; UTF-8 strings), keys only in the
-static initializer 0x88E65330 (CRC-32, init -1, no final xor), lookup 0x883CD440. The texts are game data and the
-title update can only be read with the local-only `tools/dlc/xex` tools, so nothing of it is in the repository or a
-release: a developer runs `tu4text.py extract <patched SPLITSECOND1 image> <json>` once and sets
+static initializer 0x88E65330 (CRC-32, init -1, no final xor), lookup 0x883CD440. The texts are game data, so
+nothing of them is in the repository or a release. The official texts need a TU4 text table that the release
+cannot produce: it is read from a patched `SPLITSECOND1.DLL` image, made with a local development tool that is not
+part of glimpse_fix (`tu4text.py extract <patched SPLITSECOND1 image> <json>`, once), and passed with
 `GLIMPSE_TU4_TEXTS=<json>` (build_all.py: `--tu4-texts`). With it `deadline_mode.py` writes the official name, help
-lines 1-5 (empty -> `BLANK`) and adds `TEXT_TIMETRIALPLUS_PICKUP/_DRIFTPICKUP/_OBJECTIVE1/_OBJECTIVE2` (no PC code
-reads these yet), and `../assemble/cartext.py` the official car descriptions (a no-break space becomes a space);
-without it both keep their generated texts. The logs say which. RU is not used: the PC exe knows a RUSSIAN
+lines 1-5 (empty -> `BLANK`) and `TEXT_TIMETRIALPLUS_PICKUP/_DRIFTPICKUP/_OBJECTIVE1/_OBJECTIVE2` (the DLL's HUD
+asks for them), and `../assemble/cartext.py` the official car descriptions (a no-break space becomes a space);
+without it they write glimpse_fix's own texts under the same keys. The logs say which. RU is not used: the PC exe knows a RUSSIAN
 dictionary, but the PC resident.ark has none.
 
 ## Limits and open points

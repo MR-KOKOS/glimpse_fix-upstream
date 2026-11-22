@@ -349,11 +349,27 @@ in the log) and the Scaleform movie's `Invoke` vtable slot; no game code.
   session (Quazal also migrates the host). So the players of one LAN game must have the same DLC tracks
   or none: each member publishes a signature (`glimpse_dlc` member data: 64-bit FNV-1a over the fix
   version, the registered tracks, their four level archives' sizes and CRC-32 of the first MB and the last 64 KB, and
-  the merged `track_*.ark`; `none` without a track overlay, `dlcfs.cpp`), and between two players whose
+  the merged `track_*.ark`, with DLC cars online also the cars, below; `none` without a track overlay and
+  without them, `dlcfs.cpp`), and between two players whose
   signatures differ (for a player with DLC tracks also: not known yet) the driver passes only broadcasts, the game's session
   searches: the host's answer to a search (its game in the list) and all game port traffic are held back
   on both sides. A member of an older release publishes no signature and has no DLC tracks (`none`); the
-  signature is published again after every lobby join or create (Steam drops member data on leave).
+  signature is published again after every lobby join or create (Steam drops member data on leave). The
+  last signature seen per Steam ID is kept while the game runs: a member that leaves the lobby and comes
+  back is taken by it until its new member data arrives (and by the new one if it differs), instead of
+  being "not known yet" for a second or two, during which a player with DLC tracks would hold back all game
+  traffic to it, also in a running race.
+* **DLC cars:** a player's car travels by name, not by record index: every player's `cATVNetDOPlayerSetup`
+  carries the dataset `cATVNetDSVehicleData` {`mVehicleName` string, `mColour` int32} (dataset 2 at
+  +0x80, serialised by `0x87D220`/`0x87D3C0`), filled by `0x883160` from the network manager's car
+  (`[0xD64E18]`+0x75C/+0x760, the profile's online car, slot 1) at the session start (`0x8737A0`) and from
+  the race setup's car in the lobby (`0x477390`). Each player puts the name into its race setup (player
+  entries of 200 bytes at +0x348, the car at +0x40) and looks it up in its own vehicle database
+  (`0x51A1E0` -> `0x51BBE0`); a name it lacks gives "Couldn't find vehicle info for %s" and no vehicle
+  record. The Placeholder slots the car pack fills therefore do not matter, the names do. The fix's own car
+  select hook never lists DLC cars online; with `UnlockAll=1` the game's all-records branch does (no game
+  type check), so then the signature also covers the car IDs and every merged overlay (`none` stays `none`
+  only without DLC tracks online and without such cars).
 
 ## Converted Xbox DLC
 

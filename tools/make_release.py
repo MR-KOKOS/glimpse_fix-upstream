@@ -19,7 +19,8 @@
 #    The user copies all of it into the game folder; glimpse_config.exe finds the converters in glimpse_tools\dlc
 #    next to it.
 # 3. checks: nothing but scripts and text below glimpse_tools (no game or DLC data: no .ark/.pkl/.fsb/.fev/.bik/.json,
-#    no file over 1 MB), no tests, no __pycache__; no paths of the developer's PC in a shipped script (an error unless
+#    no file over 1 MB), no tests, no __pycache__, nothing of tools\dlc\xex (local only); no shipped file of any type
+#    holds the retail XEX2 key (hex or raw bytes); no paths of the developer's PC in a shipped script (an error unless
 #    --allow-local-paths, which a test build may use; the paths are listed either way). Every other file below tools\
 #    that git tracks or would pick up is scanned too, as a warning (shipped or not, they would land in the repository).
 # The converter set: starting from build_all.py and install_dlc.py, every "import x" / "from x import" anywhere in a
@@ -46,9 +47,12 @@ DLC_EXTRA = ('README_build.md', 'xenos/LICENSE-rexglue.txt')
 # shipped when present, also before a converter imports them (their data, e.g. the TU4 text JSON, never is)
 DLC_OPTIONAL = ('mode/tu4text.py',)
 FILES_LIST = 'glimpse_tools_files.tsv'  # build_all.FILES_LIST
-# xex: the local-only XEX2 / title update tools (tools\dlc\xex is not in the repository; xex2.py holds Microsoft's XEX
-# key): never traced, never shipped
-SKIP_DIRS = {'__pycache__', 'ghidra', 'xex'}
+# xex: the local-only XEX2 / title update tools (tools\dlc\xex is not in the repository, it holds a decryption tool);
+# ppc: reverse engineering helpers (need capstone): never traced, never shipped
+SKIP_DIRS = {'__pycache__', 'ghidra', 'xex', 'ppc'}
+# SHA-256 of the retail XEX2 key's 16 bytes: no shipped file may hold the key (a second lock besides SKIP_DIRS),
+# neither as 32 hex digits in a text file nor as the 16 raw bytes in any file (scripts, texts, the DLL and exes)
+XEX_KEY_SHA256 = 'a0bd3f5f56adf2b0238a2702c0c0cd8548fb34b3dc19345943dc011010723fe4'
 # (zip path, repo path); None = optional
 TOP = (('dinput8.dll', 'build/dinput8.dll'), ('glimpse_config.exe', 'build/glimpse_config.exe'),
        ('setlaa.exe', 'build/setlaa.exe'), ('SplitSecondPad.ini', 'SplitSecondPad.ini'), ('LICENSE', 'LICENSE'),
@@ -130,7 +134,7 @@ def converter_set():
         for name in imp | scripts:
             if name in mods and mods[name] not in seen:
                 todo.append(mods[name])
-    local_only = sorted(r for r in seen if r.split('/')[0] in SKIP_DIRS)
+    local_only = sorted(r for r in seen if set(r.split('/')[:-1]) & SKIP_DIRS)
     if local_only:   # cannot happen while tool_modules skips them: a second lock on the release
         raise Fail('local-only tools must never be shipped: %s' % ', '.join(local_only))
     return sorted(seen)
@@ -156,6 +160,22 @@ def check_tools_file(rel, fn):
             elif MACHINE_RE.search(line):
                 machine.append('%s:%d: %s' % (rel, i, line.strip()[:140]))
     return errors, local, machine
+
+
+def xex_key_hits(rel, fn):
+    """Where a shipped file (any type) holds the retail XEX2 key: as 32 hex digits or as its 16 raw bytes."""
+    with open(fn, 'rb') as f:
+        data = f.read()
+    key = bytes.fromhex(XEX_KEY_SHA256)
+    hits = []
+    for m in re.finditer(rb'(?<![0-9A-Fa-f])[0-9A-Fa-f]{32}(?![0-9A-Fa-f])', data):
+        if hashlib.sha256(bytes.fromhex(m.group().decode('ascii'))).digest() == key:
+            hits.append('%s:%d: holds the retail XEX2 key as hex digits' % (rel, data.count(b'\n', 0, m.start()) + 1))
+    sha = hashlib.sha256
+    for off in range(len(data) - 15):
+        if sha(data[off:off + 16]).digest() == key:
+            hits.append('%s: holds the retail XEX2 key as 16 bytes at offset 0x%X' % (rel, off))
+    return hits
 
 
 def repo_personal_paths():
@@ -236,6 +256,9 @@ def main(argv):
         dlc_items.append((rel, fn))
     left_out = sorted(r for r in tool_modules().values() if r not in conv)
     print('   left out (not used by build_all.py / install_dlc.py): %s' % ', '.join(left_out))
+    local_only = sorted(r for r, _ in dlc_items if set(r.split('/')[:-1]) & SKIP_DIRS)
+    if local_only:   # DLC_EXTRA / DLC_OPTIONAL must not name them either
+        raise Fail('local-only tools must never be shipped: %s' % ', '.join(local_only))
 
     errors, local, machine = [], [], []
     for rel, fn in dlc_items:
@@ -243,6 +266,9 @@ def main(argv):
         errors += e
         local += l_
         machine += m_
+    for rel, fn in items + [(TOOLS_DIR + '/dlc/' + r, f) for r, f in dlc_items]:
+        if fn is not None:
+            errors += xex_key_hits(rel, fn)
     if errors:
         raise Fail('not shippable:\n  ' + '\n  '.join(errors))
     repo_hits = repo_personal_paths()

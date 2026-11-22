@@ -33,8 +33,9 @@ that every converter build_all.py runs loads (`ENTRY_SCRIPTS`; the track's only 
 track needs, and with `--game` the game folder and its Havok class layouts (made in the work folder as a build would),
 with `--dump` the packages found. `RESULT: OK | WARN | FAILED`, exit code 0 / 0 / 1, the same status file as a build.
 
-`--tu4-texts <json>` (or `GLIMPSE_TU4_TEXTS`), development only: the official TU4 text table (`mode/tu4text.py`, game
-data, never shipped) is passed to every step; its hash is part of every step's inputs, so a changed table rebuilds.
+`--tu4-texts <json>` (or `GLIMPSE_TU4_TEXTS`), optional: a TU4 text table (JSON) made outside glimpse_fix. The
+official texts need it, and the release cannot produce it (it is made with a local development tool that is not part
+of glimpse_fix; game data, never shipped). Without it the converters write their own texts. It is passed to every step; its hash is part of every step's inputs, so a changed table rebuilds.
 
 `--dump` is the title folder `425607E7`, its `00000002` subfolder or a folder above (searched 4 levels deep). Every
 STFS package (`LIVE`, `PIRS`, `CON `) of title 425607E7 with content type 2 is listed; title updates and other games
@@ -52,7 +53,11 @@ higher version (DLCINFO's first word) is used, which picks "The Elite" Vehicle L
 | (none; `DLC/Unlock/Unlock.params`) | Master Unlock | listed, not needed |
 
 Defaults: work `%LOCALAPPDATA%\glimpse_fix\dlc_work`, staging `%LOCALAPPDATA%\glimpse_fix\dlc_staging`. Both are
-refused inside the game folder or the DLC folder.
+refused inside the game folder or the DLC folder, or holding one of them, also through a link or junction (checked
+as given and with the real paths). The work folder must be new, empty (the settings program's logs, status files and
+`build.lock` aside) or one build_all.py made: on first use it writes `glimpse_dlc_work.txt` into it, and later runs
+need that file. A folder of an earlier build_all.py without it (its `stamps\` folder) is taken and gets the file; any
+other folder with files in it is refused, as the steps clear and rewrite folders in it.
 
 | step | what | tool |
 |---|---|---|
@@ -73,7 +78,11 @@ is therefore the same as on every other.
 
 Each step writes `work\stamps\<step>.json` with its inputs (package size and time, `resident.ark` size and time, the
 SHA-256 of every `.py`/`.json` below `tools\dlc`, options, the previous step's result) and is skipped while they
-are unchanged and its outputs exist; `--force` redoes all. The merge step depends only on `merge_dlc.py` and the
+are unchanged and its outputs exist; `--force` redoes all. A step that runs first removes its own output folder in
+the work folder (`packages\<role>`, `merged_*`, `frontend`, `audio_menu`, `pack`, `audio[_nem_quarry]`,
+`track[_nem_quarry]`, `nemesis_mode`; never anything outside the work folder), so no file of an earlier run with other
+packages, cars or tracks is left in it; the stamps carry a layout number, so steps done by an older `build_all.py` are
+redone once. The merge step depends only on `merge_dlc.py` and the
 modules it uses; its previous output folder is removed when it runs again (`merge_dlc.py` takes an empty folder). Each
 converter's whole output is in `work\logs\<step>.log`; when one fails, its `[FAIL]` lines (or the Python exception)
 are the reason shown. `work\build.lock` (with the process ID) keeps two builds or a build and an install apart.
@@ -91,10 +100,14 @@ Exactly what goes into `<game>\glimpse_dlc\`, plus `glimpse_dlc_manifest.tsv`:
 The manifest (UTF-8, tab-separated): `version`, `built`, `dump`, `game`, `track`, `mode`, `cars`, `packages`; `ini
 <key> <value>` for the `[DLC]` keys the files need (`Overlays=1`, `Modes=1` with the mode, `Tracks=1` with the track);
 `file <path> <size> <sha256> <what>` per file. A rerun copies only what changed and deletes from the staging folder only
-files its previous manifest lists. A staging folder with other files and no manifest is refused.
+files its previous manifest lists. A staging folder with other files and no manifest is refused. A track's files are
+staged from its manifest (`track_<t>.manifest.tsv`: the four level archives and its `loose` lines) only; a file below
+`work\track[_nem_quarry]\data` that the manifest does not list stops the build.
 
 `--check` verifies the staging folder: every file listed, its size and SHA-256, every `.ark` (PC version, header size,
-keys sorted and unique, entries inside the file), track overlay and track files together, unlisted files named. With
+keys sorted and unique, entries inside the file), track overlay and track files together. A file in the staging
+folder that the manifest does not list is an error (not from the build that wrote the manifest; only Explorer's
+`desktop.ini`/`Thumbs.db` are tolerated), so the build's own check and `install_dlc.py` refuse it. With
 `--game` it also says for each file whether the game folder has it identical, different or not at all, and names other
 `.ark` files in `glimpse_dlc` (read only).
 

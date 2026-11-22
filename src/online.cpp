@@ -18,8 +18,9 @@
 // steam_api.dll (Steamworks SDK, flat API) is loaded from the game folder at run time; the game runs
 // as its own app 297860, which has Steam lobbies and the relay network.
 //
-// With DLC tracks registered online ([DLC] TracksOnline=1) only players with the same DLC tracks see each other's
-// LAN games (the DLC check below SendDatagram); players without DLC tracks are not affected by each other.
+// With DLC tracks registered online ([DLC] TracksOnline=1), or DLC cars the game lists online (UnlockAll=1 with a car
+// pack), only players with the same DLC tracks and cars see each other's LAN games (the DLC check below
+// SendDatagram); players without either are not affected by each other.
 #include "common.h"
 #include <d3d9.h>
 #include <stdint.h>
@@ -211,10 +212,22 @@ struct Peer {
     int state;      // Steam connection state last logged
     bool relayed;
     bool dlcKnown;        // its DLC tracks are known (lobby member data glimpse_dlc); kept once known
+    bool dlcCached;       // ... only from the cache of an earlier membership (s_dlcSeen) until its member data comes
     char dlc[24];         // their signature (DlcOnlineSignature), "none" without DLC tracks
     char dlcNames[96];    // which, for the log and the banner
 };
 static std::vector<Peer> s_peers;        // the other lobby members
+
+// the last signature seen per Steam ID while the game runs (s_lock): a member that leaves the lobby and comes back
+// (Steam drops its member data on leave, it publishes again after its join) is taken by it until its new member
+// data arrives, instead of being "not known yet" for a second or two, which would hold back all game traffic
+// between it and a player with DLC tracks, also in a running race (NotePeersDlc replaces it if it differs)
+struct SeenDlc {
+    uint64_t steamID;
+    char dlc[24];
+    char dlcNames[96];
+};
+static std::vector<SeenDlc> s_dlcSeen;
 
 static const uint32_t kMagic = 0x314C4C47;  // "GLL1"
 static const int kSendFlags = 1 | 32;       // unreliable without Nagle delay, restart broken sessions
@@ -449,7 +462,9 @@ static volatile DWORD s_gamePortSince;
 // lists its game, and every datagram to a game port are held back, on the sending and on the receiving side. So
 // neither sees the other's LAN game in the game's list, and nobody ends up in a race whose track one of them lacks.
 // Players without DLC tracks all have "none" and play together as before; so do players with the same pack and fix
-// version. Nothing of the game is changed for it.
+// version. The cars travel by name (cATVNetDSVehicleData, dlcfs.cpp): with UnlockAll=1 the game lists the car pack's
+// cars on the online car select itself, so then the signature covers the car pack too. A member that leaves and comes
+// back keeps its last signature (s_dlcSeen) until its new member data arrives. Nothing of the game is changed for it.
 
 static char s_myDlc[24];           // this player's signature, set before the first lobby or later (online thread); "" = not yet
 static char s_myDlcNames[96];
@@ -1003,17 +1018,38 @@ static void RefreshMembers()
     }
     EnterCriticalSection(&s_lock);
     std::vector<Peer> before = s_peers;
-    for (Peer& p : now)
+    std::vector<uint64_t> fromCache;  // members back in the lobby, taken by their last signature
+    for (Peer& p : now) {
+        bool was = false;
         for (const Peer& b : before)
             if (b.steamID == p.steamID) {
+                was = true;
                 p.state = b.state;
                 p.relayed = b.relayed;
                 p.dlcKnown = b.dlcKnown;
+                p.dlcCached = b.dlcCached;
                 memcpy(p.dlc, b.dlc, sizeof(p.dlc));
                 memcpy(p.dlcNames, b.dlcNames, sizeof(p.dlcNames));
             }
+        if (was) continue;
+        for (const SeenDlc& s : s_dlcSeen)
+            if (s.steamID == p.steamID) {
+                p.dlcKnown = p.dlcCached = true;
+                memcpy(p.dlc, s.dlc, sizeof(p.dlc));
+                memcpy(p.dlcNames, s.dlcNames, sizeof(p.dlcNames));
+                fromCache.push_back(p.steamID);
+            }
+    }
     s_peers = now;
     LeaveCriticalSection(&s_lock);
+    for (uint64_t id : fromCache) {
+        char t[20];
+        IpText(VirtualIp(id), t, sizeof(t));
+        for (const Peer& p : now)
+            if (p.steamID == id)
+                Log("online: DLC check: player %s is back in the lobby, taken by its last DLC signature (%s, %s) until "
+                    "its member data comes", t, p.dlcNames, p.dlc);
+    }
     for (size_t i = 0; i < now.size(); i++)
         for (size_t j = i + 1; j < now.size(); j++)
             if (now[i].ip == now[j].ip && FirstTime(Key(DIAG_IP_CLASH, now[i].ip, 0))) {
@@ -1345,7 +1381,7 @@ static void UpdatePresence()
 static void NotePeersDlc(const std::vector<Peer>& peers)
 {
     for (const Peer& p : peers) {
-        if (p.dlcKnown) continue;
+        if (p.dlcKnown && !p.dlcCached) continue;  // a cached one is read again until its own member data is there
         const char* v = S.GetMemberData(s_mm, s_lobby, p.steamID, "glimpse_dlc");
         const char* ver = S.GetMemberData(s_mm, s_lobby, p.steamID, "glimpse_ver");
         char sig[24] = "", names[96] = "";
@@ -1366,15 +1402,41 @@ static void NotePeersDlc(const std::vector<Peer>& peers)
                 strcpy_s(q.dlc, sig);
                 strcpy_s(q.dlcNames, names);
                 q.dlcKnown = true;
+                q.dlcCached = false;
             }
+        bool seen = false;  // the cache for a later return of this member
+        for (SeenDlc& s : s_dlcSeen)
+            if (s.steamID == p.steamID) {
+                seen = true;
+                strcpy_s(s.dlc, sig);
+                strcpy_s(s.dlcNames, names);
+            }
+        if (!seen && s_dlcSeen.size() < 256) {  // a bound for a long run with many lobbies (POD, no throw path)
+            SeenDlc s = {};
+            s.steamID = p.steamID;
+            strcpy_s(s.dlc, sig);
+            strcpy_s(s.dlcNames, names);
+            try {
+                s_dlcSeen.push_back(s);
+            } catch (...) {
+            }
+        }
         LeaveCriticalSection(&s_lock);
         char t[20];
         IpText(p.ip, t, sizeof(t));
+        if (p.dlcCached && !strcmp(sig, p.dlc)) {
+            Log("online: DLC check: player %s confirmed its DLC signature (%s, %s)", t, names, sig);
+            continue;
+        }
+        if (p.dlcCached)
+            Log("online: DLC check: player %s now has another DLC signature than when it left (%s, was %s)", t, sig,
+                p.dlc);
         if (!strcmp(sig, s_myDlc))
-            Log("online: DLC check: player %s has the same DLC tracks (%s, %s): LAN games together", t, names, sig);
+            Log("online: DLC check: player %s has the same DLC tracks/cars (%s, %s): LAN games together", t, names, sig);
         else
-            Log("online: DLC check: player %s has other DLC tracks: %s (%s), this player %s (%s): no LAN game together "
-                "(the track travels as a number); same pack and fix version, or TracksOnline=0 / no track pack on both",
+            Log("online: DLC check: player %s has other DLC tracks/cars: %s (%s), this player %s (%s): no LAN game "
+                "together (the track travels as a number, the car as a name); same packs, UnlockAll and fix version, "
+                "or no DLC online on both (TracksOnline=0 or no track pack, and UnlockAll=0 or no car pack)",
                 t, names, sig, s_myDlcNames, s_myDlc);
     }
 }
@@ -1568,7 +1630,7 @@ static void SyncRules()
         if (PeerDlc(p) == DLC_OTHER) {
             char t[20];
             IpText(p.ip, t, sizeof(t));
-            _snprintf_s(warning, _TRUNCATE, "WARNING: player %s has other DLC tracks (%s; you: %s) - no LAN game together",
+            _snprintf_s(warning, _TRUNCATE, "WARNING: player %s has other DLC tracks/cars (%s; you: %s) - no LAN game together",
                         t, p.dlcNames, s_myDlcNames);
         }
     EnterCriticalSection(&s_showLock);
@@ -1752,10 +1814,11 @@ static bool TryTakeOwnDlc()
     strcpy_s(s_myDlc, sig);
     LeaveCriticalSection(&s_lock);
     if (!strcmp(sig, "none"))
-        Log("online: DLC check: no DLC tracks registered online, LAN games with every player without DLC tracks");
+        Log("online: DLC check: no DLC tracks registered online and no DLC cars offered online, LAN games with every "
+            "player without them");
     else
-        Log("online: DLC check: DLC tracks %s registered online (signature %s): LAN games only with players who have "
-            "the same (same track pack and glimpse_fix version)", names, sig);
+        Log("online: DLC check: DLC online: %s (signature %s): LAN games only with players who have the same (same "
+            "track pack, with UnlockAll=1 the same car pack, and glimpse_fix version)", names, sig);
     return true;
 }
 

@@ -7,15 +7,18 @@
 #   py -3 -I build_all.py --preflight [--game <Split/Second folder>] [--dump <DLC folder>] [--work <dir>]
 #
 # Needs: Python 3.8+ (the cars); the DLC tracks also numpy, vgmstream-cli, ffmpeg and D3DCompiler_41.dll.
-# --tu4-texts (or GLIMPSE_TU4_TEXTS): development only, the official TU4 texts (mode/tu4text.py cache, game data,
-# never shipped); passed to every step, whose converters use them instead of their own texts.
+# --tu4-texts (or GLIMPSE_TU4_TEXTS): optional: a TU4 text table (JSON) made outside glimpse_fix (mode/tu4text.py
+# format, game data, never shipped). The official texts need it and the release cannot produce it (it is made with a
+# local development tool that is not part of glimpse_fix); passed to every step, whose converters then use the
+# official texts instead of their own. Without it the converters write their own texts.
 # --preflight checks all of that, that this tools folder is complete (glimpse_tools_files.tsv of a release) and that
 # every converter loads, and with --game reads the Havok class layouts; it converts nothing.
 # <DLC folder>: the title folder 425607E7 of the Xbox 360 content dump (or its 00000002 subfolder, or a folder
 # above it) holding the DLC packages as the console stores them (STFS LIVE files). Nothing in it is changed.
 # The steps, each the existing converter (README.md next to each), run in the work folder
 # (default %LOCALAPPDATA%\glimpse_fix\dlc_work); a step whose inputs are unchanged since its last successful run is
-# skipped, so a rerun only redoes what is needed (--force: everything):
+# skipped, so a rerun only redoes what is needed (--force: everything); a step that runs first clears its own output
+# folder in the work folder (clear_output), and only files this build produced are staged:
 #   1. extract  the car packages found (Deadline, High Octane, The Elite liveries), Onslaught (track Quarry) and
 #               Survival At The Rock (track nem_quarry) with stfs.py; Master Unlock is not needed
 #   2. merge    with more than one car package: one source folder (assemble/merge_dlc.py, Deadline as the base)
@@ -148,6 +151,54 @@ def norm(p):
 def inside(path, folder):
     a, b = norm(path), norm(folder)
     return a == b or a.startswith(b + os.sep)
+
+
+def overlap(p, q):
+    """p and q are the same folder or one holds the other, as given and with links and junctions resolved."""
+    rp, rq = os.path.realpath(p), os.path.realpath(q)
+    return inside(p, q) or inside(q, p) or inside(rp, rq) or inside(rq, rp)
+
+
+# The work folder: build_all.py clears and rewrites folders in it (clear_output), so it only takes a new or empty
+# folder, or one it made itself. On first use it writes WORK_MARKER; later runs need it. A folder of a build_all.py
+# that wrote no marker yet (its own layout: the stamps\ folder of the steps) is taken and gets the marker.
+WORK_MARKER = 'glimpse_dlc_work.txt'
+# what may lie in a work folder without the marker: the settings program's logs and status files (it makes the
+# folder and starts the build there), the lock of build_all.py / install_dlc.py, Explorer's folder files
+WORK_FOREIGN_OK = ('build.log', 'install.log', 'build_status.txt', 'install_status.txt', 'build_status.txt.tmp',
+                   'install_status.txt.tmp', 'build.lock', 'desktop.ini', 'thumbs.db')
+
+
+def claim_work(work, write):
+    """Refuses a work folder that is not empty and was not made by build_all.py; write: make it (if needed) and put
+    WORK_MARKER into it. Returns a line for the log."""
+    work = os.path.abspath(work)
+    if os.path.lexists(work) and not os.path.isdir(work):
+        raise BuildError('The work folder %s is a file. Give a new or empty folder with --work.' % work)
+    marker = os.path.join(work, WORK_MARKER)
+    if os.path.isfile(marker):
+        return 'work folder %s (made by build_all.py)' % work
+    names = os.listdir(work) if os.path.isdir(work) else []
+    other = sorted(n for n in names if n.lower() not in WORK_FOREIGN_OK)
+    stamps = os.path.join(work, 'stamps')
+    own = os.path.isdir(stamps) and not os.path.islink(stamps) and \
+        all(n.lower().endswith('.json') and os.path.isfile(os.path.join(stamps, n)) for n in os.listdir(stamps))
+    if other and not own:
+        hint = ('give a new or empty folder with --work' if norm(work) != norm(default_work()) else
+                'move or remove what is in it yourself, or give a new or empty folder with --work')
+        raise BuildError('The work folder %s is not empty and was not made by build_all.py (no %s in it; it holds %s). '
+                         'build_all.py clears and rewrites folders in its work folder, so it only uses a new or empty '
+                         'folder or one of its own: %s.'
+                         % (work, WORK_MARKER, ', '.join(other[:5]) + (', ...' if len(other) > 5 else ''), hint),
+                         other[:20])
+    how = 'an earlier build_all.py\'s folder' if other else 'empty' if os.path.isdir(work) else 'new'
+    if write:
+        os.makedirs(work, exist_ok=True)
+        with open(marker, 'w', encoding='utf-8', newline='\r\n') as f:
+            f.write('glimpse_fix: the work folder of tools\\dlc\\build_all.py (intermediate files of the DLC build).\n'
+                    'build_all.py clears and rewrites the folders in it. Made %s.\n'
+                    % datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    return 'work folder %s (%s%s)' % (work, how, ', marked with ' + WORK_MARKER if write else '')
 
 
 def human(n):
@@ -305,16 +356,35 @@ def file_sig(fn):
     return '%s|%d|%d' % (os.path.normcase(os.path.abspath(fn)), st.st_size, int(st.st_mtime))
 
 
+# part of every step's signature: 2 = each step clears its own output folder before it runs (clear_output), so a step
+# done by an older build_all.py (which left the files of an earlier run in place) is redone once
+WORK_LAYOUT = 2
+
+
+def clear_output(path, work):
+    """Removes one step's own output folder below the work folder before the step rebuilds it, so nothing of an
+    earlier run (other packages, cars or tracks) is left in it. Refuses anything not strictly below work."""
+    path, work = os.path.abspath(path), os.path.abspath(work)
+    if (not inside(path, work) or norm(path) == norm(work) or
+            not inside(os.path.realpath(path), os.path.realpath(work)) or
+            norm(os.path.realpath(path)) == norm(os.path.realpath(work))):
+        raise BuildError('Internal: refusing to clear %s (not a step folder below the work folder %s).' % (path, work))
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        raise BuildError('%s is a file, not a step folder; remove it or use another work folder (--work).' % path)
+
+
 class Step:
     """Skipped when its stamp holds the same inputs and every output exists."""
 
     def __init__(self, work, name, inputs, outputs, force):
         self.dir = os.path.join(work, name)
         self.stamp = os.path.join(work, 'stamps', name + '.json')
-        self.inputs = inputs
+        self.inputs = dict(inputs, layout=WORK_LAYOUT)
         self.outputs = outputs
         self.force = force
-        self.sig = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+        self.sig = hashlib.sha256(json.dumps(self.inputs, sort_keys=True).encode()).hexdigest()
 
     def up_to_date(self):
         if self.force or not os.path.isfile(self.stamp):
@@ -596,8 +666,9 @@ def make_hkref(a, work, game, logs, env, py):
 
 # ------------------------------------------------------------------------------------------------- staging
 def staged_files(spec, track_out):
-    """(staging rel path, source, what) of one track build: its level archives (required) and the loose files its
-    manifest lists, below <dir>/data; and anything else assemble_track.py put below <out>\\data."""
+    """(staging rel path, source, what) of one track build, below <dir>/data: its level archives (required) and the
+    loose files its manifest lists, nothing else. A file below <out>\\data that the manifest does not list is not from
+    this run (the step clears its folder first): refused."""
     t, d = spec['track'].lower(), spec['dir']
     rels = ['data/environments/levels/%s.ark' % t, 'data/%spowerplays.ark' % t,
             'data/environments/levels/%s/sectors/%s.static.ark' % (t, t),
@@ -608,12 +679,15 @@ def staged_files(spec, track_out):
         if len(f) >= 7 and f[0] == 'loose':
             rels.append(f[6].replace('\\', '/'))
     have = {r.lower() for r in rels}
+    extra = []
     for dp, dn, fns in os.walk(os.path.join(track_out, 'data')):
         for n in sorted(fns):
             r = os.path.relpath(os.path.join(dp, n), track_out).replace(os.sep, '/')
             if r.lower() not in have:
-                rels.append(r)
-                have.add(r.lower())
+                extra.append(r)
+    if extra:
+        raise BuildError('%s holds %d file(s) that its manifest %s does not list, e.g. %s: not from this build. Run the '
+                         'build again with --force.' % (track_out, len(extra), os.path.basename(man), extra[0]), extra[:20])
     return [('%s/%s' % (d, r.lower()), os.path.join(track_out, *r.split('/')), 'track %s: %s' % (spec['track'], r))
             for r in rels]
 
@@ -673,6 +747,9 @@ def write_manifest(folder, files, ini, meta, name=MANIFEST, origin=None, aside=(
 
 def stage(staging, items, ini, meta):
     """Copies items [(rel, src, what)] into staging; files of the previous manifest that are no longer staged go."""
+    bad = [rel for rel, _, _ in items if not safe_rel(rel)]
+    if bad:   # every path the manifest will name: plain names below the staging folder (check_staging requires it too)
+        raise BuildError('Internal: unsafe file name(s) to stage: %s' % ', '.join(repr(r) for r in bad[:5]), bad[:20])
     os.makedirs(staging, exist_ok=True)
     old = read_manifest(staging)
     present = [n for n in os.listdir(staging) if n != MANIFEST]
@@ -704,6 +781,11 @@ def stage(staging, items, ini, meta):
         if os.path.isfile(dst):
             os.remove(dst)
             say('  removed (no longer built) ' + rel)
+    # a copy cut short by an earlier, stopped run (<file>.part next to a file this or the previous manifest names)
+    for rel in new_rels | {r for r, _, _, _ in (old['files'] if old else []) if safe_rel(r)}:
+        part = os.path.join(staging, *rel.split('/')) + '.part'
+        if os.path.isfile(part):
+            os.remove(part)
     remove_empty_dirs(staging)
     write_manifest(staging, files, ini, meta)
     return files
@@ -799,11 +881,18 @@ def check_staging(staging, game=None, quick=False):
             for need in (lv + '.ark', '%s/sectors/%s.static.ark' % (lv, t['track'].lower())):
                 if need not in {r for r, _, _, _ in m['files']}:
                     errors.append('track %s without %s' % (t['track'], need))
+    # the staging folder holds exactly the files of the build that wrote the manifest: anything else is refused (only
+    # Explorer's own folder files are tolerated; install_dlc.py copies only what the manifest lists in any case)
     for dp, dn, fns in os.walk(staging):
         for n in fns:
             rel = os.path.relpath(os.path.join(dp, n), staging)
-            if n != MANIFEST and os.path.normcase(rel) not in listed:
-                notes.append('not in the manifest (not installed): %s' % rel.replace(os.sep, '/'))
+            if (dp == staging and n == MANIFEST) or os.path.normcase(rel) in listed:
+                continue
+            if n.lower() in ('desktop.ini', 'thumbs.db'):
+                notes.append('not in the manifest (Explorer\'s folder file, not installed): %s' % rel.replace(os.sep, '/'))
+            else:
+                errors.append('not in the manifest, not from the build that wrote it: %s (remove it, or build into '
+                              'a new staging folder)' % rel.replace(os.sep, '/'))
     if game:
         gd = os.path.join(game, 'glimpse_dlc')
         for rel, size, sha, what in m['files']:
@@ -831,14 +920,15 @@ def build(a, status):
     game, resident = find_game(a.game)
     work = os.path.abspath(a.work)
     staging = os.path.abspath(a.staging)
+    # as given and with links / junctions resolved (overlap)
     for what, p in (('work', work), ('staging', staging)):
-        if inside(p, game) or inside(game, p):
+        if overlap(p, game):
             raise BuildError('The %s folder %s lies in the game folder or holds it; choose one outside %s.' % (what, p, game))
-        if inside(p, a.dump) or inside(a.dump, p):
+        if overlap(p, a.dump):
             raise BuildError('The %s folder %s and the DLC folder %s overlap; choose another %s folder.' % (what, p, a.dump, what))
-    if inside(work, staging) or inside(staging, work):
+    if overlap(work, staging):
         raise BuildError('The work and staging folders must not lie inside each other.')
-    os.makedirs(work, exist_ok=True)
+    say(claim_work(work, write=True))
     logs = os.path.join(work, 'logs')
     os.makedirs(logs, exist_ok=True)
 
@@ -884,7 +974,10 @@ def build(a, status):
     if tu4 and not os.path.isfile(tu4):
         raise BuildError('The TU4 text table %s does not exist (--tu4-texts / %s).' % (tu4, TU4_ENV))
     if tu4:
-        say('TU4 texts: %s (development; the converters that know them use them)' % tu4)
+        say('TU4 texts: %s (optional: a TU4 text table (JSON) made outside glimpse_fix; the converters that know '
+            'them use the official texts)' % tu4)
+    else:
+        say('TU4 texts: none (the release cannot produce a TU4 text table; the converters write their own texts)')
     probs, nfiles = check_tools_files()
     if probs:
         raise BuildError('The converter folder %s is not complete: %s. Unpack the release again (the whole folder '
@@ -928,6 +1021,7 @@ def build(a, status):
             say('  %s: up to date (%s)' % (p['name'], dst))
             continue
         st.invalidate()
+        clear_output(dst, work)       # only this package's folder: nothing of another package version stays
         say('  %s -> %s' % (p['name'], dst))
         status.write('RUNNING', 'Extracting %s (%s)' % (p['name'], human(p['size'])))
         n, total = extract(p, dst)
@@ -967,8 +1061,8 @@ def build(a, status):
             st_mg.invalidate()
             for n in os.listdir(work):
                 old = os.path.join(work, n)
-                if n.startswith('merged_') and os.path.isdir(old) and inside(old, work) and norm(old) != norm(work):
-                    shutil.rmtree(old)
+                if n.startswith('merged_') and os.path.isdir(old):
+                    clear_output(old, work)
             log = os.path.join(logs, 'merge.log')
             cmd = py + [os.path.join(HERE, 'assemble', 'merge_dlc.py'), '--base', pkg_dir[car_roles[0]]]
             for r in car_roles[1:]:
@@ -989,6 +1083,7 @@ def build(a, status):
         say('  up to date (%s)' % fe_out)
     else:
         st_fe.invalidate()
+        clear_output(fe_out, work)    # no car select body of a car that is no longer built
         code, tail = run_tool(py + [os.path.join(HERE, 'frontend', 'convfrontend.py')] + car_dirs + ['--out', fe_out, '--pc', resident],
                               os.path.join(logs, 'frontend.log'), env, work)
         require_ok(code, tail, 'Converting the car select models', os.path.join(logs, 'frontend.log'))
@@ -1026,8 +1121,7 @@ def build(a, status):
                 say('  Deadline sounds: up to date (%s)' % mn_out)
             else:
                 st_mn.invalidate()
-                if os.path.isdir(mn_src) and inside(mn_src, work):
-                    shutil.rmtree(mn_src)       # only this step's copy of the package folder
+                clear_output(os.path.dirname(mn_src), work)   # only this step's folder (its copy and its output)
                 dst = os.path.join(mn_src, 'AUDIO', 'RELEASE', 'MENU')
                 os.makedirs(dst, exist_ok=True)
                 for n in sorted(os.listdir(menu_dir)):
@@ -1047,6 +1141,8 @@ def build(a, status):
         say('  up to date (%s)' % pack)
     else:
         st_pack.invalidate()
+        clear_output(pack_dir, work)  # build_pack.py's intermediate packs and reports of an earlier run
+        os.makedirs(pack_dir, exist_ok=True)
         log = os.path.join(logs, 'pack.log')
         code, tail = run_tool(py + [bp, '--models', ','.join(models), '--dlc', src, '--pc', resident, '--frontend', fe_out,
                                     '--out', pack] + extra, log, env, work)
@@ -1098,8 +1194,7 @@ def build(a, status):
             say('  up to date (%s)' % aud_out)
         else:
             st_aud.invalidate()
-            if os.path.isdir(aud_src) and inside(aud_src, work):
-                shutil.rmtree(aud_src)        # only this step's copy of the package folders
+            clear_output(os.path.dirname(aud_src), work)   # only this step's folder (its copy and its output)
             n = 0
             for rel in dirs:
                 src = find_ci(src_pkg, rel)
@@ -1132,6 +1227,7 @@ def build(a, status):
             say('  up to date (%s)' % trk_out)
         else:
             st_trk.invalidate()
+            clear_output(trk_out, work)   # assemble_track.py never clears its output folder itself
             log = os.path.join(logs, 'track%s.log' % t['step'])
             code, tail = run_tool(py + [at, '--track', t['track'], '--dlc', src_pkg,
                                         '--game', os.path.join(game, 'data'), '--audio', aud_out, '--base', base,
@@ -1156,8 +1252,7 @@ def build(a, status):
                 say('  up to date (%s)' % md_out)
             else:
                 st_md.invalidate()
-                if os.path.isdir(md_data) and inside(md_data, work):
-                    shutil.rmtree(md_data)
+                clear_output(md_out, work)    # its overlay and data folder of an earlier run
                 log = os.path.join(logs, '%s.log' % t['mode'])
                 code, tail = run_tool(py + [script, '--base', base, '--dlc', src_pkg, '--out', os.path.join(md_out, comb),
                                             '--data-out', md_data, '--game', os.path.join(game, 'data')], log, env, work)
@@ -1259,14 +1354,21 @@ def preflight_main(a):
         say('converter %-32s %s' % (s, err or 'loads'))
         if err:
             errors.append('%s does not load: %s' % (s, err))
+    try:
+        claim_work(a.work, write=False)     # the build would refuse it too; only made and marked below, with --game
+    except BuildError as ex:
+        errors.append(str(ex))
     if game and not errors:
         work = os.path.abspath(a.work)
-        if inside(work, game) or inside(game, work):
+        if overlap(work, game):
             errors.append('The work folder %s lies in the game folder or holds it.' % work)
+        elif a.dump and overlap(work, a.dump):
+            errors.append('The work folder %s and the DLC folder %s overlap.' % (work, os.path.abspath(a.dump)))
         else:
-            logs = os.path.join(work, 'logs')
-            os.makedirs(logs, exist_ok=True)
             try:
+                say(claim_work(work, write=True))
+                logs = os.path.join(work, 'logs')
+                os.makedirs(logs, exist_ok=True)
                 with Lock(work):
                     fn, more = make_hkref(a, work, game, logs, env, py)
                 warnings += more
@@ -1365,8 +1467,9 @@ def main(argv):
     ap.add_argument('--vgmstream', help='vgmstream-cli.exe (default: PATH, glimpse_tools\\bin, '
                                         '%%LOCALAPPDATA%%\\glimpse_fix\\tools)')
     ap.add_argument('--ffmpeg', help='ffmpeg.exe (default: PATH, glimpse_tools\\bin, %%LOCALAPPDATA%%\\glimpse_fix\\tools)')
-    ap.add_argument('--tu4-texts', help='development: the official TU4 text table (mode/tu4text.py JSON, game data); '
-                                        'default: the environment variable ' + TU4_ENV)
+    ap.add_argument('--tu4-texts', help='optional: a TU4 text table (JSON) made outside glimpse_fix, for the official '
+                                        'texts (game data; the release cannot produce it, without it the converters '
+                                        'write their own texts); default: the environment variable ' + TU4_ENV)
     ap.add_argument('--hkref', help='development: this hkref.json instead of one read from the game folder\'s SplitSecond.exe')
     ap.add_argument('--check', action='store_true', help='only check the staging folder (with --game: and compare it '
                                                          'with the game folder, read only)')
@@ -1405,6 +1508,7 @@ def main(argv):
     say('DLC folder %s' % os.path.abspath(a.dump))
     say('work %s, staging %s' % (os.path.abspath(a.work), os.path.abspath(a.staging)))
     try:
+        claim_work(a.work, write=False)     # before the lock puts a file into it; build() marks it
         with Lock(os.path.abspath(a.work)):
             text, warnings = build(a, status)
     except BuildError as ex:

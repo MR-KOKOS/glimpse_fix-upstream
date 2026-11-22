@@ -25,8 +25,13 @@ tools/dlc/**/*.pkps
 tools/dlc/**/*.gfx
 tools/dlc/**/*.cso
 tools/dlc/**/*.xma
-# XEX2 / title update tools for reverse engineering: local only (xex2.py holds Microsoft's XEX key), never released
+# XEX2 / title update tools: local only (tools/dlc/xex holds a decryption tool, kept local), never committed or released
 tools/dlc/xex/
+# the XEX2 key a local tool needs, and what such a tool writes: never committed
+xex2_key.txt
+*.xex
+*.xexp
+*.img
 __pycache__/
 *.ark
 *.pkl

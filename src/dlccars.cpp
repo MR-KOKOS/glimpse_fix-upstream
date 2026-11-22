@@ -33,7 +33,8 @@
 // Inert: with UnlockAll=1 (not installed) or whenever the game takes its all-records branch (0xD6F8F0, 0xD71A34:
 // the cars are listed already), in the career unless [DLC] CarsCareer=1, for game types 0/1 (one car) and 6/7/9
 // (online screens), and with SteamLAN in an online session. Only data writes into the screen's own list, one
-// vtable slot and calls of game functions.
+// vtable slot and calls of game functions. With UnlockAll=1 the game's all-records branch lists the DLC cars on the
+// online car select too (no game type check); with SteamLAN=1 the LAN signature then covers them (DlcCarsInOverlay).
 //
 // Career ([DLC] CarsCareer=1, static RE 2026-11-21). The career is session flag [0xD64E40]+8 = 1 with game type 2
 // (both set by the episode screen, 0x47D277/0x47D284); the hook then appends to the list-1 list as in quick play,
@@ -375,6 +376,23 @@ static void __fastcall Hook_VsActivate(void* self, void*)
         Log("DLC cars: %d DLC cars added to the car select (game type %d%s): %s", n, type, career ? ", career" : "",
             ids);
     }
+}
+
+// for the LAN check (dlcfs.cpp DlcOnlineSignature): the cars a player with UnlockAll=1 can pick online. The game
+// hands a player's car to the others by its ID only (Net-Z dataset cATVNetDSVehicleData {mVehicleName, mColour} of
+// cATVNetDOPlayerSetup at +0x80, filled from the race setup's car by 0x883160; every player looks the ID up in his
+// own database, 0x51A1E0 -> 0x51BBE0, an unknown one gives "Couldn't find vehicle info" and no vehicle), so only
+// players with the same cars may race together then
+int DlcCarsInOverlay(char* ids, size_t idsSize)
+{
+    int n = 0;
+    if (idsSize) ids[0] = 0;
+    for (const char* car : kKnownCars)
+        if (OverlayHasCar(car)) {
+            if (n++) strncat_s(ids, idsSize, ",", _TRUNCATE);
+            strncat_s(ids, idsSize, car, _TRUNCATE);
+        }
+    return n;
 }
 
 static bool VsClassMatches()

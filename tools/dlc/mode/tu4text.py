@@ -12,11 +12,11 @@
 # way, scans the 75 records (bound "addi r9, r11, 0x960") and returns the pointer at +4 * (language + 1)
 # (language from 0x884B3A80).
 #
-# The texts are game data: they are never put into this repository or into a release. The tools/dlc/xex tools
-# (needed to decrypt and patch the title update) are local only, so a user cannot make the table either. A
-# developer makes a JSON cache once from the patched image (xex/xex2.py output):
+# The texts are game data: they are never put into this repository or into a release. The official texts need a
+# TU4 text table that the release cannot produce: the patched SPLITSECOND1 image it is read from is made with a local
+# development tool that is not part of glimpse_fix. From that image a JSON cache is made once:
 #   python -I -X utf8 tu4text.py extract <SPLITSECOND1_tu4.img> <out.json>
-# and points GLIMPSE_TU4_TEXTS at it (or passes the path). The consumers (assemble/cartext.py, deadline_mode.py)
+# and GLIMPSE_TU4_TEXTS points at it (or the path is passed). Without it the converters write their own texts. The consumers (assemble/cartext.py, deadline_mode.py)
 # use the official text when the table is there and fall back to their own generated texts otherwise, and say
 # which one they used.
 # The cache also holds Deadline's rival names ("rivals": RaceSetupOverlay/TimeTrialPlus/<Rival>Time key -> the name
@@ -103,7 +103,7 @@ def missing_letters(dict_texts, new_texts):
 def _sections(img):
     e = struct.unpack_from('<I', img, 0x3C)[0]
     if img[e:e + 4] != b'PE\0\0':
-        raise TU4Error('not a PE image (give the patched .img that xex2.py writes)')
+        raise TU4Error('not a PE image (give the patched SPLITSECOND1 image of title update 4)')
     base = struct.unpack_from('<I', img, e + 24 + 28)[0]
     n, osz = struct.unpack_from('<H', img, e + 6)[0], struct.unpack_from('<H', img, e + 20)[0]
     sec = {}

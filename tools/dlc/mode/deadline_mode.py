@@ -119,29 +119,42 @@ PPD_KEYS = ("'b; Fade In Time'", "'c; Fade Out Time'", "'e; Overwrite Color Cube
 LANGS = ('ENGLISH_NTSC', 'GERMAN', 'FRENCH_NTSC', 'ITALIAN', 'SPANISH_NTSC')
 K_NAME = 'TEXT_GAMEMODE_NAME_%s' % NAME
 K_HELP = 'TEXT_GAMEMODE_%s_HELP_LINE%%d' % NAME
-# official English name "Deadline"; mode names are upper case on the PC; no translated name is known, so the
-# name is the same in every language (as for the DLC car names). Three help lines + 'BLANK', like TimeTrial.
+# glimpse_fix's own texts, used when no TU4 text table is set (the official ones are game data, tu4text.py). They
+# explain the same rules as the official texts in other words: one lap against the countdown, a pickup holds the
+# clock for 0.5 s, for 2 s in a drift. Official English name "Deadline"; mode names are upper case on the PC, and the
+# name is the same in every language. Per language: name, help lines 1-3 (4-5 'BLANK'), then the four HUD texts the
+# DLL asks the dictionary for (src/dlcpickups.cpp): pickup, pickup in a drift, hint 1 (no text on the Xbox), hint 2.
 TEXTS = {
     'ENGLISH_NTSC': ('DEADLINE', (
-        'BEAT THE CLOCK - THE TIMER COUNTS DOWN FROM THE START.',
-        'FINISH THE LAP BEFORE THE COUNTDOWN HITS ZERO.',
-        'DRIFT & DODGE POWER PLAYS TO KEEP YOUR SPEED UP!')),
+        'FINISH ONE LAP BEFORE THE COUNTDOWN REACHES ZERO.',
+        'PICKUPS HOLD THE CLOCK: 2 SECONDS IF YOU DRIFT THROUGH ONE.',
+        'WITHOUT A DRIFT A PICKUP IS WORTH JUST HALF A SECOND.'),
+        ('+0.5s', '+2.0s', 'WITHOUT A DRIFT A PICKUP HOLDS THE CLOCK FOR ONLY 0.5 SECONDS',
+         'DRIFT THROUGH PICKUPS: THE CLOCK STOPS FOR 2 SECONDS')),
     'GERMAN': ('DEADLINE', (
-        'SCHLAGE DIE UHR - DER TIMER LÄUFT AB DEM START RÜCKWÄRTS.',
-        'BEENDE DIE RUNDE, BEVOR DER COUNTDOWN NULL ERREICHT.',
-        'DRIFTE UND WEICHE POWERPLAYS AUS, UM SCHNELL ZU BLEIBEN!')),
+        'SCHAFFE EINE RUNDE, BEVOR DER COUNTDOWN BEI NULL IST.',
+        'PICKUPS HALTEN DIE UHR AN: 2 SEKUNDEN, WENN DU HINDURCHDRIFTEST.',
+        'OHNE DRIFT BRINGT EIN PICKUP NUR EINE HALBE SEKUNDE.'),
+        ('+0,5s', '+2,0s', 'OHNE DRIFT STOPPT EIN PICKUP DIE UHR NUR FÜR 0,5 SEKUNDEN',
+         'DRIFTE DURCH PICKUPS: DIE UHR STEHT DANN 2 SEKUNDEN')),
     'FRENCH_NTSC': ('DEADLINE', (
-        'BATS LE CHRONO : LE COMPTE À REBOURS DÉMARRE AU DÉPART',
-        'TERMINE LE TOUR AVANT QUE LE CHRONO ATTEIGNE ZÉRO',
-        'DÉRAPE ET ÉVITE LES ATTAQUES POUR GARDER TA VITESSE !')),
+        'BOUCLE UN TOUR AVANT QUE LE COMPTE À REBOURS ARRIVE À ZÉRO.',
+        'LES BONUS ARRÊTENT LE CHRONO : 2 SECONDES SI TU LES PRENDS EN DÉRAPAGE.',
+        'SANS DÉRAPAGE, UN BONUS NE DONNE QUE 0,5 SECONDE.'),
+        ('+0,5s', '+2,0s', 'SANS DÉRAPAGE, UN BONUS ARRÊTE LE CHRONO 0,5 SECONDE SEULEMENT',
+         'PRENDS LES BONUS EN DÉRAPAGE : LE CHRONO STOPPE 2 SECONDES')),
     'ITALIAN': ('DEADLINE', (
-        'BATTI IL CRONOMETRO: IL CONTO ALLA ROVESCIA PARTE DAL VIA.',
-        'COMPLETA IL GIRO PRIMA CHE IL TEMPO ARRIVI A ZERO.',
-        'DERAPA ED EVITA I POWER PLAY PER RESTARE VELOCE!')),
+        'COMPLETA UN GIRO PRIMA CHE IL CONTO ALLA ROVESCIA ARRIVI A ZERO.',
+        'I BONUS FERMANO IL CRONOMETRO: 2 SECONDI SE LI PRENDI IN DERAPATA.',
+        'SENZA DERAPATA UN BONUS VALE SOLO MEZZO SECONDO.'),
+        ('+0,5s', '+2,0s', 'SENZA DERAPATA UN BONUS FERMA IL CRONOMETRO PER APPENA 0,5 SECONDI',
+         'PRENDI I BONUS DERAPANDO: IL CRONOMETRO SI FERMA PER 2 SECONDI')),
     'SPANISH_NTSC': ('DEADLINE', (
-        'BATE AL RELOJ: LA CUENTA ATRÁS EMPIEZA EN LA SALIDA',
-        'TERMINA LA VUELTA ANTES DE QUE EL TIEMPO LLEGUE A CERO',
-        '¡DERRAPA Y ESQUIVA JUGADAS PARA MANTENER LA VELOCIDAD!')),
+        'DA UNA VUELTA COMPLETA ANTES DE QUE LA CUENTA ATRÁS LLEGUE A CERO.',
+        'LOS BONUS PARAN EL RELOJ: 2 SEGUNDOS SI LOS COGES DERRAPANDO.',
+        'SIN DERRAPAR, UN BONUS SOLO DA MEDIO SEGUNDO.'),
+        ('+0,5s', '+2,0s', 'SIN DERRAPAR, UN BONUS PARA EL RELOJ SOLO DURANTE 0,5 SEGUNDOS',
+         'COGE LOS BONUS DERRAPANDO: EL RELOJ SE PARA 2 SEGUNDOS')),
 }
 
 
@@ -163,15 +176,16 @@ def text_pairs(lang):
     if off is not None:
         return [(k, k.lower()) for k, _ in off['ENGLISH_NTSC']] if lang == 'StringIDs' else off[lang]
     if lang == 'StringIDs':
-        return [(k, k.lower()) for k in [K_NAME] + [K_HELP % i for i in range(1, 6)]]
-    name, lines = TEXTS[lang]
-    return [(K_NAME, name)] + [(K_HELP % (i + 1), t) for i, t in enumerate(lines + ('BLANK', 'BLANK'))]
+        return [(k, k.lower()) for k in [K_NAME] + [K_HELP % i for i in range(1, 6)] + list(TU4_EXTRA)]
+    name, lines, hud = TEXTS[lang]
+    return [(K_NAME, name)] + [(K_HELP % (i + 1), t) for i, t in enumerate((lines + ('BLANK',) * 5)[:5])] + \
+        list(zip(TU4_EXTRA, hud))
 
 
 # The official texts: Title Update 4's built-in text table (tu4text.py; only when a developer's table is set,
 # GLIMPSE_TU4_TEXTS): the name, help lines 1..5 (an empty line -> 'BLANK', the PC's empty line) and the four
-# pickup / hint texts of the TU4 HUD (TU4_RULES.md section 3; no PC code reads them yet, the DLL draws its own
-# feedback). Without the table: TEXTS above and no pickup texts, as before.
+# pickup / hint texts of the TU4 HUD (TU4_RULES.md section 3; the DLL asks the dictionary for them,
+# src/dlcpickups.cpp). Without the table: glimpse_fix's own texts under the same keys (TEXTS above).
 TU4_NAME = 'TEXT_GAMEMODE_NAME_TIMETRIALPLUS'
 TU4_HELP = 'TEXT_GAMEMODE_timetrialplus_HELP_LINE%d'
 TU4_EXTRA = ('TEXT_TIMETRIALPLUS_PICKUP', 'TEXT_TIMETRIALPLUS_DRIFTPICKUP', 'TEXT_TIMETRIALPLUS_OBJECTIVE1',
