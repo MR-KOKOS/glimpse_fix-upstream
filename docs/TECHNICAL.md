@@ -125,6 +125,10 @@ shadow cascades from the global `Lighting/CSM_Max` settings (chosen at 0x88A3E0,
 both. The three cascades then cover a longer distance, so close shadows get a little softer. Split
 screen and the Low and Medium levels keep their per-level settings.
 
+With `VirtualPads=0`, `CarDetail` and `ShadowDistance` are reapplied on the game thread at 30
+and 60 fps. The fix uses the first `PeekMessageA` call in the input update once per main-loop
+pass. It checks the call site and the import slot before installing the hook.
+
 **Shadow resolution.** In single player all three cascades go into one depth texture of 1024x3072
 (INTZ, or the first of RAWZ, DF24, DF16, D24S8 the device takes), one above the other, drawn through
 viewports at y = 0, 1024 and 2048, with an A8R8G8B8 colour target of the same size bound that is never
@@ -514,7 +518,7 @@ problems without it before reporting them.
   `FrameRate=30` if something looks off.
 * Boost, the power bar fill, the photo mode and the HUD key work for player 1 only; the photo mode
   only on a single screen.
-* With `VirtualPads=0` the per-frame extras do not run (see `VirtualPads`).
+* See `VirtualPads` in [INI settings](INI.md) for the extras tied to pad polling.
 * `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race
   cards, pause and result screens at 32:9 and 21:9; menus, cards and races at 24:9. Not checked yet:
   split screen, online and LAN menus, power play close-ups, the end-of-season cutscene. A screen whose

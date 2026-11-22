@@ -8,7 +8,7 @@ The file is split into sections. INIs from older versions with everything under 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). The game accepts at most 4 joysticks; lower this to make room for a wheel. At 0 the per-frame extras (photo mode, HUD and zoom keys, unlocks, decals, boost, LOD scaling, `ShadowDistance`, `Shadows=0`, `PopInFix`, `CarDetail`, `LensFlare=0`, the DLC music of `[DLC] Music` and Deadline's DLCMenu sounds of `[DLC] Pickups`; `QualityCap` then only applies at the start) do not run, as they run with the pads' poll. |
+| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). The game accepts at most 4 joysticks; lower this to make room for a wheel. At 0 the per-frame extras (photo mode, HUD and zoom keys, unlocks, decals, boost, LOD scaling, `Shadows=0`, `PopInFix`, `LensFlare=0`, the DLC music of `[DLC] Music` and Deadline's DLCMenu sounds of `[DLC] Pickups`; `QualityCap` then only applies at the start) do not run, as they run with the pads' poll. `CarDetail` and `ShadowDistance` still apply. |
 | `HideXInputFromDirectInput` | 1 | Don't offer the real XInput devices through DirectInput as well. |
 | `SeparateTriggers` | 1 | 0 = stock shared Z axis. |
 | `StickDeadzone` | 0.15 | Radial stick deadzone (0–1). |

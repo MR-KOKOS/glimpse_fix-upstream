@@ -1,5 +1,6 @@
 // Split/Second controller fix - patches into SplitSecond.exe (Steam build, image base 0x400000)
 #include "common.h"
+#include <intrin.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -883,6 +884,39 @@ static void ScaleShadowDistance()
     }
 }
 
+static decltype(&PeekMessageA) s_peekMessage;
+static const void* s_framePeekReturn;
+
+static BOOL WINAPI Hook_PeekMessageA(LPMSG msg, HWND wnd, UINT min, UINT max, UINT remove)
+{
+    if (_ReturnAddress() == s_framePeekReturn) {
+        ApplyCarDetail();
+        ScaleShadowDistance();
+    }
+    return s_peekMessage(msg, wnd, min, max, remove);
+}
+
+// Without virtual pads, use the first PeekMessageA in the game's input update. The main loop
+// calls this update once per pass, before simulation and rendering at both frame rates.
+static void HookWorldLodWithoutPads()
+{
+    const BYTE* call = (const BYTE*)G(0x00558969) + 0x28;  // main loop's call to the input update
+    const char* mismatch = "world LOD: input update not recognised, car detail and shadow distance left alone";
+    if (!BytesMatch(call - 6, "8B0D") || !BytesMatch(call, "E8") || !BytesMatch(call + 5, "8B178B4214568BCFFFD0"))
+        return Log("%s", mismatch);
+    // Follow the call and the import operand to use the addresses in this build's code.
+    const BYTE* update = call + 5 + *(const LONG*)(call + 1);
+    if (!BytesMatch(update, "83EC20538B1D") || !BytesMatch(update + 10, "566A016A006A006A008D44241C508BF1FFD385C0"))
+        return Log("%s", mismatch);
+    auto slot = *(decltype(&PeekMessageA)* const*)(update + 6);  // mov ebx, [PeekMessageA IAT slot]
+    const auto peek = (decltype(&PeekMessageA))GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
+    if (!peek || !CodeMatches(slot, &peek, sizeof(peek))) return Log("%s", mismatch);
+    s_peekMessage = peek;
+    s_framePeekReturn = update + 0x1C;
+    void* hook = (void*)Hook_PeekMessageA;
+    WriteMemory(slot, &hook, sizeof(hook));
+}
+
 // Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
 // through one function (0x471530), which the options menu calls with the level it shows and saves, and
 // which clamps that level to the range of the level's tweakable (registered at 0xB6B2F0 with 0..3, the
@@ -921,8 +955,10 @@ void OnInputFrame()
     if (s_knownBuild && (g_cfg.patchMask & PATCH_LOD)) {
         static unsigned frame;
         ScaleLodDistances();
-        ApplyCarDetail();
-        ScaleShadowDistance();
+        if (g_cfg.virtualPads > 0) {
+            ApplyCarDetail();
+            ScaleShadowDistance();
+        }
         if (frame++ % 30 == 0) ScalePowerplayDrawDists();
         // Precomputed visibility: each track sector lists what can be seen from it, and the rest is
         // skipped, so buildings pop in at sector borders whatever their distance. The game's own
@@ -1047,6 +1083,8 @@ void ApplyGamePatches()
     s_knownBuild = true;
     Log("SplitSecond.exe build recognised (%s)", BuildName());
     const unsigned mask = g_cfg.patchMask;
+    if (!g_cfg.virtualPads && (mask & PATCH_LOD) && (g_cfg.carDetail || g_cfg.shadowDistance != 1.0f))
+        HookWorldLodWithoutPads();
     if (g_cfg.separateTriggers && (mask & PATCH_TRIGGERS)) PatchTriggerPreset();
     if (mask & PATCH_RUMBLE) HookRumble();
     if ((g_cfg.skipIntro > 0 || g_cfg.cutsceneSkip) && (mask & PATCH_INTRO)) HookIntroSkip();
