@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README and settings reference
+    url: https://github.com/frankyfife/glimpse_fix#readme
+    about: Installation, every option of SplitSecondPad.ini, known limits.

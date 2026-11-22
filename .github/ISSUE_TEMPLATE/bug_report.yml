@@ -1,0 +1,103 @@
+name: Bug report
+description: Something does not work or looks wrong with glimpse_fix (not the converted Xbox DLC; use "DLC report" for that).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A log makes most problems quick to find:
+        1. In `glimpse_config.exe`, Debug page, tick **Write SplitSecondPad.log** (or set `Log=1` under `[Debug]` in `SplitSecondPad.ini`).
+        2. Start the game, make the problem happen, quit the game.
+        3. Attach `SplitSecondPad.log` and `SplitSecondPad.ini` from the game folder below (drag and drop; if GitHub refuses a file, zip it or rename it to `.txt`).
+
+        The log may contain your Windows user name in folder paths. You may replace it with `USER` before attaching.
+  - type: input
+    id: version
+    attributes:
+      label: glimpse_fix version
+      description: The first line of the log shows it, or the release you downloaded.
+      placeholder: e.g. 2.3.0-beta.1
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: Game version
+      options:
+        - Steam, German/English
+        - Steam, Russian depot
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens?
+      description: What you see, and what you expected instead. Screenshots or a short video help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps from the start of the game, e.g. "Quick play, Race, Downtown, after the first corner".
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: dropdown
+    id: always
+    attributes:
+      label: How often?
+      options:
+        - Every time
+        - Sometimes
+        - Once
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Where?
+      multiple: true
+      options:
+        - Menus / settings program
+        - Single player race
+        - Career
+        - Split screen
+        - Online / SteamLAN
+        - Loading / start of the game
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Input devices and other tools
+      description: Controllers (type and how connected), wheel, keyboard only; tools such as Steam Input, DS4Windows, RivaTuner/RTSS, ReShade, overlays.
+    validations:
+      required: false
+  - type: input
+    id: pc
+    attributes:
+      label: PC
+      description: Windows version, graphics card, screen resolution and refresh rate, HDR on or off.
+    validations:
+      required: false
+  - type: textarea
+    id: files
+    attributes:
+      label: Log and INI
+      description: Attach SplitSecondPad.log (with Log=1) and SplitSecondPad.ini here.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: It still happens with the newest glimpse_fix release.
+          required: false
+        - label: It does not happen without glimpse_fix (remove `dinput8.dll` from the game folder to check), or I could not check that.
+          required: false

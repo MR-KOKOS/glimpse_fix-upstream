@@ -1,0 +1,95 @@
+name: DLC report (experimental)
+description: Results or problems with the Xbox 360 DLC converted from your own dump (build, install, cars, tracks, Deadline, Survival Race).
+title: "[DLC] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The DLC support is experimental, and test results of every kind help, also "works". Please do not attach DLC files or converted files, only logs.
+
+        Useful files:
+        - **Game log:** `SplitSecondPad.log` from the game folder, with `Log=1` under `[Debug]` (Debug page in `glimpse_config.exe`).
+        - **Build log:** `%LOCALAPPDATA%\glimpse_fix\dlc_work\build.log` (from **Build DLC**) or `install.log` (from **Install** / **Uninstall**).
+        - `SplitSecondPad.ini` from the game folder.
+
+        Logs may contain your Windows user name in folder paths. You may replace it with `USER` before attaching. If GitHub refuses a file, zip it or rename it to `.txt`.
+  - type: input
+    id: version
+    attributes:
+      label: glimpse_fix version
+      placeholder: e.g. 2.3.0-beta.1
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: Game version
+      description: The DLC part works on the German/English Steam version 1.0.0.1 only.
+      options:
+        - Steam, German/English
+        - Steam, Russian depot
+        - Other / not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works as expected
+        - Works, but something looks or sounds wrong
+        - Does not work / error
+        - Crash
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: What did you test?
+      multiple: true
+      options:
+        - Build DLC (settings program or build_all.py)
+        - Install / Uninstall
+        - DLC cars (car select, driving, looks)
+        - Quarry
+        - Minepit Park (Survival)
+        - Survival Race (split screen)
+        - Deadline mode (pickups, timer, rivals, end screen)
+        - Quarry DLC music
+        - DLC tracks online (SteamLAN, TracksOnline)
+    validations:
+      required: true
+  - type: checkboxes
+    id: packages
+    attributes:
+      label: Packages in your dump
+      options:
+        - label: Deadline Pack
+        - label: Onslaught Pack (Quarry)
+        - label: Survival At The Rock Pack
+        - label: '"High Octane" Supercar Vehicle Pack'
+        - label: '"The Elite" Vehicle Livery Pack'
+        - label: Elite Vehicle Livery Pack (older copy)
+        - label: Master Unlock!
+  - type: input
+    id: dlcini
+    attributes:
+      label: "[DLC] settings"
+      description: The values from SplitSecondPad.ini, and UnlockAll from [Gameplay].
+      placeholder: Overlays=1 Tracks=1 Modes=1 Pickups=1 Cars=1 Music=1 UnlockAll=0
+    validations:
+      required: false
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did and what you saw (for a problem also what you expected). Screenshots help, for Deadline especially the HUD and the end screen.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Logs
+      description: Attach the game log and, for build or install problems, build.log / install.log.
+    validations:
+      required: false
