@@ -224,6 +224,8 @@ void UltrawidePresent(IDirect3DDevice9* dev);   // diag.cpp's Present hook, befo
 void UltrawideDeviceLost();                     // diag.cpp's Reset hook, before Reset
 void UltrawideDeviceReset(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp);  // after a successful Reset
 bool UltrawideBinkHook(const void* fn);         // fn is one of its Bink import hooks
+bool ReadMovieName(void* movie, char* out, size_t size);  // Steam GFxMovieDefImpl
+bool SwapSlot(void** slot, void* hook, void** orig);
 bool IntroSkipBinkHook(const void* fn);         // game.cpp: fn is one of the intro skip's Bink import hooks
 
 // camera.cpp
@@ -260,7 +262,7 @@ void WriteMemory(void* at, const void* src, size_t len);
 // reads unguarded: call it inside __try
 bool ClassIs(void** vt, DWORD col, const char* name);
 
-// Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x48 Invoke
+// Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x30 GetVariable, +0x48 Invoke
 struct GFxValue {
     DWORD type;
     DWORD pad;
@@ -273,8 +275,7 @@ enum { GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
 
 typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* result, const GFxValue* args, unsigned count);
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
-bool ReadMovieName(void* movie, char* out, size_t size);  // Steam GFxMovieDefImpl
-bool SwapSlot(void** slot, void* hook, void** orig);
+typedef bool(__thiscall* GFxGetVariable_t)(void* movie, GFxValue* result, const char* path);
 void ApplyGamePatches();
 
 // online.cpp - SteamLAN=1 (PROTOTYPE): the game's LAN mode over Steam. A transport for Quazal's

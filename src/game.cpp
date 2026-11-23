@@ -1035,9 +1035,9 @@ void OnInputFrame()
 }
 
 // The finish card has its own prompt timer, but its input handler also requires
-// TransInFinished. Let its original update show the prompt only in that state.
+// TransInFinished. Hold the original update during the entering state so Continue
+// appears only once input is accepted.
 using RaceEndUpdate = void (__thiscall*)(BYTE*, float);
-using GFxGetVariable = bool (__thiscall*)(void*, GFxValue*, const char*);
 static RaceEndUpdate s_raceEndUpdate;
 
 namespace {
@@ -1050,12 +1050,18 @@ constexpr unsigned kCardOutsideSeason = 0x7FC;  // cRaceEnd::Enter sets it from 
 constexpr unsigned kSetupViewports = 0x9C;
 constexpr unsigned kSetupDemo = 0x9B2;  // the results prompt offers Quit Demo
 constexpr int kEntering = 1;
-constexpr int kActive = 2;
 constexpr int kOnlineRace = 6;
 constexpr int kOnlineChampionship = 7;
 constexpr float kQuickPlayEntrance = 3.0f;
 constexpr double kCreditsActiveFrame = 77;
 constexpr double kBeforeTransitionFinished = 199;
+}
+
+static bool OwnCode(const void* p)
+{
+    const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+    HMODULE m = NULL, self = NULL;
+    return GetModuleHandleExA(flags, (LPCSTR)p, &m) && GetModuleHandleExA(flags, (LPCSTR)&OwnCode, &self) && m == self;
 }
 
 static void ShortenQuickPlayFinish(BYTE* card)
@@ -1065,7 +1071,7 @@ static void ShortenQuickPlayFinish(BYTE* card)
         void* movie = holder ? *(void**)(holder + 4) : NULL;
         if (!movie || *(void***)movie != (void**)0x00C41CF4) return;
         void** vtable = *(void***)movie;
-        auto get = (GFxGetVariable)vtable[0x30 / 4];
+        auto get = (GFxGetVariable_t)vtable[0x30 / 4];
         GFxValue current = {};
         if (!get(movie, &current, "mcMain._currentframe") || current.type != GFX_NUMBER ||
             !(current.num >= kCreditsActiveFrame && current.num < kBeforeTransitionFinished))
@@ -1103,26 +1109,44 @@ static void __fastcall Hook_RaceEndUpdate(BYTE* card, void*, float delta)
         if (card[kCardOutsideSeason] && elapsed >= kQuickPlayEntrance) ShortenQuickPlayFinish(card);
         return;
     }
-    if (state == kActive) s_raceEndUpdate(card, delta);
+    s_raceEndUpdate(card, delta);
 }
 
 static void InstallRaceEndTiming()
 {
     if (!g_cfg.raceEndTiming) return;
     if (CurrentBuild() != BUILD_STEAM) {
-        Log("finish card: English/German Steam build only (%s)", BuildName());
+        Log("finish card: Steam build only, not the Russian depot (%s)", BuildName());
         return;
     }
     void** slot = (void**)0x00C208EC;
     if (!BytesMatch((void*)0x00C208D8, "5882C900") ||  // cRaceEnd RTTI
         !BytesMatch(slot, "C0888000") ||
-        !BytesMatch((void*)0x00C2091C, "40898000") ||
-        !BytesMatch((void*)0x008088C0, "80B994030000007565F30F10442404F30F588190030000F30F1181900300000F2F0580FAD300") ||
-        !BytesMatch((void*)0x00808940, "578BF980BF94030000000F84B1000000837F58020F85A70000008B878C0300005333DB39989C000000") ||
-        !BytesMatch((void*)0x00808679, "385D08C6442412010F94C03AC38886FC070000") ||
-        !BytesMatch((void*)0x00C41D24, "70A99800") ||  // GFxMovieRoot::GetVariable
-        !BytesMatch((void*)0x00C41D3C, "E0D29800")) {  // GFxMovieRoot::Invoke
-        Log("finish card: expected class or handlers missing");
+        !BytesMatch((void*)0x00C2091C, "40898000")) {
+        Log("finish card: cRaceEnd vtable mismatch");
+        return;
+    }
+    if (!BytesMatch((void*)0x008088C0, "80B994030000007565F30F10442404F30F588190030000F30F1181900300000F2F0580FAD300")) {
+        Log("finish card: cRaceEnd::Update bytes mismatch");
+        return;
+    }
+    if (!BytesMatch((void*)0x00808940, "578BF980BF94030000000F84B1000000837F58020F85A70000008B878C0300005333DB39989C000000")) {
+        Log("finish card: cRaceEnd input handler bytes mismatch");
+        return;
+    }
+    if (!BytesMatch((void*)0x00808679, "385D08C6442412010F94C03AC38886FC070000")) {
+        Log("finish card: cRaceEnd::Enter bytes mismatch");
+        return;
+    }
+    if (!BytesMatch((void*)0x00C41D24, "70A99800")) {  // GFxMovieRoot::GetVariable
+        Log("finish card: GFxMovieRoot::GetVariable slot mismatch");
+        return;
+    }
+    // SteamLAN (online.cpp) or another glimpse_fix hook may already wrap GFxMovieRoot::Invoke.
+    void* const* invokeSlot = (void* const*)0x00C41D3C;
+    void* curInvoke = IsBadReadPtr(invokeSlot, 4) ? NULL : *invokeSlot;
+    if (!curInvoke || (curInvoke != (void*)0x0098D2E0 && !OwnCode(curInvoke))) {
+        Log("finish card: GFxMovieRoot::Invoke slot mismatch (%p)", curInvoke);
         return;
     }
     // A replacement movie can move its callback while keeping the same name and frame count.

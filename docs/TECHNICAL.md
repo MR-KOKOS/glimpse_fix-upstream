@@ -294,6 +294,21 @@ again to skip" for 3 seconds; a second press within that time moves the movie to
 the game's player ends it as if it had played through. A press held when the movie starts does not
 count.
 
+### Post-race Continue timing
+
+On the post-race finish card (`cRaceEnd`, `UI/InGame/RaceEnd.gfx`), `cRaceEnd::Update` (`0x8088C0`,
+vtable `0xC208DC` slot 4 at `0xC208EC`) shows the Continue prompt as soon as its timer reaches 2.0 s
+(`0xD3FA80`), but the input handler (`0x808940`) ignores Continue until the card reaches state 2.
+State 2 is set by the movie's `TransInFinished` callback on `mcMain` frame 200 (~6.6 s at 30 fps);
+in the stock `RaceEnd.gfx` (27516 bytes, CRC32 `0x46B24DB4`), `mcMain` only has scripts on frames
+2, 28, 67, 77 (`TotalCreditsActive`) and 200 (`Stop` and `TransInFinished`). With `RaceEndTiming=1`
+the fix swaps only vtable slot 4 (no game code changed), holds the original update while in state 1
+so Continue appears when `TransInFinished` sets state 2, and in offline single-player Quick Play
+advances `mcMain` from frames 77–198 to 199 after 3.0 s so the next movie tick fires frame 200
+without skipping callbacks. Season plays through its full credits and unlocks; split screen, online
+and demo races stay stock. Steam build only (not the Russian depot), gated on the stock
+`RaceEnd.gfx` size and CRC32.
+
 ## Texture dump
 
 `DumpTextures=1` exports the game's textures at the next start, before the game sets up Direct3D:
