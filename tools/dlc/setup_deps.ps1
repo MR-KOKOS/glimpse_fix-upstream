@@ -54,7 +54,11 @@ function Get-File([string]$url, [string]$dest) {
 }
 
 # ------------------------------------------------------------------------------------------------ Python / numpy
+# The probes below may write to stderr (a missing numpy prints a traceback). Windows PowerShell 5.1 turns that
+# into an error record even with 2>$null, and 'Stop' makes it fatal, so they set 'Continue' for their own scope
+# and judge by $LASTEXITCODE.
 function Find-Python {
+    $ErrorActionPreference = 'Continue'
     $py = Get-Command py -ErrorAction SilentlyContinue
     if ($py) {
         $v = & py -3 -c "import sys; print('%d.%d.%d %d' % (sys.version_info[:3] + (64 if sys.maxsize > 2**32 else 32,)))" 2>$null
@@ -65,6 +69,7 @@ function Find-Python {
 
 function Latest-PythonWingetId {
     # the newest Python.Python.3.x package winget knows
+    $ErrorActionPreference = 'Continue'
     $out = winget search --id Python.Python.3 --source winget --accept-source-agreements 2>$null | Out-String
     $ids = [regex]::Matches($out, 'Python\.Python\.3\.(\d+)') | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique
     if (-not $ids) { return $null }
@@ -97,6 +102,7 @@ function Do-Python($python) {
 
 function Do-Numpy($python) {
     if (-not $python) { Miss 'numpy' 'needs Python first'; return }
+    $ErrorActionPreference = 'Continue'
     $v = & py -3 -c "import numpy; print(numpy.__version__)" 2>$null
     if ($LASTEXITCODE -eq 0 -and $v) {
         Ok 'numpy' $v
