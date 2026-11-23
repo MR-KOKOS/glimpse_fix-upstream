@@ -238,7 +238,11 @@ function Do-Bundle {
 }
 
 # ------------------------------------------------------------------------------------------------ Python / numpy
+# The probes below may write to stderr (a missing numpy prints a traceback). Windows PowerShell 5.1 turns that
+# into an error record even with 2>$null, and 'Stop' makes it fatal, so they set 'Continue' for their own scope
+# and judge by $LASTEXITCODE.
 function Find-Python {
+    $ErrorActionPreference = 'Continue'
     # the bundle's Python first (build_all.py runs there), else the py launcher
     $exe = Join-Path $ToolsDir 'python\python.exe'
     if ((Read-Bundle $ToolsDir) -and (Test-Path -LiteralPath $exe)) {
@@ -254,6 +258,7 @@ function Find-Python {
 }
 
 function Latest-PythonWingetId {
+    $ErrorActionPreference = 'Continue'
     # the newest Python.Python.3.x package winget knows
     $out = winget search --id Python.Python.3 --source winget --accept-source-agreements 2>$null | Out-String
     $ids = [regex]::Matches($out, 'Python\.Python\.3\.(\d+)') | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique
@@ -288,6 +293,7 @@ function Do-Python($python) {
 
 function Do-Numpy($python) {
     if (-not $python) { Miss 'numpy' 'needs Python first'; return }
+    $ErrorActionPreference = 'Continue'
     $v = & $python.Cmd @($python.Args) -c "import numpy; print(numpy.__version__)" 2>$null
     if ($LASTEXITCODE -eq 0 -and $v) {
         Ok 'numpy' $v
@@ -404,6 +410,7 @@ function Show-Game($python) {
     # what build_all.py finds through Steam when no game folder is given (it only reads the registry and Steam's lists)
     $ba = Join-Path $PSScriptRoot 'build_all.py'
     if (-not $python -or -not (Test-Path -LiteralPath $ba)) { return }
+    $ErrorActionPreference = 'Continue'   # as the probes above: a warning on stderr must not end the script
     $out = & $python.Cmd @($python.Args) -X utf8 $ba --find-game 2>$null
     $g = $out | Where-Object { $_ -like "game`t*" } | Select-Object -First 1
     if ($g) { Ok 'game folder' (($g -split "`t", 2)[1] + ' (Steam)') }
