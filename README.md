@@ -54,6 +54,8 @@ All buttons and keys can be changed. Every feature in detail: [technical notes](
    (`...\steamapps\common\SplitSecond`).
 2. Drag `SplitSecond.exe` onto `setlaa.exe` (the large address aware flag for the bigger streaming
    pool; the original stays as `SplitSecond.exe.orig`). Repeat it after Steam's "Verify integrity".
+   The settings program warns when the flag is missing and sets it after your yes. Without it the game
+   has only 2 GB of memory and can crash in a race at high resolutions, with HDR or with the DLC.
 3. Run `glimpse_config.exe` for the settings.
 
 Uninstall: delete the three files and rename `SplitSecond.exe.orig` back.

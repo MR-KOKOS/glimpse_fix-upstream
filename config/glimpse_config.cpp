@@ -749,6 +749,96 @@ static std::string GameDir()
     return slash == std::string::npos ? "." : d.substr(0, slash);
 }
 
+// ---- the large address aware flag of SplitSecond.exe (what setlaa.exe sets; a fresh install or Steam's "Verify
+// integrity of game files" takes it away again)
+
+// the exe's file header: false if it cannot be read or is not a 32-bit Windows executable
+static bool ReadExeHeader(HANDLE f, LONG& at, IMAGE_FILE_HEADER& fh)
+{
+    IMAGE_DOS_HEADER dos;
+    DWORD sig, got;
+    if (!ReadFile(f, &dos, sizeof(dos), &got, NULL) || got != sizeof(dos) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
+        SetFilePointer(f, dos.e_lfanew, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
+        !ReadFile(f, &sig, 4, &got, NULL) || got != 4 || sig != IMAGE_NT_SIGNATURE ||
+        !ReadFile(f, &fh, sizeof(fh), &got, NULL) || got != sizeof(fh) || fh.Machine != IMAGE_FILE_MACHINE_I386)
+        return false;
+    at = dos.e_lfanew + 4;
+    return true;
+}
+
+// 1 = the flag is set, 0 = it is not, -1 = no readable 32-bit SplitSecond.exe there
+static int ExeLargeAddressAware(const std::string& exe)
+{
+    HANDLE f = CreateFileA(exe.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return -1;
+    LONG at;
+    IMAGE_FILE_HEADER fh;
+    int r = ReadExeHeader(f, at, fh) ? (fh.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) != 0 : -1;
+    CloseHandle(f);
+    return r;
+}
+
+// as setlaa.exe: the untouched file is kept as SplitSecond.exe.orig (an existing .orig stays), then the flag is set in
+// the file header. Only that one header field changes; no code. "" when done, else why not.
+static std::string SetLargeAddressAware(const std::string& exe)
+{
+    std::string orig = exe + ".orig";
+    if (!CopyFileA(exe.c_str(), orig.c_str(), TRUE) && GetLastError() != ERROR_FILE_EXISTS)
+        return "The copy " + orig + " could not be written (error " + std::to_string(GetLastError()) + ").";
+    // no sharing: fails while the game runs
+    HANDLE f = CreateFileA(exe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        return e == ERROR_SHARING_VIOLATION ? "SplitSecond.exe is in use: quit the game first."
+             : e == ERROR_ACCESS_DENIED     ? "Windows does not allow changing SplitSecond.exe here (access denied). Drag "
+                                              "SplitSecond.exe onto setlaa.exe instead, or run this program as administrator."
+                                            : "SplitSecond.exe could not be opened (error " + std::to_string(e) + ").";
+    }
+    LONG at;
+    IMAGE_FILE_HEADER fh;
+    std::string err;
+    DWORD put = 0;
+    if (!ReadExeHeader(f, at, fh)) {
+        err = "SplitSecond.exe is not a 32-bit Windows executable.";
+    } else if (!(fh.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)) {
+        fh.Characteristics |= IMAGE_FILE_LARGE_ADDRESS_AWARE;
+        if (SetFilePointer(f, at, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
+            !WriteFile(f, &fh, sizeof(fh), &put, NULL) || put != sizeof(fh))
+            err = "SplitSecond.exe could not be written (error " + std::to_string(GetLastError()) + ").";
+    }
+    CloseHandle(f);
+    return err;
+}
+
+// asks once per game folder and session (again: also when it asked before) when its SplitSecond.exe lacks the flag,
+// and sets it after a yes
+static void CheckLargeAddressAware(HWND wnd, bool again = false)
+{
+    static std::string asked;
+    std::string game = GameDir(), exe = game + "\\SplitSecond.exe";
+    if (ExeLargeAddressAware(exe) != 0 || (asked == game && !again)) return;
+    asked = game;
+    std::string q = "SplitSecond.exe in\n" + game + "\nis not large address aware: the game has only 2 GB of memory to work "
+                    "with. Then the bigger streaming pool stays off, and at high resolutions, with HDR or with the "
+                    "converted DLC the game can run out of memory and crash in a race.\n\n"
+                    "A fresh install and Steam's \"Verify integrity of game files\" take the flag away; setlaa.exe sets it.\n\n"
+                    "Set it now? Only that flag in the file header changes, no game code; the original stays as "
+                    "SplitSecond.exe.orig.";
+    if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONWARNING) != IDYES) {
+        Status("SplitSecond.exe is not large address aware (setlaa.exe sets the flag)");
+        return;
+    }
+    std::string err = SetLargeAddressAware(exe);
+    if (err.empty() && ExeLargeAddressAware(exe) == 1) {
+        Status("SplitSecond.exe is large address aware now (the original is SplitSecond.exe.orig)");
+        return;
+    }
+    if (err.empty()) err = "The flag did not stick.";
+    MessageBoxA(wnd, ("The flag could not be set. " + err).c_str(), "glimpse_fix", MB_OK | MB_ICONWARNING);
+    asked.clear();  // ask again next time
+}
+
 static std::string NoTrailingSlash(std::string p)
 {
     while (p.size() > 3 && (p.back() == '\\' || p.back() == '/')) p.pop_back();
@@ -2839,6 +2929,7 @@ static void DlcSetup(HWND wnd)
     }
     asking = true;
     bool ready = EnsureGameDir(wnd);
+    if (ready) CheckLargeAddressAware(wnd, true);  // the DLC needs the memory most
     std::string dump, tools;
     if (ready) ready = EnsureDumpFolder(wnd, dump);
     if (ready) tools = FindTools(wnd);
@@ -3654,6 +3745,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
             } else if (PickIni(wnd)) {
                 s_viaSteam = false;
                 Open();
+                CheckLargeAddressAware(wnd);
                 if (s_page == kDlcPage) ShowPage(s_page);
             }
         } else if (id == ID_CLOSE) {
@@ -3826,6 +3918,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show)
     Open();
     ShowPage(0);
     ShowWindow(s_wnd, show);
+    UpdateWindow(s_wnd);
+    CheckLargeAddressAware(s_wnd);
 
     MSG m;
     while (GetMessageA(&m, NULL, 0, 0)) {
