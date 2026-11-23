@@ -3,358 +3,141 @@
 A drop-in `dinput8.dll` for the **Steam** PC version of **Split/Second** (Disney / Black Rock, 2010)
 that adds what the port never had, with a settings program instead of hand-editing an INI.
 
-> **Compatibility: Steam version only.** Developed and tested exclusively with the Steam release
-> (`SplitSecond.exe` 1.0.0.1, app 297860) on Windows 11. The retail DVD version
-> (Split/Second: Velocity) and any other release have **not** been tested. Packs that replace the
-> exe are not supported, see [Copy protection](#copy-protection). Which Steam language builds are
-> supported is listed in [the technical notes](docs/TECHNICAL.md#supported-executables).
+> **Steam version only** (`SplitSecond.exe` 1.0.0.1, app 297860), tested on Windows 11. The retail
+> DVD version and packs that replace the exe are not supported ([why](#copy-protection)). Supported
+> language builds: [technical notes](docs/TECHNICAL.md#supported-executables).
+
+> **2.3.0 is in beta.** New in it: your own Xbox 360 DLC on the PC (experimental), set up with one
+> button. Please report what works and what doesn't with the
+> [issue forms](https://github.com/frankyfife/glimpse_fix/issues/new/choose) and attach
+> `SplitSecondPad.log` (`Log=1`).
 
 ## Features
 
 **Fixes**
 
-* **Controllers:** every XInput pad (Xbox 360/One/Series, 8BitDo, Steam Input, DS4Windows, ...) works
-  with the console layout, full menu navigation (a held D-pad keeps scrolling, as the stick does),
-  Xbox or PlayStation button prompts, separate analog triggers and rumble. Out of the box the port
-  only knows the wired Xbox 360 pad.
-* **60 fps** with the simulation stepped exactly as at 30 fps, so physics and AI behave as intended.
-* **Sharp, complete worlds:** a larger streaming pool against blurry, grey or missing textures and
-  props, no pop-in of buildings beside the track, longer draw distances, sun shadows that reach twice
-  as far and are drawn into a shadow map of twice the resolution, and the opponents' cars in the Xbox
-  360's detail instead of the PS3's, so they no longer pop between detail levels.
-* **Image:** anti-aliasing (SMAA) on the 3D picture with a sharp HUD, power play icons at console
-  size at high resolutions, motion blur matched to 60 fps, anisotropic filtering, no stray line at
-  the bottom at Very High, vignette, gradient, bloom and flares switchable.
-* **Car glass as on the Xbox 360:** no sun shine on the windows from the surface behind them (DLC cars' white window frames).
-* **Sound as on the console:** the opponents' engines are audible again, and the Xbox 360 release's
-  reverb presets replace the PC's stock ones (see [Credits](#credits)).
-* **Ultrawide:** the race cameras keep the 16:9 picture height; an experimental full mode widens
-  every camera and keeps menus and HUD at 16:9 in the centre.
-* **HDR output** for HDR displays: the game's picture at an adjustable paper white, and the highlights
-  of the game's own HDR image (sun, sky, lights, explosions) up to the display's peak brightness.
-* **Skippable cutscenes:** the season's "Coming up" and "Next time" movies, the end sequence, the demo
-  and boot movies. The first press of A, B, X, Y, Start, Enter or Space shows "Press again to skip".
+* **Controllers:** every XInput pad (Xbox, 8BitDo, Steam Input, DS4Windows, ...) with the console
+  layout, full menu navigation, Xbox or PlayStation prompts, separate analog triggers and rumble.
+* **60 fps**, with the simulation stepped as at 30 fps, so physics and AI behave as intended.
+* **Sharp, complete worlds:** a larger streaming pool (no blurry or missing textures), no pop-in
+  beside the track, longer draw and shadow distances, sharper shadows, the Xbox 360's opponent car
+  detail.
+* **Image:** SMAA anti-aliasing with a sharp HUD, console-size power play icons, motion blur matched to
+  60 fps, anisotropic filtering; vignette, gradient, bloom and flares switchable; car glass as on the
+  Xbox 360.
+* **Sound as on the console:** the opponents' engines are audible again, with the Xbox 360's reverb
+  presets.
+* **Ultrawide** and **HDR output** (paper white and highlights up to the display's peak).
+* **Skippable cutscenes:** press twice to skip the season's movies, the end sequence and the boot
+  movies.
 
 **Extras** (all off by default)
 
 | | |
 |---|---|
-| **Boost** | Hold X (keyboard: left Shift) and your car surges forward, up to 324 km/h, with the motion blur swelling with it. |
-| **Handbrake** | The game has none. Hold Y (keyboard: X) and the car brakes and swings into a slide with the steering, donuts included. |
-| **AI boost** *(experimental)* | The AI boosts too, from easy to hard, or in **chaos mode** all the time with a full power play bar. |
-| **Full power play bar** | LS + RS (keyboard: left Ctrl) fills it: drop a building on the leader whenever you like. |
-| **Everything unlocked** | All tracks, events, episodes, modes and cars, through the game's own switches; your profile is not changed. |
-| **Bonus content** | The PC version's cheat code extras: the Expressway track, the Cobretti SlipStream, the branded cars, the Euro livery. |
-| **Achievements and decals** | All of them, or only the ones nobody can earn any more (ranked online, Pure). |
-| **Camera** | Field of view, zoom keys, less camera shake, a HUD key and a **photo mode** with a free camera, depth of field, bloom and exposure. |
-| **Skip the intro** | No boot movies at start. |
-| **Potato presets** | For very weak PCs, at 60 fps: graphics quality Low, no shadows, no effects, the shortest draw distances; *Peeled potato* also draws the textures at an eighth of their size. See [Settings](#settings). |
-| **Online over Steam** *(experimental)* | The game's LAN mode over the internet with the players of a Steam lobby: no server, no ports to open. See [Online over Steam](#online-over-steam-experimental). |
-| **Texture dump** | All the game's textures as DDS files, the groundwork for texture packs. See [Texture dump](#texture-dump). |
-| **DLC track Quarry** *(experimental)* | Your own converted Xbox DLC track Quarry in quick play, single player and split screen (`[DLC] Tracks=1`, see [INI.md](docs/INI.md)). |
-| **Your own Xbox DLC** *(experimental)* | The settings program converts your own Xbox 360 DLC dump (cars, the Deadline mode, Quarry) on your PC and installs it; no DLC data comes with glimpse_fix. See [Your own Xbox DLC](#your-own-xbox-dlc-experimental). |
+| **Boost** / **Handbrake** | Hold X / Y (keyboard: left Shift / X): surge up to 324 km/h, or brake into a slide. |
+| **AI boost** *(experimental)* | The AI boosts too, up to a *chaos mode* with a full power play bar. |
+| **Full power play bar** | LS + RS (keyboard: left Ctrl) fills it. |
+| **Everything unlocked** | All tracks, events, modes and cars, plus the PC's bonus content; your profile is not changed. |
+| **Achievements and decals** | All, or only those nobody can earn any more (ranked online, Pure). |
+| **Camera** | Field of view, zoom, less shake, a HUD key and a **photo mode** with depth of field. |
+| **Potato presets** | For very weak PCs, at 60 fps. |
+| **Online over Steam** *(experimental)* | The game's LAN mode over the internet with a Steam lobby. [Details](docs/ONLINE.md) |
+| **Your own Xbox DLC** *(experimental)* | Converts your own Xbox 360 DLC dump on your PC: 11 cars, the Deadline mode, the tracks Quarry and Minepit Park. [Below](#your-own-xbox-dlc-experimental) |
+| **Texture dump** | All the game's textures as DDS files, the groundwork for texture packs. [Details](docs/TEXTURE_DUMP.md) |
 
-All buttons and keys can be changed. Details on every feature are in the
-[technical notes](docs/TECHNICAL.md).
+All buttons and keys can be changed. Every feature in detail: [technical notes](docs/TECHNICAL.md).
 
 ## Install
 
 1. Copy `dinput8.dll`, `SplitSecondPad.ini` and `glimpse_config.exe` into the game folder
    (`...\steamapps\common\SplitSecond`).
-2. Drag `SplitSecond.exe` onto `setlaa.exe`. It sets the large address aware flag, which the bigger
-   streaming pool (and later texture packs) needs. The original stays as `SplitSecond.exe.orig`.
-   Steam's "Verify integrity of game files" restores the original exe; just run it again.
-3. Run `glimpse_config.exe` to change the settings.
+2. Drag `SplitSecond.exe` onto `setlaa.exe` (the large address aware flag for the bigger streaming
+   pool; the original stays as `SplitSecond.exe.orig`). Repeat it after Steam's "Verify integrity".
+3. Run `glimpse_config.exe` for the settings.
 
 Uninstall: delete the three files and rename `SplitSecond.exe.orig` back.
 
-## Online over Steam (experimental)
-
-The game's own LAN mode, played over the internet with the players of a Steam lobby: no server, no
-sign-up, no ports to open. Steam carries the data, directly or through its relays. **This is new and
-needs testing: please try it and report what you find in the
-[issues](https://github.com/frankyfife/glimpse_fix/issues), with `SplitSecondPad.log` (`Log=1`) from
-every PC involved.**
-
-> **Important: online play needs one file that is NOT in the download.** Copying the fix is not
-> enough: put `steam_api.dll` (32 bit) next to `SplitSecond.exe` yourself. It comes with Valve's
-> Steamworks SDK (free download after signing in at partner.steamgames.com), file
-> `sdk/redistributable_bin/steam_api.dll` (not the 64 bit `steam_api64.dll`). Without it the game runs
-> as before, but online play stays off, and with `SteamLAN=1` and `Log=1` the log says that
-> `steam_api.dll` was not found. With `SteamLAN=0` the file is not looked for at all.
-
-**What you need**
-
-* **`steam_api.dll` next to `SplitSecond.exe`** (see above).
-* `SteamLAN=1` (settings program, page *Online*) on every PC, all with the same version of the fix.
-* The game started through Steam.
-
-**Where you land** when the game starts
-
-| Setting | You meet |
-|---|---|
-| Lobby name empty | everybody else with an empty name, in the public lobby "glimpse" |
-| A lobby name | everybody with the same name (letters, digits, `-` and `_`); Steam friends of a member can still join through "Join game" |
-| *Friends only* | your Steam friends: you join a friend's lobby if one is playing, otherwise you open one that only your friends can find |
-| Steam's "Join game" on a friend | that friend's lobby, also when your game is not running yet |
-
-Two players who open a lobby of the same name at the same moment end up together in the older one
-within 15 seconds. A full lobby (8 players) makes the next player open a second one.
-
-**Playing**
-
-* In the game choose *LAN*, then create a game or search for one. Several games can run in one lobby.
-* The player who creates a game is its host: the host's mode and track apply, and so do the host's
-  settings for boost, handbrake, power bar fill, AI boost and respot time (`WreckTime`), for everyone
-  in that game. A guest uses its own buttons and keys for them, also when it has them off itself; when
-  the boost or handbrake button is Y, the game's camera change moves to D-pad down.
-* A banner at the top left shows the lobby, the players (2/8), the game mode and whose rules apply.
-  The photo mode is a free camera there; the race goes on. The lobby name and the mode are also in
-  your Steam status, which your friends can see in your game info.
-
-Online play runs on the German/English and on the Russian Steam version. **Not yet:** split screen
-in an online game. Tested so far with two players, in Race and Eliminator.
-
-![The banner in a game's lobby: lobby, players, mode and the host's rules](docs/images/online-lobby.jpg)
-
 ## Settings
 
-`glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic and a help line for
-the option under the mouse. Every change is saved at once; bloom and exposure apply while the game
-runs, everything else at the next start. Comments and keys it does not know stay as they are. Every
-key is described in the [INI reference](docs/INI.md).
-
-The *Presets* page sets everything but the Online, DLC and Debug pages at once: *Recommended* (the
-defaults), *Original game*, *Potato* and *Peeled potato* for very weak PCs, and *Chaos*. Before a
-preset is applied, your own settings are kept, and *Back to your settings* puts them back. Presets
-change only the INI: the potato presets cap the graphics quality while they are on, but the level
-chosen in the game's own menu stays saved as it is.
-
-## Texture dump
-
-Settings program, page *Debug*: *Dump textures on the next start*. At the next start a small window
-says "glimpse_fix: dumping the game's textures, please wait" while the fix reads the game's
-archives, then the switch turns itself off and the game closes. Start it again to play.
-
-* Result: the folder `glimpse_textures` in the game folder, one subfolder per archive, every texture
-  as a DDS file with an `index.txt` (size, format, mip levels). On the Steam version: 551 textures,
-  573 MB, in about 10 seconds.
-* The archives keep only a hash of each file name, so the files are named by that key
-  (`0A1B2C3D.dds`); the key is also what a texture pack will use to say which texture it replaces.
-* Nothing in the game folder is changed apart from the new folder and the switch in the INI, and
-  no game code is involved.
-
-This is the first step towards texture packs: a pack needs the original textures to start from.
-Loading replaced textures in the game is the next step and not part of this version. That is also
-why the large address aware flag (`setlaa.exe`) stays: high-resolution textures need address space
-on top of the 512 MB streaming pool.
+`glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic, a help line for the
+option under the mouse, every change saved at once. The *Presets* page has *Recommended*, *Original
+game*, *Potato*, *Peeled potato* and *Chaos*, and *Back to your settings*. Every key:
+[INI reference](docs/INI.md).
 
 ## Your own Xbox DLC (experimental)
 
-The Xbox 360 version of Split/Second had downloadable content the PC version never got: the Deadline
-car pack with the Deadline game mode, the Onslaught pack with the track Quarry, and more. If you
-bought it on your Xbox 360, glimpse_fix can convert **your own copy** on your PC so the PC game loads
-it. **No DLC content is part of glimpse_fix or downloaded by it**: without your own dump there is
-nothing to convert, and the converted files stay on your PC. Please do not share them.
+If you bought Split/Second's DLC on your Xbox 360, glimpse_fix converts **your own copy** so the PC
+game loads it. **No DLC content comes with glimpse_fix or is downloaded by it**, and the converted files
+stay on your PC; please do not share them. Steam version, German and English depots; the Russian depot
+may follow after the beta.
 
-**Compatibility:** the Steam version 1.0.0.1 (German and English depots), not the Russian depot; on any
-other executable the fix leaves the converted DLC off. The Russian depot is left out on purpose: the DLC
-part relies on game addresses that are only worked out for the Steam build. All other features of the
-fix work there as before. Support for the Russian depot may follow later, depending on how the beta
-tests go.
+You need your DLC as the console stores it (the folder `425607E7` with `00000002`), about 4 GB free on
+C:, and the folder `glimpse_tools` from the release zip in the game folder. Then, in the settings
+program, page *DLC*: **Set up DLC**. It
 
-Converted so far, from whichever of these packages your dump has:
+1. finds the game folder through Steam and your DLC in the usual places (or asks),
+2. downloads the **DLC tools** (Python, numpy, vgmstream, ffmpeg; about 90 MB, checksum-checked) only
+   if they are missing and only after your yes,
+3. offers Microsoft's DirectX runtime if `D3DCompiler_41.dll` is missing (needed for the tracks),
+4. converts everything on your PC (about 10 minutes the first time),
+5. backs up your saves, installs into `glimpse_dlc` in the game folder and turns on the settings.
 
-* *Deadline*: Cobretti Centaur, Ryback Javelin, Ryback Coyote Special, Hanzo Kanobo, and the game mode
-  Deadline (a countdown time trial) in quick play, with its time pickups (the Xbox's hexagonal token
-  model, from your own DLC) and its own icon in the game mode instructions before the race;
-* *High Octane*: Ryback Cyclone Special, Cobretti Severus, Ryback Vulcan, Hanzo Katana;
-* *The Elite* livery pack: Elite 440 BRN, Elite S510 RP, Elite S510 VX;
-* *Onslaught*: the track Quarry in quick play;
-* *Survival At The Rock*: the nemesis track nem_quarry (*Minepit Park*, track 16) for Survival, and the
-  split-screen game mode Survival Race.
-
-All cars go into one car pack. *Master Unlock* is not needed.
-
-**Texts.** The DLC's official texts (the help lines of Deadline and Survival Race, the pickup message and hint in
-the game's language, the car descriptions, the rivals' names) are not in the DLC packages: the Xbox's Title
-Update 4 carries them inside its program. A normal build therefore uses glimpse_fix's own texts, which explain the
-same rules in other words. The official texts need a TU4 text table that the release cannot produce (it is made
-with a local development tool that is not part of glimpse_fix); without it the converters write their own texts.
-
-What you need:
-
-* Your own DLC from the Xbox 360, copied off the console as it stores it: the folder `425607E7`
-  (Split/Second's title ID) with the subfolder `00000002` and the package files in it (the long hex
-  names, as the console keeps them in `Content\<profile>\425607E7\00000002`).
-* About 4 GB free on drive C: for the conversion, 0.5 GB on the game's drive.
-* The converters: the folder `glimpse_tools` of the release zip, copied into the game folder with
-  `glimpse_config.exe` (from the source: `tools\dlc`; if they are somewhere else, the settings
-  program asks for the folder the first time).
-* The programs the converters run. The easy way: the **DLC tools** zip of the release,
-  `glimpse_fix-dlc-tools-<version>.zip`, a download of its own next to the main zip (about 90 MB; not
-  part of glimpse_fix itself, see below). *Set up DLC* in the settings program downloads it only when
-  it is missing and only after you say yes (it shows the size and the address first), from the GitHub
-  release of the same version, checks it against the SHA-256 checksum published next to it and unpacks
-  it into `%LOCALAPPDATA%\glimpse_fix\tools`: nothing else to install, no admin rights.
-  `glimpse_tools\dlc\setup_deps.bat -Install` does the same from a command prompt (a zip you downloaded
-  yourself: `setup_deps.bat -Install -BundleZip <zip>`, or unpack it there as it is). It holds:
-
-| Program | Used for | Without it |
-|---|---|---|
-| Python 3 (the official embeddable Python of python.org, 64 bit) | runs the converters | nothing can be converted; the settings program says so |
-| numpy (the official wheel of PyPI, inside that Python) | translating Quarry's Xbox shaders | Quarry is left out (state WARN), the cars and the mode are built |
-| vgmstream-cli (the vgmstream release for Windows) | decoding Quarry's sound banks (XMA on the Xbox) | Quarry is left out (WARN) |
-| ffmpeg (an LGPL build of FFmpeg-Builds, unmodified) | encoding them for the PC (MPEG Layer II) | Quarry is left out (WARN) |
-
-  Not in it, as Microsoft passes it on only through its own installer: `D3DCompiler_41.dll` (DirectX
-  End-User Runtime, June 2010), which compiles the translated Quarry shaders; without it Quarry is left
-  out (WARN). The game's installer normally puts it in place. When it is missing, *Set up DLC* asks
-  whether to install it and then runs Microsoft's own DirectX installer (`setup_deps.bat -DirectXOnly`;
-  Windows asks for admin rights); `setup_deps.bat -Install` does that too.
-
-  Each program keeps its own license (Python: PSF; numpy: BSD; vgmstream: ISC style; FFmpeg: LGPL 2.1+);
-  the zip has `THIRD_PARTY_dlc_tools.txt` with where each one's source is, and a manifest with the
-  version, download URL and SHA-256 of everything. It is put together from the official downloads by
-  `tools\make_dlc_tools.py`, each checked against the SHA-256 its source publishes.
-
-  The other way: install them yourself (Python 3.8 or newer from python.org with the *py launcher*,
-  `py -3 -m pip install numpy`, vgmstream-cli, a Windows build of ffmpeg), or `setup_deps.bat -Install
-  -NoBundle`, which gets each in its current version from its official source (Python with winget,
-  numpy with pip, vgmstream-cli and ffmpeg portable into `%LOCALAPPDATA%\glimpse_fix\tools`). Without
-  `-Install`, `setup_deps.bat` only shows what is there and what is missing; `-Update` also replaces an
-  older bundle or updates what is there.
-
-When the bundle is there, `build_all.py` runs in its Python (it restarts itself there) and takes its
-vgmstream-cli and ffmpeg; otherwise they are found in `PATH`, in `glimpse_tools\bin` or in
-`%LOCALAPPDATA%\glimpse_fix\tools`. The game folder is found through Steam (the Steam library that has
-Split/Second) unless you give one. `glimpse_tools\dlc\build_all.py --preflight` (run with the bundle's
-`python.exe -I`, or `py -3 -I`) checks all of it without converting anything. The Havok class layouts the
-converters need are read from your `SplitSecond.exe` during the build (about 15 seconds the first time).
-
-In the settings program, page *DLC*, click **Set up DLC**. It does everything in one go and asks
-before anything is downloaded or installed:
-
-1. The game folder: the one of the `SplitSecondPad.ini` you are editing, else the one Steam has
-   (it reads Steam's folder from the registry, its library list `libraryfolders.vdf` and Split/Second's
-   `appmanifest_297860.acf`, read only). Started outside the game folder, the settings program opens
-   the INI of the game folder Steam has; *Open INI...* picks another one.
-2. Your DLC: the *Xbox DLC folder* if it is set and holds packages, else it looks in the usual places
-   (Xenia's `content` folders, the Desktop, Downloads and Documents, the Xbox layout on fixed and USB
-   drives; never whole drives, never network drives, a second or two at most). Each package's header is
-   checked (Split/Second's title ID, DLC content). If it finds different dumps, it lets you pick; if it
-   finds none, it opens the folder picker. *...* next to the folder shows what it finds, too.
-3. The DLC tools, only if they are missing: it shows the size (about 90 MB) and the GitHub release
-   address and downloads them after your yes, checked against their published SHA-256 checksum (see
-   above). Without them it can still use a Python of your own (the tracks may then be left out).
-4. The DirectX runtime, only if `D3DCompiler_41.dll` is missing: after your yes, Microsoft's own
-   installer (admin rights); with no, the cars and the Deadline mode are built without the tracks.
-5. The build: converts everything on your PC (`tools\dlc\build_all.py`), about 10 minutes the first
-   time, a minute or two after that, since finished steps are kept. The progress is shown below the
-   buttons; *Stop* (the same button) stops the download or the build, *Open log* shows the details. The
-   game folder is not touched: the result goes to `%LOCALAPPDATA%\glimpse_fix\dlc_staging`, the
-   intermediate files to `...\dlc_work`.
-6. The install: it says in plain words what it will add and where, and installs after your yes. It
-   copies your saves first (`Documents\Disney Interactive Studios\Split Second` to
-   `Split Second backup_<date>_dlc`), then the converted files into `glimpse_dlc` in the game folder. It
-   only ever replaces or removes files it copied itself (it keeps a list,
-   `glimpse_dlc\glimpse_dlc_installed.tsv`). Other archives in `glimpse_dlc` (for example from an older
-   manual install) are named and moved to `glimpse_dlc_replaced_<date>`, since the game would lay them
-   over its data as well.
-7. The settings: it turns on what the build needs (*Converted DLC*, *DLC tracks Quarry and Minepit
-   Park*, the *Deadline game mode* on the page *Deadline mode*, ...) and shows a summary. *DLC cars in
-   the car select without Unlock all* is on by default.
-
-Advanced, the single steps (smaller buttons next to *Set up DLC*): *Build* converts only (step 5, for
-the folder set and the game folder of this INI), *Install* shows what it would do and then installs
-(step 6, without turning on any settings: the program offers that afterwards), and *Uninstall* takes
-it out again the same way: it shows what it will do, copies your saves, removes the files Install
-copied and puts back what it moved aside.
-
-Without the settings program, from a command prompt in `glimpse_tools\dlc` (`tools\dlc` in the source; details in
-[tools/dlc/README_build.md](tools/dlc/README_build.md)):
-
-```
-py -3 -I build_all.py --dump "<...>\425607E7" [--game "<...>\steamapps\common\SplitSecond"]
-py -3 -I install_dlc.py [--game "<...>\steamapps\common\SplitSecond"]            (dry run)
-py -3 -I install_dlc.py [--game "<...>\steamapps\common\SplitSecond"] --apply
-```
-
-(`py -3`, or with the DLC tools `%LOCALAPPDATA%\glimpse_fix\tools\python\python.exe -I`; without `--game` the
-Steam install of Split/Second is used.)
-
-To take it out again: `install_dlc.py [--game <...>] --uninstall` (dry run, then `--apply`), or just turn
-off *Converted DLC*.
-All of this is experimental: online, every player needs the same converted track (see
-`TracksOnline` in [INI.md](docs/INI.md)).
+*Uninstall* on the same page takes it out again. Details, the command line and `setup_deps.bat`:
+[docs/DLC.md](docs/DLC.md).
 
 ## Copy protection
 
-The Steam executable is protected with SecuROM. **This project does not remove, bypass or weaken
-it, and it does not change any game code.** SecuROM checks the game code at fixed times after launch;
-a changed instruction makes the game hang minutes later, typically after the finish line. That is
-also the likely reason why earlier 60 fps patches got a reputation for breaking the game. glimpse_fix
-works only through the game's data, swapped function pointers and calls into the game's own
-functions, after checking the expected bytes, and through hooks in Direct3D, which is part of
-Windows. The copy protection stays intact. How, in detail:
-[Copy protection in detail](docs/TECHNICAL.md#copy-protection-in-detail).
+The Steam exe is protected with SecuROM. **glimpse_fix does not remove, bypass or weaken it and does
+not change any game code**: it works through the game's data, swapped function pointers, calls into the
+game's own functions and Direct3D hooks. A changed instruction would make the game hang minutes later,
+which is likely why older 60 fps patches had a bad name. [In detail](docs/TECHNICAL.md#copy-protection-in-detail).
 
-**The "elysium" Xbox content pack (`Xenon.dll`) is not supported.** It replaces `SplitSecond.exe`
-with the patched executable of the free PC demo and patches game code in memory, so the full game's
-executable and its SecuROM protection are not used at all. It also redistributes the paid Xbox 360
-DLC, which is still sold on the Xbox Store, without a license. The SS Multiplayer mod depends on it.
-glimpse_fix checks for the unmodified Steam exe and switches most of itself off on the demo exe.
-Please reproduce problems without such packs before reporting them.
-[More on the pack](docs/TECHNICAL.md#the-xbox-content-modpack-xenondll-in-detail).
+The "elysium" Xbox content pack (`Xenon.dll`) is **not supported**: it swaps in the patched demo exe and
+redistributes the paid Xbox DLC without a license. Please reproduce problems without it.
+[More](docs/TECHNICAL.md#the-xbox-content-modpack-xenondll-in-detail).
 
 ## Known limitations
 
-* 60 fps: races, AI and physics were checked; not every power play and cutscene was. Set
-  `FrameRate=30` if something looks off.
-* Boost, handbrake, power bar fill, photo mode and HUD key work for player 1 only; the photo mode
-  only on a single screen.
-* Photo mode on crashes: once your car is wrecked, the game's crash sequence decides the view. Enter
-  the photo mode before the crash for a free camera.
-* The full ultrawide mode is experimental; split screen and the online menus are not checked yet.
-* HDR runs the game in a borderless window instead of exclusive fullscreen; the Steam overlay may not
-  show while it is on. A white HUD element over an already white sky is brightened with it.
-* With a wheel or another DirectInput device present, the controls screen names inputs generically.
-* `UnlockDecals` works in single player races; finish the race or leave it through the pause menu
-  so the profile is saved.
-* Online over Steam is experimental, see [above](#online-over-steam-experimental).
-* On the Russian Steam build the options new in 2.2.0 are mapped and checked against a dump, not yet
-  played. SMAA in split screen: the fix for [#15](https://github.com/frankyfife/glimpse_fix/issues/15)
-  is in, not yet confirmed in the game.
-* Audio: the game forces FMOD to DirectSound 5.1; the LFE channel and the pause menu are silent in
-  the game's own mix.
-* `TextureDetail` below full also blurs menu and HUD pictures that have mip levels; the text stays
-  sharp. `ShadowResolution=4` is experimental.
+* 60 fps: races, AI and physics were checked, not every power play and cutscene; `FrameRate=30` if
+  something looks off.
+* Boost, handbrake, power bar fill, photo mode and HUD key are for player 1 only; the photo mode only
+  on a single screen, and once your car is wrecked the crash sequence decides the view.
+* Full ultrawide mode, Online over Steam and the DLC are experimental.
+* HDR runs in a borderless window; the Steam overlay may not show.
+* With a wheel or other DirectInput device, the controls screen names inputs generically.
+* `UnlockDecals`: finish the race or leave it through the pause menu so the profile is saved.
+* Russian Steam build: the options new in 2.2.0 are checked against a dump, not yet played; no DLC.
+* SMAA in split screen: the fix for [#15](https://github.com/frankyfife/glimpse_fix/issues/15) is in,
+  not yet confirmed in the game.
+* Audio: the game forces FMOD to DirectSound 5.1; the LFE channel and the pause menu are silent in the
+  game's own mix.
+* `TextureDetail` below full also blurs menu and HUD pictures; `ShadowResolution=4` is experimental.
 
-Bug reports: set `Log=1` (settings program, *Debug*) and attach `SplitSecondPad.log`.
+Bug reports: `Log=1` (settings program, *Debug*), then attach `SplitSecondPad.log` to an
+[issue](https://github.com/frankyfife/glimpse_fix/issues/new/choose).
 
 ## Credits
 
-* [Back on Air](https://github.com/xenophobentx/back-on-air) by xenophobentx gave the ideas for three
-  features: the opponent engine fix (its notes pointed out that the opponents race without an engine
-  sound on PC, which I had never noticed), the opponent car detail (the PC loads the PS3's car detail
-  settings) and the longer shadow distance. All three were worked out and written independently
-  here; no code was taken.
+* [Back on Air](https://github.com/xenophobentx/back-on-air) by xenophobentx gave the ideas for the
+  opponent engine fix, the opponent car detail and the longer shadow distance; worked out and written
+  independently here, no code taken.
 * MR-KOKOS: the full ultrawide mode (`UltrawideFix=2`).
 * EndlessPapercuts: the request for skippable cutscenes
   ([#11](https://github.com/frankyfife/glimpse_fix/issues/11)).
 * [SMAA](https://github.com/iryoku/smaa) by Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando
-  Navarro and Diego Gutierrez: the anti-aliasing shaders and tables, unchanged in `third_party/smaa`.
+  Navarro and Diego Gutierrez, unchanged in `third_party/smaa`.
 
 ## Building
 
-`build.bat` with the Visual Studio 2022 Build Tools (x86). The research tools and the address notes
-are in the [technical notes](docs/TECHNICAL.md#building).
+`build.bat` with the Visual Studio 2022 Build Tools (x86). Research tools and address notes:
+[technical notes](docs/TECHNICAL.md#building).
 
 ## AI disclosure
 
-glimpse_fix is developed with AI assistance: the code, the reverse engineering and the
-documentation are written with Claude (Anthropic). Changes are tested in the game on the
-German/English Steam version before a release; what could not be tested is marked as such.
+glimpse_fix is developed with AI assistance: the code, the reverse engineering and the documentation
+are written with Claude (Anthropic). Changes are tested in the game on the German/English Steam version
+before a release; what could not be tested is marked as such.
 
 ## License
 

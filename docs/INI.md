@@ -104,7 +104,7 @@ The file is split into sections. INIs from older versions with everything under 
 | `OpponentEngines` | 1 | 1 = sound bank slots big enough for the PC's opponent engine banks. 0 = stock (silent opponents). |
 | `ConsoleReverb` | 1 | 1 = the Xbox 360 release's reverb presets. 0 = the PC's stock ones. |
 
-**[Online]** (experimental, see the [README](../README.md#online-over-steam-experimental))
+**[Online]** (experimental, see [Online over Steam](ONLINE.md))
 
 | Key | Default | Meaning |
 |---|---|---|
