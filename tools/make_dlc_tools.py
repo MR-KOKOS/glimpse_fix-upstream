@@ -1,7 +1,7 @@
 # glimpse_fix: build the DLC tools bundle, a zip of its own next to the release zip.
 #
 #   py -3 -I tools\make_dlc_tools.py [--version <x.y.z>] [--out <dir>] [--cache <dir>] [--force]
-#       [--python <3.x.y>] [--numpy <x.y.z>] [--vgmstream <tag>] [--ffmpeg-branch <x.y>] [--no-test]
+#       [--python <3.x.y>] [--numpy <x.y.z>] [--vgmstream <tag>] [--ffmpeg-branch <x.y>] [--ffmpeg-tag <tag>] [--no-test]
 #
 # The bundle holds every program the DLC build (tools\dlc\build_all.py) needs except D3DCompiler_41.dll, so a user
 # installs nothing by hand. It is unpacked as it is into %LOCALAPPDATA%\glimpse_fix\tools\ (setup_deps.bat -Bundle,
@@ -164,9 +164,11 @@ def resolve_vgmstream(tag):
                                release=r['html_url'], published=r.get('published_at', ''))
 
 
-def resolve_ffmpeg(branch):
-    """The newest autobuild release with a static win64 LGPL build of the newest (or the given) release branch."""
-    for r in get_json(GH_API % FF_REPO + '/releases?per_page=15'):
+def resolve_ffmpeg(branch, tag=None):
+    """The newest autobuild release (or the one of the given tag, to rebuild a bundle with the same build) with a static
+    win64 LGPL build of the newest (or the given) release branch."""
+    releases = [get_json(GH_API % FF_REPO + '/releases/tags/' + tag)] if tag else         get_json(GH_API % FF_REPO + '/releases?per_page=15')
+    for r in releases:
         if not r['tag_name'].startswith('autobuild-') or r.get('draft') or r.get('prerelease'):
             continue
         best = None
@@ -189,8 +191,8 @@ def resolve_ffmpeg(branch):
         return m.group(1), dict(name=a['name'], url=a['browser_download_url'], sha256=gh_digest(a), size=a['size'],
                                 release=r['html_url'], tag=r['tag_name'], scripts_commit=obj['sha'], repo=repo,
                                 ffmpeg_commit=m.group(4), branch=m.group(5), published=r.get('published_at', ''))
-    raise Fail('no FFmpeg-Builds autobuild release with a win64-lgpl build of a release branch%s'
-               % (' ' + branch if branch else ''))
+    raise Fail('no FFmpeg-Builds autobuild release%s with a win64-lgpl build of a release branch%s'
+               % (' ' + tag if tag else '', ' ' + branch if branch else ''))
 
 
 # ------------------------------------------------------------------------------------------------- downloads
@@ -503,6 +505,8 @@ def main(argv):
     ap.add_argument('--numpy', help='this numpy version instead of the newest')
     ap.add_argument('--vgmstream', help='this vgmstream release tag (e.g. r2168) instead of the newest')
     ap.add_argument('--ffmpeg-branch', help='this FFmpeg release branch (e.g. 9.0) instead of the newest')
+    ap.add_argument('--ffmpeg-tag', help='this FFmpeg-Builds autobuild release (e.g. autobuild-2026-11-22-12-36) instead '
+                    'of the newest, to rebuild a bundle with the same ffmpeg')
     ap.add_argument('--no-test', action='store_true', help='skip the tests of the assembled bundle')
     a = ap.parse_args(argv)
 
@@ -528,7 +532,7 @@ def main(argv):
     py['version'] = py_ver
     vg_ver, vg = resolve_vgmstream(a.vgmstream)
     vg['version'] = vg_ver
-    ff_ver, ff = resolve_ffmpeg(a.ffmpeg_branch)
+    ff_ver, ff = resolve_ffmpeg(a.ffmpeg_branch, a.ffmpeg_tag)
     ff['version'] = ff_ver
     comps = dict(python=py, numpy=np_, vgmstream=vg, ffmpeg=ff)
     for k, c in comps.items():
