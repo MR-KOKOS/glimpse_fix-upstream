@@ -1374,7 +1374,9 @@ def build(a, status):
     contents = ' + '.join(ROLE_NAMES[r] for r in car_roles)
     items = [(PACK_NAME, pack, 'overlay: cars of %s (%s)%s' % (contents, ', '.join(models),
                                                                ' + game mode Deadline' if extra else ''))]
-    ini = [('Overlays', '1')] + ([('Modes', '1')] if extra else [])
+    # the mode is built with its pickup files (deadline_mode.py's default), so Deadline is played as on the Xbox:
+    # its boxes on (Pickups=1, which adds no DeadlineBonus)
+    ini = [('Overlays', '1')] + ([('Modes', '1'), ('Pickups', '1')] if extra else [])
 
     # Deadline's quick play movie (served from deadline\data by the DLL's redirect while [DLC] Modes=1)
     if extra:

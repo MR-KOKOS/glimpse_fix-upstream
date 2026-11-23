@@ -2557,7 +2557,7 @@ static std::string IniShortName(const Option& o)
 {
     static const struct { const char *key, *name; } names[] = {
         { "Overlays", "Converted DLC" }, { "Tracks", "DLC tracks" }, { "Modes", "Deadline game mode" }, { "Music", "DLC race music" },
-        { "Cars", "DLC cars in the car select" },
+        { "Cars", "DLC cars in the car select" }, { "Pickups", "Deadline pickups" },
     };
     for (auto& n : names)
         if (!strcmp(o.key, n.key)) return n.name;
