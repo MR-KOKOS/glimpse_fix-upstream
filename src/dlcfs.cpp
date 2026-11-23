@@ -1022,3 +1022,24 @@ bool DlcOverlayRead(const char* path, std::vector<unsigned char>* out)
 {
     return VaRead(s_resident, path, out);
 }
+
+bool ResidentEntryMatches(const char* path, size_t size, uint32_t crc)
+{
+    try {
+        VirtualArchive base;
+        const VirtualArchive* archive = s_resident;
+        if (!archive) {
+            char file[MAX_PATH];
+            ModulePath(file, "data\\resident.ark");
+            std::string error;
+            if (!base.Build(file, {}, &error)) return false;
+            archive = &base;
+        }
+        const ArkEntry* entry = VaFind(archive, path);
+        std::vector<unsigned char> data;
+        return entry && entry->size == size && VaRead(archive, path, &data) &&
+               Crc32(0, data.data(), data.size()) == crc;
+    } catch (...) {
+        return false;
+    }
+}

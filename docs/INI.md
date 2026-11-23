@@ -72,6 +72,7 @@ The file is split into sections. INIs from older versions with everything under 
 | Key | Default | Meaning |
 |---|---|---|
 | `UnlockAll` | 0 | 1 = all tracks, events, episodes, game modes and vehicles selectable (the game's own switches; the profile is not changed). |
+| `RaceEndTiming` | 0 | 1 = show Continue when the single-player finish card can accept it. Offline Quick Play gets a shorter entrance. Season plays the full credits and unlocks. Requires the Steam build and the stock finish-card movie. |
 | `CutsceneSkip` | 1 | Skippable cutscenes: the season's "Coming up" and "Next time" movies, the end sequence, the demo movies and the boot movies. The first press of A, B, X, Y, Start, Enter or Space shows "Press again to skip" for 3 seconds; a second press within them skips the movie, which the game then ends as if it had played to the end. Menu backgrounds and the tutorial clips are left alone. 0 = stock. |
 | `SkipIntro` | 0 | Boot movies at every start: 1 = skip the publisher logo, 2 = also the game intro. They end at once without decoding (the movie files stay untouched). 0 = stock. |
 | `BonusContent` | 0 | 1 = the PC version's cheat code extras: Expressway track, Cobretti SlipStream, retailer branded cars, Euro livery pack. |

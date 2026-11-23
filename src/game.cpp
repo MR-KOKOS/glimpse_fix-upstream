@@ -1037,64 +1037,97 @@ void OnInputFrame()
 // The finish card has its own prompt timer, but its input handler also requires
 // TransInFinished. Let its original update show the prompt only in that state.
 using RaceEndUpdate = void (__thiscall*)(BYTE*, float);
+using GFxGetVariable = bool (__thiscall*)(void*, GFxValue*, const char*);
 static RaceEndUpdate s_raceEndUpdate;
+
+namespace {
+constexpr unsigned kCardState = 0x58;
+constexpr unsigned kCardMovieHolder = 0x68;  // c2DFlashLayer's movie, used by 0x4D5480
+constexpr unsigned kCardRaceSetup = 0x38C;
+constexpr unsigned kCardPromptTime = 0x390;
+constexpr unsigned kCardPromptShown = 0x394;
+constexpr unsigned kCardOutsideSeason = 0x7FC;  // cRaceEnd::Enter sets it from the inverse career flag
+constexpr unsigned kSetupViewports = 0x9C;
+constexpr unsigned kSetupDemo = 0x9B2;  // the results prompt offers Quit Demo
+constexpr int kEntering = 1;
+constexpr int kActive = 2;
+constexpr int kOnlineRace = 6;
+constexpr int kOnlineChampionship = 7;
+constexpr float kQuickPlayEntrance = 3.0f;
+constexpr double kCreditsActiveFrame = 77;
+constexpr double kBeforeTransitionFinished = 199;
+}
 
 static void ShortenQuickPlayFinish(BYTE* card)
 {
-    // The TransitionIn and SetVisibility command bindings use this movie holder.
-    BYTE* holder = *(BYTE**)(card + 0x7C);
-    void* movie = holder ? *(void**)(holder + 4) : NULL;
-    char name[32];
-    if (!movie || !ReadMovieName(movie, name, sizeof name) || _stricmp(name, "RaceEnd.gfx")) return;
+    __try {
+        BYTE* holder = *(BYTE**)(card + kCardMovieHolder);
+        void* movie = holder ? *(void**)(holder + 4) : NULL;
+        if (!movie || *(void***)movie != (void**)0x00C41CF4) return;
+        void** vtable = *(void***)movie;
+        auto get = (GFxGetVariable)vtable[0x30 / 4];
+        GFxValue current = {};
+        if (!get(movie, &current, "mcMain._currentframe") || current.type != GFX_NUMBER ||
+            !(current.num >= kCreditsActiveFrame && current.num < kBeforeTransitionFinished))
+            return;
+        char name[32];
+        if (!ReadMovieName(movie, name, sizeof name) || _stricmp(name, "RaceEnd.gfx")) return;
 
-    void** vtable = *(void***)movie;
-    if (vtable != (void**)0x00C41CF4) return;
-    using GetVariable = bool (__thiscall*)(void*, GFxValue*, const char*);
-    auto get = (GetVariable)vtable[0x30 / 4];
-    GFxValue frames = {}, current = {};
-    if (!get(movie, &frames, "mcMain._totalframes") || frames.type != GFX_NUMBER || frames.num != 238 ||
-        !get(movie, &current, "mcMain._currentframe") || current.type != GFX_NUMBER ||
-        current.num < 77 || current.num >= 199)
-        return;
-
-    // Let the next normal movie advance run its frame-200 callback. Credits
-    // activation at frame 77 and the preceding sound cues have already played.
-    GFxValue frame = {};
-    frame.type = GFX_NUMBER;
-    frame.num = 199;
-    auto invoke = (GFxInvoke_t)vtable[0x48 / 4];
-    if (invoke(movie, "mcMain.gotoAndPlay", NULL, &frame, 1))
-        Log("finish card: Quick Play entrance shortened from frame %.0f", current.num);
+        // The next normal movie advance runs the stock frame-200 callback.
+        GFxValue frame = {};
+        frame.type = GFX_NUMBER;
+        frame.num = kBeforeTransitionFinished;
+        auto invoke = (GFxInvoke_t)vtable[0x48 / 4];
+        if (invoke(movie, "mcMain.gotoAndPlay", NULL, &frame, 1))
+            Log("finish card: Quick Play entrance shortened from frame %.0f", current.num);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Leave the movie's original entrance to finish.
+    }
 }
 
 static void __fastcall Hook_RaceEndUpdate(BYTE* card, void*, float delta)
 {
-    const BYTE* race = *(const BYTE**)(card + 0x38C);
-    if (card[0x394] || !race || race[0x9B2] || *(const int*)(race + 0x9C) != 1) {
+    const BYTE* race = *(const BYTE**)(card + kCardRaceSetup);
+    const int type = race ? *(const int*)race : -1;
+    if (card[kCardPromptShown] || !race || race[kSetupDemo] || *(const int*)(race + kSetupViewports) != 1 ||
+        type == kOnlineRace || type == kOnlineChampionship || OnlineSession()) {
         s_raceEndUpdate(card, delta);
         return;
     }
 
-    int state = *(const int*)(card + 0x58);
-    if (state == 1) { // transition in
-        float& elapsed = *(float*)(card + 0x390);
-        constexpr float kQuickPlayEntrance = 3.0f;
-        bool reachedShortEntrance = elapsed < kQuickPlayEntrance && elapsed + delta >= kQuickPlayEntrance;
+    int state = *(const int*)(card + kCardState);
+    if (state == kEntering) {
+        float& elapsed = *(float*)(card + kCardPromptTime);
         elapsed += delta;
-        if (card[0x7FC] && reachedShortEntrance) ShortenQuickPlayFinish(card);
+        // A hitch can leave the movie behind the timer. Try again as it advances.
+        if (card[kCardOutsideSeason] && elapsed >= kQuickPlayEntrance) ShortenQuickPlayFinish(card);
         return;
     }
-    if (state == 2) s_raceEndUpdate(card, delta);
+    if (state == kActive) s_raceEndUpdate(card, delta);
 }
 
 static void InstallRaceEndTiming()
 {
-    if (!g_cfg.raceEndTiming || CurrentBuild() != BUILD_STEAM) return;
+    if (!g_cfg.raceEndTiming) return;
+    if (CurrentBuild() != BUILD_STEAM) {
+        Log("finish card: Steam build only (%s)", BuildName());
+        return;
+    }
     void** slot = (void**)0x00C208EC;
-    if (*slot != (void*)0x008088C0 ||
-        !BytesMatch(*slot, "80B994030000007565F30F10442404") ||
-        !BytesMatch((void*)0x00808940, "578BF980BF94030000000F84B1000000837F5802")) {
-        Log("finish card: expected update or input handler missing");
+    if (!BytesMatch((void*)0x00C208D8, "5882C900") ||  // cRaceEnd RTTI
+        !BytesMatch(slot, "C0888000") ||
+        !BytesMatch((void*)0x00C2091C, "40898000") ||
+        !BytesMatch((void*)0x008088C0, "80B994030000007565F30F10442404F30F588190030000F30F1181900300000F2F0580FAD300") ||
+        !BytesMatch((void*)0x00808940, "578BF980BF94030000000F84B1000000837F58020F85A70000008B878C0300005333DB39989C000000") ||
+        !BytesMatch((void*)0x00808679, "385D08C6442412010F94C03AC38886FC070000") ||
+        !BytesMatch((void*)0x00C41D24, "70A99800") ||  // GFxMovieRoot::GetVariable
+        !BytesMatch((void*)0x00C41D3C, "E0D29800")) {  // GFxMovieRoot::Invoke
+        Log("finish card: expected class or handlers missing");
+        return;
+    }
+    // A replacement movie can move its callback while keeping the same name and frame count.
+    if (!ResidentEntryMatches("UI/InGame/RaceEnd.gfx", 27516, 0x46B24DB4)) {
+        Log("finish card: stock RaceEnd.gfx not found, using game timing");
         return;
     }
     if (SwapSlot(slot, (void*)Hook_RaceEndUpdate, (void**)&s_raceEndUpdate))
@@ -1128,8 +1161,8 @@ void ApplyGamePatches()
     if (mask & PATCH_FLARES) PatchBloomAndFlares();
     if (mask & PATCH_CAMERA) PatchCamera();
     if (mask & PATCH_CAMERA) PatchDepthOfField();
+    if (mask & PATCH_RACEEND) InstallRaceEndTiming();
     if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
     CheckOpponentEngineBanks();
-    InstallRaceEndTiming();
     if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
 }

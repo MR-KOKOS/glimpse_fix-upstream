@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <dinput.h>
 #include <xinput.h>
+#include <stdint.h>
 
 enum GlyphStyle { GLYPHS_AUTO_XBOX, GLYPHS_AUTO_PS, GLYPHS_KEYBOARD };
 
@@ -108,7 +109,7 @@ enum PatchBits {
     /* 0x100: was RenderScale, removed */ PATCH_PADNAMES = 0x200, PATCH_LOD = 0x400, PATCH_D3D = 0x800,
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
-    PATCH_ONLINE = 0x400000,
+    PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -272,7 +273,7 @@ enum { GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
 
 typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* result, const GFxValue* args, unsigned count);
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
-bool ReadMovieName(void* movie, char* out, size_t size);
+bool ReadMovieName(void* movie, char* out, size_t size);  // Steam GFxMovieDefImpl
 bool SwapSlot(void** slot, void* hook, void** orig);
 void ApplyGamePatches();
 
@@ -314,6 +315,7 @@ void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize
 // the converter's DLC cars the merged overlay brings (dlccars.cpp): their count, the IDs comma separated into ids
 int DlcCarsInOverlay(char* ids, size_t idsSize);
 bool DlcOverlayHas(const char* path);  // the merged resident.ark is in use and has this path (dlcfs.cpp)
+bool ResidentEntryMatches(const char* path, size_t size, uint32_t crc);
 void DlcInstallModes();    // [DLC] Modes: right after ApplyGamePatches (dlcmode.cpp)
 struct IDirect3DSurface9;
 // dlcpickups.cpp - [DLC] Pickups=1: Deadline's green pickup boxes (stop the countdown)
