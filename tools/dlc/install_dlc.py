@@ -1,7 +1,7 @@
 # glimpse_fix: install the converted DLC (made by build_all.py) into the game folder, or take it out again.
 #
-#   py -3 -I install_dlc.py --game <Split/Second folder> [--staging <dir>] [--apply] [--move-others] [--status <file>]
-#   py -3 -I install_dlc.py --game <Split/Second folder> --uninstall [--apply] [--status <file>]
+#   py -3 -I install_dlc.py [--game <Split/Second folder>] [--staging <dir>] [--apply] [--move-others] [--status <file>]
+#   py -3 -I install_dlc.py [--game <Split/Second folder>] --uninstall [--apply] [--status <file>]
 #
 # Without --apply nothing is changed: it only prints what it would do (state WARN when other archives lie in
 # glimpse_dlc or the last install was interrupted). With --apply:
@@ -21,6 +21,9 @@
 # --uninstall removes the files it copied (with the content it copied), leaves the adopted ones, moves the files it
 # moved aside back where their name is free, and removes the list. The game must not be running. The INI is not
 # changed: glimpse_config.exe offers the [DLC] keys the build needs after an install.
+# Without --game the game folder is the Steam install of Split/Second (build_all.find_game: Steam's folder from the
+# registry, its steamapps\libraryfolders.vdf, appmanifest_297860.acf in one of the libraries; read only), named in the
+# output.
 # Exit code 0 = done (or the dry run found nothing wrong), 1 = refused or failed, 2 = internal error.
 import argparse
 import datetime
@@ -478,7 +481,7 @@ def uninstall(a, status):
 
 def main(argv):
     ap = argparse.ArgumentParser(description='Install the converted DLC into the game folder (dry run without --apply).')
-    ap.add_argument('--game', required=True, help='the Split/Second folder')
+    ap.add_argument('--game', help='the Split/Second folder (default: the Steam install of Split/Second)')
     ap.add_argument('--staging', default=build_all.default_staging(), help='made by build_all.py (default %(default)s)')
     ap.add_argument('--work', default=build_all.default_work(), help='work folder of build_all.py (for its lock)')
     ap.add_argument('--saves', help='the save folder (default Documents\\Disney Interactive Studios\\Split Second)')

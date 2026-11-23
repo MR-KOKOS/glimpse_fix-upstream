@@ -1,7 +1,7 @@
 # glimpse_fix: build the release zip.
 #
 #   py -3 -I tools\make_release.py [--readme <README.txt>] [--version <x.y.z>] [--out <dir>] [--no-build] [--force]
-#       [--allow-local-paths]
+#       [--allow-local-paths] [--dlc-tools]
 #
 # 1. runs build.bat (--no-build: takes build\ as it is)
 # 2. puts together <out>\v<version digits>\ (default <repo>\dist) and zips it to <out>\glimpse_fix-v<version>.zip:
@@ -26,7 +26,11 @@
 # The converter set: starting from build_all.py and install_dlc.py, every "import x" / "from x import" anywhere in a
 # file (also inside functions) that names a module of tools\dlc, and every string 'name.py' that names one (scripts
 # started with subprocess), recursively. Module names are unique below tools\dlc (checked).
-# Nothing is uploaded or published; the zip is only written.
+# 4. --dlc-tools: also the DLC tools bundle (tools\make_dlc_tools.py: the embeddable Python with numpy, vgmstream-cli,
+#    an LGPL ffmpeg; downloaded from their official sources and checked) as a zip of its own,
+#    <out>\glimpse_fix-dlc-tools-<version>.zip (+ .sha256), to attach to the same GitHub release. It is never put into
+#    glimpse_fix-v<version>.zip (checked); setup_deps.bat -Install and the settings program fetch it from the release.
+# Nothing is uploaded or published; the zips are only written.
 import argparse
 import ast
 import hashlib
@@ -206,6 +210,8 @@ def main(argv):
     ap.add_argument('--out', default=os.path.join(REPO, 'dist'), help='where the folder and the zip go (default %(default)s)')
     ap.add_argument('--no-build', action='store_true', help='do not run build.bat, take build\\ as it is')
     ap.add_argument('--force', action='store_true', help='replace an existing release folder and zip of this version')
+    ap.add_argument('--dlc-tools', action='store_true',
+                    help='also build the DLC tools bundle (tools\\make_dlc_tools.py), a zip of its own next to the release zip')
     ap.add_argument('--allow-local-paths', action='store_true',
                     help='test builds: paths of this PC in shipped scripts are only listed, not an error')
     a = ap.parse_args(argv)
@@ -327,6 +333,13 @@ def main(argv):
         for n in sorted(fns):
             names.append(os.path.relpath(os.path.join(dp, n), folder).replace(os.sep, '/'))
     names.sort(key=lambda n: (n.count('/'), n.lower()))
+    # the DLC tools bundle is a zip of its own: none of its files may be in the release zip (checked before it is written)
+    bundle_like = [n for n in names if n.split('/')[0] in ('python', 'vgmstream', 'ffmpeg') or
+                   os.path.basename(n).startswith(('glimpse_dlc_tools', 'THIRD_PARTY_dlc_tools')) or
+                   os.path.basename(n).lower() in ('python.exe', 'pythonw.exe', 'ffmpeg.exe', 'vgmstream-cli.exe') or
+                   re.match(r'^python3\d*\.(dll|zip|_pth)$', os.path.basename(n).lower())]
+    if bundle_like:
+        raise Fail('files of the DLC tools bundle in the release zip: %s' % ', '.join(bundle_like))
     with zipfile.ZipFile(zip_fn + '.part', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for n in names:
             z.write(os.path.join(folder, *n.split('/')), n)
@@ -334,6 +347,17 @@ def main(argv):
     print('== %s: %d files, %d bytes' % (zip_fn, len(names), os.path.getsize(zip_fn)))
     for n in names:
         print('   %s' % n)
+    if a.dlc_tools:
+        print('== the DLC tools bundle (a zip of its own, not part of %s)' % os.path.basename(zip_fn))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('glimpse_make_dlc_tools',
+                                                      os.path.join(REPO, 'tools', 'make_dlc_tools.py'))
+        mdt = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mdt)
+        try:
+            mdt.main(['--version', version, '--out', out] + (['--force'] if a.force else []))
+        except mdt.Fail as ex:
+            raise Fail('DLC tools bundle: %s' % ex)
     return 0
 
 

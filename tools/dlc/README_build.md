@@ -11,27 +11,35 @@ packages and stay on the user's PC. Converted files and test output are kept out
 
 | what | why |
 |---|---|
-| Python 3.8 or newer with the py launcher (python.org) | every converter is a Python script; the settings program starts `py -3 -I -X utf8` |
-| numpy (`py -3 -m pip install numpy`) | only for the track (the Xenos shader translation, `../xenos`). If numpy is only in the user site-packages, which `-I` hides, the steps run with `-E` instead. Without numpy the track is left out (state `WARN`) |
-| `setup_deps.bat` (`setup_deps.ps1`) | checks Python, numpy, vgmstream-cli, ffmpeg and D3DCompiler_41; `-Install` installs what is missing in its current version (Python with winget, numpy with pip for the user, vgmstream-cli from its GitHub releases and ffmpeg from the gyan.dev release builds portable into `%LOCALAPPDATA%\glimpse_fix\tools\vgmstream` / `...\ffmpeg`, the DirectX End-User Runtime with winget or Microsoft's signed web installer); `-Update` also updates what is there. Changes nothing without `-Install` / `-Update` |
-| `vgmstream-cli.exe` and `ffmpeg.exe` | Quarry's sound banks are XMA on the Xbox (`audio/fsbconv.py`). Looked for in `PATH`, then `glimpse_tools\bin` (next to this folder in a release) and `%LOCALAPPDATA%\glimpse_fix\tools` (also their subfolders `vgmstream`, `ffmpeg`, `bin`), or given with `--vgmstream` / `--ffmpeg`. Without them the track is left out (`WARN`) |
+| the DLC tools bundle (`glimpse_fix-dlc-tools-<version>.zip`, a release asset of its own; made by `tools/make_dlc_tools.py`) | Python, numpy, vgmstream-cli and ffmpeg in one, unpacked into `%LOCALAPPDATA%\glimpse_fix\tools` (see *The DLC tools bundle* below). When its `glimpse_dlc_tools.txt` is there, `build_all.py` restarts itself in `tools\python\python.exe -I -X utf8` (`--no-bundle-python` or `GLIMPSE_NO_BUNDLE_PYTHON`: not) and takes `tools\vgmstream\vgmstream-cli.exe` and `tools\ffmpeg\ffmpeg.exe` before any in `PATH`; every converter it starts runs in that same Python (`sys.executable`) |
+| or: Python 3.8 or newer with the py launcher (python.org) | every converter is a Python script; started as `py -3 -I -X utf8` |
+| or: numpy (`py -3 -m pip install numpy`) | only for the track (the Xenos shader translation, `../xenos`). If numpy is only in the user site-packages, which `-I` hides, the steps run with `-E` instead. Without numpy the track is left out (state `WARN`) |
+| `setup_deps.bat` (`setup_deps.ps1`) | checks the bundle (its manifest), Python, numpy, vgmstream-cli, ffmpeg and D3DCompiler_41; `-Install` fetches the bundle of this release (`glimpse_fix-dlc-tools-<version>.zip` of the GitHub release `v<version>`, the version from `glimpse_tools_files.tsv`; a release without one: the newest release that has one), checks its SHA-256 against GitHub's digest and every unpacked file against its manifest, and unpacks it; without a bundle (or with `-NoBundle`) it installs what is missing on its own as before (Python with winget, numpy with pip for the user, vgmstream-cli from its GitHub releases and ffmpeg from the gyan.dev release builds portable into `%LOCALAPPDATA%\glimpse_fix\tools\vgmstream` / `...\ffmpeg`); the DirectX End-User Runtime with winget or Microsoft's signed web installer either way. `-Bundle`: only the bundle; `-BundleZip <zip>`: a bundle downloaded by hand; `-Update` also replaces a bundle of another version and updates what is there. `-DirectXOnly`: only the DirectX End-User Runtime when `D3DCompiler_41.dll` is missing; no bundle, Python, numpy, vgmstream-cli or ffmpeg is downloaded, installed or replaced (the settings program's *Set up DLC* uses it after asking). Changes nothing without `-Install` / `-Update` / `-DirectXOnly`. At the end it shows the game folder found through Steam (`build_all.py --find-game`) |
+| `vgmstream-cli.exe` and `ffmpeg.exe` | Quarry's sound banks are XMA on the Xbox (`audio/fsbconv.py`: vgmstream-cli decodes each sample to WAV, ffmpeg encodes MPEG Layer II with its native `mp2` encoder, `-af apad` for looped samples, `-ar` where Layer II lacks the rate). Looked for in the bundle, then `PATH`, then `glimpse_tools\bin` (next to this folder in a release) and `%LOCALAPPDATA%\glimpse_fix\tools` (also their subfolders `vgmstream`, `ffmpeg`, `bin`), or given with `--vgmstream` / `--ffmpeg`. Without them the track is left out (`WARN`) |
 | `D3DCompiler_41.dll` in System32 (DirectX End-User Runtime, June 2010) | the compiler the PC shaders were made with (`../xenos/d3dcomp.py`); it must load in this Python. `fxc.exe` (d3dcompiler_47) makes wrong code for some ps_3_0 shaders, so it is never used instead: without the DLL the track is left out (`WARN`) |
-| the PC game folder | read only: `data\resident.ark`, the loose audio banks, and `SplitSecond.exe` with the PC archives for the Havok class layouts (`work\hkref.json`, made in step 1 with `havok/convhkx.py learn`, about 15 s, redone only when the exe or an archive changes; `--hkref <file>` uses a given one instead). It is game data and never shipped |
+| the PC game folder (`--game`; without it the Steam install: Steam's folder from the registry, `HKCU\Software\Valve\Steam` `SteamPath` or `HKLM\SOFTWARE\WOW6432Node\Valve\Steam` `InstallPath`, its `steamapps\libraryfolders.vdf`, `appmanifest_297860.acf` in one of the libraries, `steamapps\common\<installdir>` with `SplitSecond.exe`; named in the output; `--find-game` only prints it) | read only: `data\resident.ark`, the loose audio banks, and `SplitSecond.exe` with the PC archives for the Havok class layouts (`work\hkref.json`, made in step 1 with `havok/convhkx.py learn`, about 15 s, redone only when the exe or an archive changes; `--hkref <file>` uses a given one instead). It is game data and never shipped |
 | about 4 GB free for the work folder | extracted packages (up to 870 MB), the merged car source, intermediate archives, the staging copy (about 600 MB) |
 
 ## build_all.py
 
 ```
-py -3 -I build_all.py --dump <DLC folder> --game <Split/Second folder> [--staging <dir>] [--work <dir>]
+py -3 -I build_all.py --dump <DLC folder> [--game <Split/Second folder>] [--staging <dir>] [--work <dir>]
     [--no-mode] [--no-track] [--force] [--vgmstream <exe>] [--ffmpeg <exe>] [--status <file>] [--hkref <file>]
 py -3 -I build_all.py --check [--staging <dir>] [--game <Split/Second folder>]
 py -3 -I build_all.py --preflight [--game <Split/Second folder>] [--dump <DLC folder>] [--work <dir>] [--status <file>]
+py -3 -I build_all.py --find-game
 ```
 
-`--preflight` converts nothing: it checks Python, that this folder is complete (in a release: every file of
+`py -3` or the bundle's `%LOCALAPPDATA%\glimpse_fix\tools\python\python.exe` (started with `py -3` while the
+bundle is there, it runs itself there; `--no-bundle-python` stays in the Python it was started with). Without
+`--game` the game folder is the Steam install of Split/Second (also for `--check`'s comparison); `--find-game`
+prints `game<TAB><folder>` and `how<TAB><where it was found>` (exit code 0), or `none<TAB><why>` (exit code 1).
+
+`--preflight` converts nothing: it checks Python, the DLC tools bundle (its version, and when it is in use every file against its manifest),
+that this folder is complete (in a release: every file of
 `glimpse_tools_files.tsv`, written by `tools/make_release.py`, with its size and SHA-256; a build checks that too),
 that every converter build_all.py runs loads (`ENTRY_SCRIPTS`; the track's only when the track can be built), what the
-track needs, and with `--game` the game folder and its Havok class layouts (made in the work folder as a build would),
+track needs, and with `--game` (or the Steam install) the game folder and its Havok class layouts (made in the work folder as a build would),
 with `--dump` the packages found. `RESULT: OK | WARN | FAILED`, exit code 0 / 0 / 1, the same status file as a build.
 
 `--tu4-texts <json>` (or `GLIMPSE_TU4_TEXTS`), optional: a TU4 text table (JSON) made outside glimpse_fix. The
@@ -123,9 +131,11 @@ error (traceback).
 ## install_dlc.py
 
 ```
-py -3 -I install_dlc.py --game <Split/Second folder> [--staging <dir>] [--saves <dir>] [--apply] [--move-others]
-py -3 -I install_dlc.py --game <Split/Second folder> --uninstall [--apply]
+py -3 -I install_dlc.py [--game <Split/Second folder>] [--staging <dir>] [--saves <dir>] [--apply] [--move-others]
+py -3 -I install_dlc.py [--game <Split/Second folder>] --uninstall [--apply]
 ```
+
+Without `--game`: the Steam install of Split/Second, as `build_all.py` finds it (`find_game`).
 
 Without `--apply` it checks the staging folder and prints the plan, per staged file: *copy*; *keep (identical)*;
 *replace (installed before)*, only for a file it copied itself that still has the SHA-256 it was copied with; otherwise
@@ -153,6 +163,49 @@ the adopted and changed ones, moves every file it moved aside back where its nam
 `glimpse_dlc_replaced_<date>` folder), after the same save backup, and removes the list. The INI is left to the
 settings program, which offers the manifest's `ini` keys after an install and turning off *Converted DLC* after an
 uninstall.
+
+## The DLC tools bundle
+
+`tools/make_dlc_tools.py` (`py -3 -I tools\make_dlc_tools.py [--version <x.y.z>] [--out <dir>] [--force]`, also
+`make_release.py --dlc-tools`) builds `dist\glimpse_fix-dlc-tools-<version>.zip` (+ `.sha256`) from the official
+downloads, each checked against the SHA-256 its source publishes (python.org's release file API, PyPI's JSON API,
+the `digest` of the GitHub release asset), kept in `dist\dlc_tools_cache`. The versions are the newest at build time
+(or given: `--python`, `--numpy`, `--vgmstream`, `--ffmpeg-branch`) and recorded. It is attached by hand to the
+GitHub release `v<version>`, next to `glimpse_fix-v<version>.zip` and never inside it. The zip unpacks as it is into
+`%LOCALAPPDATA%\glimpse_fix\tools\`:
+
+| path | what |
+|---|---|
+| `python\` | the Windows embeddable Python (64 bit) of python.org, the newest stable 3.x that numpy has a wheel for; numpy's official `cp3XX-win_amd64` wheel unpacked into `python\Lib\site-packages` (every file checked against the wheel's RECORD) and precompiled with that Python (`unchecked-hash` .pyc). The only change: `python3XX._pth` lists `Lib\site-packages`; `import site` stays off, so no user or system site-packages and no current folder is ever on `sys.path` |
+| `vgmstream\` | `vgmstream-win64.zip` of the newest vgmstream release, as it is (`COPYING`: its license) |
+| `ffmpeg\` | `ffmpeg.exe` and `LICENSE.txt` of the newest static `win64-lgpl` build of FFmpeg-Builds (BtbN, now `FFmpeg-Builds/FFmpeg-Builds`) of the newest FFmpeg release branch, unmodified; `SOURCE.txt`: its version, the FFmpeg commit, the build scripts' commit (where the source is, for the LGPL) and its configuration |
+| `glimpse_dlc_tools.txt` | the version file (UTF-8, `key<TAB>value`): `bundle` (the glimpse_fix version), `format` (1), `built`, `python`, `numpy`, `vgmstream`, `ffmpeg`, and `exe<TAB><name><TAB><path>` |
+| `glimpse_dlc_tools_manifest.tsv` | `component <name> <version> <download URL> <SHA-256> <license>` and `file <path> <size> <SHA-256>` for every other file |
+| `THIRD_PARTY_dlc_tools.txt` | the licenses: Python PSF-2.0, numpy BSD-3-Clause (with what its wheel bundles), vgmstream ISC style (with its decoder DLLs), FFmpeg LGPL-2.1+, and where each one's source is |
+
+Before it zips, `make_dlc_tools.py` tests the folder: every module the shipped converters import (the trace of
+`make_release.py`) loads in the bundled Python with `-I`, and nothing outside the bundle is on its `sys.path`; numpy
+computes; `vgmstream-cli -V` runs; ffmpeg is an LGPL build (no `--enable-gpl` / `--enable-nonfree`, `-L` says LGPL)
+with the native `mp2` encoder and the `apad` and `aresample` filters, and encodes a test tone that `fsbconv.py`'s
+frame parser reads.
+
+Not in the bundle: `D3DCompiler_41.dll` (Microsoft's DirectX runtime may only be passed on through its own
+installer; `setup_deps.bat -Install` runs it, `setup_deps.bat -DirectXOnly` only that, which the settings program's
+*Set up DLC* uses).
+
+Release steps for the bundle (by hand; nothing is uploaded by the scripts):
+
+1. `py -3 -I tools\make_release.py --dlc-tools` (or `tools\make_dlc_tools.py --version <x.y.z>`), then check the
+   printed versions and `THIRD_PARTY_dlc_tools.txt` / `ffmpeg\SOURCE.txt` in `dist\dlc_tools_<version>\`.
+2. Attach `glimpse_fix-dlc-tools-<version>.zip` and its `.sha256` to the GitHub release `v<version>` (the settings
+   program fetches exactly `releases/download/v<version>/glimpse_fix-dlc-tools-<version>.zip` and its `.sha256`).
+3. LGPL source: attach the complete corresponding source of the shipped LGPL binaries to the same release rather than
+   relying on the links alone: the FFmpeg source of the commit `ffmpeg\SOURCE.txt` names (for example
+   `https://github.com/FFmpeg/FFmpeg/archive/<commit>.tar.gz`, saved as `ffmpeg-<version>-source.tar.gz`) together
+   with the FFmpeg-Builds scripts of the commit named there (they pin every library linked into the static
+   `ffmpeg.exe`), and likewise the sources of the LGPL libraries in `vgmstream\` (its FFmpeg and mpg123 DLLs; the
+   vgmstream release names their versions). Then name those archives in the release notes, so that the source is
+   offered from the same place as the binaries for as long as the release exists.
 
 ## Tests (2026-11-20, the user's dump, scratch work and staging folders, the game folder only read)
 

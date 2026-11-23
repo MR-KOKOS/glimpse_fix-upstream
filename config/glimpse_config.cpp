@@ -14,18 +14,31 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <shlobj.h>
+#include <shldisp.h>
+#include <knownfolders.h>
+#include <winhttp.h>
+#include <bcrypt.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <algorithm>
+#include <functional>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "ole32.lib")  // the folder picker (IFileOpenDialog)
+#pragma comment(lib, "ole32.lib")     // the folder picker (IFileOpenDialog), the shell's zip folders
+#pragma comment(lib, "oleaut32.lib")  // ... their VARIANTs
+#pragma comment(lib, "uuid.lib")      // the known folders (Desktop, Downloads), the shell's ids
+#pragma comment(lib, "advapi32.lib")  // Steam's folder in the registry
+#pragma comment(lib, "version.lib")   // this program's version (the DLC tools of the same release)
+#pragma comment(lib, "winhttp.lib")   // the DLC tools download
+#pragma comment(lib, "bcrypt.lib")    // ... its SHA-256
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 // ---------------------------------------------------------------- options
@@ -147,15 +160,15 @@ static Option kOptions[] = {
     { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
     { "Debug", "DumpWatchPS", TEXT, "  Frame dump: watched pixel shaders", "Development: pixel shader hashes as the F9 frame dump's log shows them, separated by commas (tools\\dlc\\shaders\\pshash.py lists those of the game's shaders). For the first 4 draws with one of them, the dump saves every render target right before and after the draw, with the draw's textures and shader constants in the log. Empty = none.", "", ",", 0, 271, 0, 0 },
     // DLC: your own Xbox 360 DLC, converted on this PC (the buttons below the options, see DlcStart)
-    { "DLC", "DumpFolder", PATH, "Xbox DLC folder", "Your own dump of the Split/Second DLC from an Xbox 360: the folder 425607E7 (or its subfolder 00000002) with the packages as the console keeps them. It is only read. Nothing is downloaded: without your own DLC there is nothing to convert.", "" },
+    { "DLC", "DumpFolder", PATH, "Xbox DLC folder", "Your own Split/Second DLC from an Xbox 360 or Xenia: the folder 425607E7, its subfolder 00000002, or a folder with the package files. It is only read. Set up DLC looks for it by itself (Xenia, Desktop, Downloads, Xbox USB drives); \"...\" lists what it finds. No DLC is downloaded: without your own DLC there is nothing to convert.", "" },
     { "DLC", "Overlays", BOOL_OPT, "Converted DLC (experimental)", "EXPERIMENTAL: the converted archives in glimpse_dlc in the game folder are laid over the game's data: the DLC cars (11) and the Deadline mode, and the tracks below. Off = the game as it is, whatever glimpse_dlc holds.", "0" },
     { "DLC", "Cars", BOOL_OPT, "DLC cars in the car select without Unlock all", "The converted DLC cars in the car select of quick play and free play, also without \"Everything unlocked\". Not in the career unless the option below is on, not online.", "1" },
     { "DLC", "CarsCareer", BOOL_OPT, "  DLC cars also in the career car select (experimental)", "EXPERIMENTAL: the DLC cars can also be picked for career events started from the episode screen that have no fixed car. The in-game car select between events still offers only the season's cars.", "0" },
     { "DLC", "Tracks", BOOL_OPT, "DLC tracks Quarry and Minepit Park (experimental)", "EXPERIMENTAL: the converted DLC tracks get their own track numbers so quick play can load them: Quarry, and Minepit Park (nem_quarry, the Survival track of Survival At The Rock). With Minepit Park also the DLC game mode Survival Race (two players, five laps among the trucks), which the game lists in split screen itself, not online. Needs the DLC overlays ([DLC] Overlays=1), the track overlay glimpse_dlc\\track_*.ark and the converted track files in glimpse_dlc\\quarry\\data and glimpse_dlc\\nem_quarry\\data (or below data). Off by itself with Online over Steam unless the option below is on; not for the game's own LAN mode with players who lack the track.", "0" },
-    { "DLC", "Music", BOOL_OPT, "  DLC race music on Quarry", "In races on Quarry the DLC package's own race music plays, as on the Xbox 360; Minepit Park keeps the game's music. Off = the game's own race music on Quarry too. Needs the DLC overlays and the DLC tracks (both above) built with the track's music (\"Build DLC\" does that), and Virtual pads 1 or more (page Controller).", "1" },
+    { "DLC", "Music", BOOL_OPT, "  DLC race music on Quarry", "In races on Quarry the DLC package's own race music plays, as on the Xbox 360; Minepit Park keeps the game's music. Off = the game's own race music on Quarry too. Needs the DLC overlays and the DLC tracks (both above) built with the track's music (\"Set up DLC\" does that), and Virtual pads 1 or more (page Controller).", "1" },
     { "DLC", "TracksOnline", BOOL_OPT, "DLC track also online", "The DLC tracks also with Online over Steam. The game sends only the track's number, so you then see and join only the LAN games of players with the same DLC tracks (same track pack and fix version), and they yours; the in-game banner says when a game is not shown. Players without DLC tracks play with each other as before.", "0" },
     // page "Deadline mode" (PageOf): the DLC game mode
-    { "DLC", "Modes", BOOL_OPT, "Deadline game mode (experimental)", "EXPERIMENTAL: opens the entry of the DLC game mode Deadline (a countdown time trial) in quick play; nothing else is unlocked. Single player. Also shows Survival Race's own quick play movie (the mode itself comes with the DLC tracks). Needs the converted DLC (page DLC), built with the mode (\"Build DLC\" does that).", "0" },
+    { "DLC", "Modes", BOOL_OPT, "Deadline game mode (experimental)", "EXPERIMENTAL: opens the entry of the DLC game mode Deadline (a countdown time trial) in quick play; nothing else is unlocked. Single player. Also shows Survival Race's own quick play movie (the mode itself comes with the DLC tracks). Needs the converted DLC (page DLC), built with the mode (\"Set up DLC\" does that).", "0" },
     { "DLC", "Pickups", BOOL_OPT, "  Deadline pickups (experimental)", "EXPERIMENTAL: the time pickups of the game mode Deadline: the Xbox 360's hexagonal tokens (their model comes from your own DLC; plain cubes if it is missing), and the Xbox's HUD: the timer turns cyan while the clock stands, \"+0.5s\" / \"+2.0s\" at the top centre and the Xbox's pickup sounds when you collect one. The texts are glimpse_fix's own wording: the Xbox's official ones are in its title update, not in the DLC packages, and need a TU4 text table that the release cannot produce (made with a local development tool that is not part of glimpse_fix).", "0" },
     { "DLC", "PickupVignette", BOOL_OPT, "  Frozen Time look while the clock is stopped", "While a pickup holds the Deadline clock, the screen gets the Xbox's Frozen Time look (cyan edges, the colour grade off). Off = no such look; the clock stops all the same.", "1" },
     { "DLC", "DeadlineBonus", RANGE, "  Deadline extra start time (without pickups)", "The converted Deadline mode starts with the Xbox times, which count on the pickups for more time. Without pickups these seconds are added to the start time so the races can be finished. With the pickups on, the Xbox rules apply and nothing is added.", "50", 0, 0, 300, 5, 0 },
@@ -169,7 +182,9 @@ static const int kPageCount = sizeof(kPages) / sizeof(kPages[0]);
 static const int kDlcPage = 11;  // its options, then the build and install buttons (CreateControls)
 // [DLC] keys of the DLC game modes, on a page of their own (PageOf); a new mode's keys go here too
 static const char* const kDlcModeKeys[] = { "Modes", "Pickups", "PickupVignette", "DeadlineBonus" };
-static const int kDlcExtraRows = 3;  // the buttons and the two-line state below them, in rows of kRowH
+// the line with the packages found below the folder, the buttons and the three-line state below them, in rows of
+// kRowH (the presets page stays the tallest, so the window keeps its size)
+static const int kDlcExtraRows = 5;
 
 // options the presets do not touch
 static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online") || !strcmp(o.section, "DLC"); }
@@ -335,14 +350,15 @@ static HBRUSH s_backBrush, s_sideBrush, s_fieldBrush;
 static HFONT s_font, s_fontBold, s_fontTitle, s_fontBrand, s_fontSmall;
 
 enum Role { R_NONE, R_LABEL, R_VALUE, R_DIM, R_TITLE, R_BRAND, R_SIDEDIM, R_NAV, R_PRESET, R_ACTION, R_TOGGLE, R_SELECT,
-            R_LAUNCH };
+            R_LAUNCH, R_PRIMARY };
 
 static bool s_infoWarn;  // the help text shown is a warning
 static const int kPresetCount = 5;
 static HWND s_wnd, s_status, s_info, s_title, s_subtitle, s_nav[kPageCount], s_preset[kPresetCount],
     s_presetText[kPresetCount], s_undo, s_undoText, s_launch;
-// the DLC page: the folder's "..." button, Build DLC / Install / Open log, and the state line below them
-static HWND s_dlcBrowse, s_dlcBuild, s_dlcInstall, s_dlcUninstall, s_dlcLog, s_dlcState;
+// the DLC page: the folder's "..." button and the packages found in it, Set up DLC, the single steps Build / Install /
+// Uninstall, Open log, and the state lines below them
+static HWND s_dlcBrowse, s_dlcFound, s_dlcSetup, s_dlcBuild, s_dlcInstall, s_dlcUninstall, s_dlcLog, s_dlcState;
 static std::string s_dlcText;  // what the state line shows
 static bool s_dlcWarn;         // ... in red: the last build or install failed
 static int s_dpi = 96;
@@ -653,35 +669,47 @@ static void Changed(Option& o)
 
 // ---------------------------------------------------------------- DLC: build and install
 //
-// "Build DLC" runs tools\dlc\build_all.py on the folder of [DLC] DumpFolder, "Install" and "Uninstall" run
-// tools\dlc\install_dlc.py (first without --apply, to show what it would do, then with it, for the same game folder).
-// They run with Python through the py launcher in a
+// "Set up DLC" does it all in one go (DlcSetup): it finds the game folder (this INI's, else the one Steam has) and the
+// Xbox DLC (FindDlcPlaces), gets the DLC tools if they are missing (after asking: Python with numpy, vgmstream-cli and
+// ffmpeg, one download of the same release, DownloadTools), offers the DirectX runtime the DLC tracks need, builds,
+// shows the install plan in plain words, installs after one Yes and turns on the [DLC] keys the build needs.
+// The single steps: "Build" runs tools\dlc\build_all.py on the folder of [DLC] DumpFolder, "Install" and "Uninstall"
+// run tools\dlc\install_dlc.py (first without --apply, to show what it would do, then with it, for the same game
+// folder). They run with Python (the DLC tools' own, else through the py launcher) in a
 // console without a window (CREATE_NO_WINDOW), inside a job object that ends them together with this program. Their
 // output goes to build.log / install.log in %LOCALAPPDATA%\glimpse_fix\dlc_work, their state to a status file next to
 // it (lines "state", "step", "text", "detail", see build_all.py), read twice a second. The converted files stay on
 // this PC: build_all.py writes them to %LOCALAPPDATA%\glimpse_fix\dlc_staging, install_dlc.py copies them into
 // glimpse_dlc in the game folder after a copy of the saves.
 
-// PLAN / UPLAN: the dry runs of the install and the uninstall
-enum DlcTask { DLC_NONE, DLC_BUILD, DLC_PLAN, DLC_INSTALL, DLC_UPLAN, DLC_UNINSTALL };
+// PLAN / UPLAN: the dry runs of the install and the uninstall; DOWNLOAD: the DLC tools (a thread of this program);
+// DEPS: setup_deps.bat for the DirectX runtime, in a console of its own
+enum DlcTask { DLC_NONE, DLC_BUILD, DLC_PLAN, DLC_INSTALL, DLC_UPLAN, DLC_UNINSTALL, DLC_DOWNLOAD, DLC_DEPS };
 static DlcTask s_task;
-static HANDLE s_taskProc, s_taskJob;
+static HANDLE s_taskProc, s_taskJob;  // the process (DOWNLOAD: the thread)
 static DWORD s_taskStart;
 static bool s_taskStopped, s_taskRan;
 static std::string s_taskStatus, s_dlcLogPath;  // the running task's status file, the last task's log
 static std::string s_taskGame;  // the game folder of the dry run, which the --apply run after it uses as well
-static const UINT_PTR kDlcTimer = 1;
+static const UINT_PTR kDlcTimer = 1, kFoundTimer = 2;
 // where the tools are when they are not next to this program (asked once, kept in the INI; not shown as an option)
 static Option s_toolsOpt = { "DLC", "ToolsFolder", PATH, "", "", "" };
 static const char kDlcManifest[] = "glimpse_dlc_manifest.tsv", kDlcInstalled[] = "glimpse_dlc_installed.tsv";
 static const char kNoPython[] =
     "Python 3 was not found. The DLC is converted on this PC by the converters of glimpse_fix, which are Python "
     "scripts.\n\n"
-    "1. Install Python 3.8 or newer from python.org (keep \"py launcher\" ticked).\n"
-    "2. Then, in a command prompt: py -3 -m pip install numpy\n\n"
-    "The track Quarry also needs vgmstream-cli and ffmpeg (see the README, \"Your own Xbox DLC\").\n\n"
-    "Or run setup_deps.bat in the folder glimpse_tools\\dlc with -Install: it installs Python, numpy, vgmstream-cli, "
-    "ffmpeg and D3DCompiler_41 in their current versions.";
+    "Set up DLC offers to download the DLC tools of glimpse_fix for this (Python with numpy, vgmstream-cli and ffmpeg). "
+    "Or install Python 3.8 or newer from python.org yourself (keep \"py launcher\" ticked), then, in a command prompt: "
+    "py -3 -m pip install numpy\n\n"
+    "The DLC tracks also need vgmstream-cli and ffmpeg: setup_deps.bat -Install in the folder glimpse_tools\\dlc gets "
+    "them (see the README, \"Your own Xbox DLC\").";
+
+// "Set up DLC": the running task is one of its steps (DlcFinished goes on with the next one)
+static bool s_flow;
+static std::string s_flowDump, s_flowTools;  // the DLC folder (the packages' own) and the converters it uses
+static std::vector<std::string> s_flowNotes; // what the build left out and why, for the question and the summary
+static bool s_skipDirectX;  // "No" to the DirectX runtime: not asked again until the program is restarted
+static bool s_viaSteam;     // the INI is the one in the game folder Steam has (this program is not in the game folder)
 
 static bool DlcBusy() { return s_task != DLC_NONE; }
 
@@ -818,16 +846,22 @@ static void DlcSetText(const std::string& text, bool warn)
     InvalidateRect(s_dlcState, NULL, TRUE);
 }
 
+// "Set up DLC" may be stopped while it downloads, builds or checks the install (not while it installs)
+static bool FlowStoppable() { return s_flow && (s_task == DLC_DOWNLOAD || s_task == DLC_BUILD || s_task == DLC_PLAN); }
+
 static void DlcButtons()
 {
-    SetWindowTextA(s_dlcBuild, DlcBusy() && s_task == DLC_BUILD ? "Stop" : "Build DLC");
-    EnableWindow(s_dlcBuild, !DlcBusy() || s_task == DLC_BUILD);
+    SetWindowTextA(s_dlcSetup, FlowStoppable() ? "Stop" : "Set up DLC");
+    EnableWindow(s_dlcSetup, !DlcBusy() || FlowStoppable());
+    bool build = !s_flow && s_task == DLC_BUILD;
+    SetWindowTextA(s_dlcBuild, build ? "Stop" : "Build");
+    EnableWindow(s_dlcBuild, !DlcBusy() || build);
     EnableWindow(s_dlcInstall, !DlcBusy());
     EnableWindow(s_dlcUninstall, !DlcBusy());
-    for (HWND h : { s_dlcBuild, s_dlcInstall, s_dlcUninstall }) InvalidateRect(h, NULL, TRUE);
+    for (HWND h : { s_dlcSetup, s_dlcBuild, s_dlcInstall, s_dlcUninstall }) InvalidateRect(h, NULL, TRUE);
 }
 
-// what is built and installed, while nothing runs and nothing ran yet
+// what is built and installed, while nothing runs and nothing ran yet, and the game folder it goes to
 static void DlcRefresh()
 {
     if (DlcBusy() || s_taskRan) return;
@@ -837,23 +871,1083 @@ static void DlcRefresh()
     if (!staged.empty()) text = "Converted DLC ready to install (built " + TsvValue(staged, "built") + ").";
     if (!inst.empty()) {
         std::string when = TsvValue(inst, "installed");
-        text += (text.empty() ? "" : " ") + (when == "in progress" ? std::string("The last install was interrupted: run Install again.")
+        text += (text.empty() ? "" : " ") + (when == "in progress" ? std::string("The last install was interrupted: run Set up DLC again.")
                                                                     : "Installed " + when + ".");
     }
-    if (text.empty()) text = "Pick your Xbox DLC folder, then Build DLC. Install then copies the result into the game folder.";
+    if (text.empty()) text = "Set up DLC converts your own Xbox DLC on this PC and adds it to the game in one go. Build, Install "
+                             "and Uninstall are its single steps.";
+    std::string game = GameDir();
+    if (FileExists(game + "\\data\\resident.ark"))
+        text += "\nGame folder: " + game + (s_viaSteam ? " (found through Steam)" : "");
+    else
+        text += "\nThe settings file is not in the game folder; Set up DLC asks Steam where the game is (or Open INI...).";
     DlcSetText(text, false);
 }
 
-// py.exe in PATH (not the current folder), else where the python.org installer puts it
-static std::string FindPy()
+// <name> in PATH (not the current folder)
+static std::string InPath(const char* name)
 {
     std::vector<char> path(32768);
     DWORD n = GetEnvironmentVariableA("PATH", path.data(), (DWORD)path.size());
     char hit[MAX_PATH];
-    if (n && n < path.size() && SearchPathA(path.data(), "py.exe", NULL, MAX_PATH, hit, NULL)) return hit;
+    if (n && n < path.size() && SearchPathA(path.data(), name, NULL, MAX_PATH, hit, NULL)) return hit;
+    return "";
+}
+
+// py.exe in PATH, else where the python.org installer puts it
+static std::string FindPy()
+{
+    std::string hit = InPath("py.exe");
+    if (!hit.empty()) return hit;
     std::string more[] = { LocalAppData() + "\\Programs\\Python\\Launcher\\py.exe", EnvVar("SystemRoot") + "\\py.exe" };
     for (const std::string& p : more)
         if (FileExists(p)) return p;
+    return "";
+}
+
+static std::wstring Widen(const std::string& s)
+{
+    int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, NULL, 0);
+    std::vector<wchar_t> w(n > 0 ? n : 1, L'\0');
+    if (n > 0) MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, w.data(), n);
+    return w.data();
+}
+
+// a wide path in the ANSI code page this program works in; false if it has characters that code page lacks
+static bool Narrow(const wchar_t* w, std::string& out)
+{
+    BOOL lossy = FALSE;
+    int n = WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w, -1, NULL, 0, NULL, &lossy);
+    if (n <= 0 || lossy) return false;
+    std::vector<char> a(n);
+    WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, w, -1, a.data(), n, NULL, NULL);
+    out = a.data();
+    return true;
+}
+
+static std::string KnownFolder(REFKNOWNFOLDERID id)
+{
+    PWSTR w = NULL;
+    std::string out;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, NULL, &w)) && w) Narrow(w, out);
+    CoTaskMemFree(w);
+    return out;
+}
+
+static std::string Lower(std::string s)
+{
+    for (char& c : s) c = (char)tolower((unsigned char)c);
+    return s;
+}
+
+static bool SamePath(const std::string& a, const std::string& b) { return !_stricmp(NoTrailingSlash(a).c_str(), NoTrailingSlash(b).c_str()); }
+
+static std::string Megabytes(long long bytes)
+{
+    char t[32];
+    if (bytes >= (1LL << 30)) sprintf(t, "%.1f GB", bytes / 1073741824.0);
+    else sprintf(t, "%.1f MB", bytes / 1048576.0);
+    return t;
+}
+
+// "a", "a and b", "a, b and c"
+static std::string JoinAnd(const std::vector<std::string>& v)
+{
+    std::string out;
+    for (size_t i = 0; i < v.size(); i++) out += (i == 0 ? "" : i + 1 == v.size() ? " and " : ", ") + v[i];
+    return out;
+}
+
+// "a, b" from a manifest line; "-" or "" = none
+static std::vector<std::string> SplitList(const std::string& s)
+{
+    std::vector<std::string> out;
+    size_t p = 0;
+    while (p < s.size()) {
+        size_t c = s.find(',', p);
+        std::string item = Trim(s.substr(p, c == std::string::npos ? std::string::npos : c - p));
+        if (!item.empty() && item != "-") out.push_back(item);
+        if (c == std::string::npos) break;
+        p = c + 1;
+    }
+    return out;
+}
+
+// this program's version (VERSIONINFO, glimpse_config.rc), e.g. "2.3.0-beta.1"; the DLC tools of the same release fit it
+static std::string ProgramVersion()
+{
+    char exe[MAX_PATH];
+    GetModuleFileNameA(NULL, exe, MAX_PATH);
+    DWORD dummy = 0, size = GetFileVersionInfoSizeA(exe, &dummy);
+    if (!size) return "";
+    std::vector<char> buf(size);
+    char* v = NULL;
+    UINT len = 0;
+    if (!GetFileVersionInfoA(exe, 0, size, buf.data()) ||
+        !VerQueryValueA(buf.data(), "\\StringFileInfo\\040904b0\\ProductVersion", (void**)&v, &len) || !v || !len)
+        return "";
+    return Trim(std::string(v, strnlen(v, len)));
+}
+
+static bool IsWow64()
+{
+    typedef BOOL(WINAPI * IsWow64_t)(HANDLE, PBOOL);
+    IsWow64_t is = (IsWow64_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "IsWow64Process");
+    BOOL w = FALSE;
+    return is && is(GetCurrentProcess(), &w) && w;
+}
+
+// a program of Windows itself (tar.exe): the 64 bit one where there is one (this program is 32 bit)
+static std::string SystemExe(const char* name)
+{
+    std::string root = EnvVar("SystemRoot");
+    if (IsWow64() && FileExists(root + "\\Sysnative\\" + name)) return root + "\\Sysnative\\" + name;
+    return FileExists(root + "\\System32\\" + name) ? root + "\\System32\\" + name : "";
+}
+
+// D3DCompiler_41.dll of the DirectX End-User Runtime (June 2010), which the DLC tracks' shaders need (build_all.py
+// d3dcompiler_ok checks it again with the bitness of its Python)
+static bool D3DCompilerThere()
+{
+    std::string root = EnvVar("SystemRoot");
+    return (IsWow64() && FileExists(root + "\\Sysnative\\D3DCompiler_41.dll")) || FileExists(root + "\\System32\\D3DCompiler_41.dll");
+}
+
+// ---------------------------------------------------------------- DLC: the DLC tools (one download per release)
+//
+// The contract with the release (the same as tools\dlc\setup_deps.ps1 and build_all.py keep): everything here.
+// glimpse_fix-dlc-tools-<version>.zip, an asset of the GitHub release v<version>, holds python\ (an embeddable Python
+// with numpy), vgmstream\, ffmpeg\, the version file glimpse_dlc_tools.txt (UTF-8 "key<TAB>value": bundle = the
+// glimpse_fix version, format = 1, ...), glimpse_dlc_tools_manifest.tsv and THIRD_PARTY_dlc_tools.txt, without a top
+// folder; it is unpacked into %LOCALAPPDATA%\glimpse_fix\tools, where build_all.py finds it (and runs in its Python).
+// Next to the zip: <zip>.sha256, "<64 hex digits>  <file name>". The bundle counts when glimpse_dlc_tools.txt has
+// format 1 and python\python.exe is there. setup_deps.ps1 does the same download from PowerShell; this program does it
+// itself so that it can show the size before asking, the progress while it runs, and get the bundle without the
+// DirectX runtime (setup_deps -Install installs that as well, which the user is asked about separately here).
+static const char kToolsUrlFmt[] = "https://github.com/frankyfife/glimpse_fix/releases/download/v%s/glimpse_fix-dlc-tools-%s.zip";
+static const char kToolsHashExt[] = ".sha256";
+static const char kToolsPython[] = "python\\python.exe";          // below ToolsDir()
+static const char kToolsVersionFile[] = "glimpse_dlc_tools.txt";  // below ToolsDir()
+static const char* const kToolsItems[] = { "python", "vgmstream", "ffmpeg", "glimpse_dlc_tools.txt", "glimpse_dlc_tools_manifest.tsv",
+                                           "THIRD_PARTY_dlc_tools.txt" };  // all the zip may hold (setup_deps.ps1 BundleItems)
+static const int kToolsFormat = 1;
+static const long long kToolsMaxBytes = 1LL << 31;
+
+static std::string ToolsBase() { return LocalAppData() + "\\glimpse_fix"; }
+static std::string ToolsDir() { return ToolsBase() + "\\tools"; }
+
+static std::string ToolsUrl()
+{
+    std::string v = ProgramVersion();
+    if (v.empty() || v.size() > 40) return "";
+    char url[256];
+    sprintf(url, kToolsUrlFmt, v.c_str(), v.c_str());
+    return url;
+}
+
+// the DLC tools in dir are a bundle this program knows: glimpse_dlc_tools.txt of format 1 and python\python.exe
+static bool BundleIn(const std::string& dir, std::string* version = NULL)
+{
+    std::vector<std::string> l = ReadLines(dir + "\\" + kToolsVersionFile);
+    if (version) *version = Trim(TsvValue(l, "bundle"));
+    return atoi(TsvValue(l, "format").c_str()) == kToolsFormat && FileExists(dir + "\\" + kToolsPython);
+}
+
+struct Python {
+    std::string exe;
+    bool bundled;  // the DLC tools' own python.exe (no py launcher: no -3)
+};
+
+// the DLC tools' Python first (it has numpy; build_all.py would switch to it anyway), else the py launcher
+static Python FindPython()
+{
+    Python p = { ToolsDir() + "\\" + kToolsPython, true };
+    if (BundleIn(ToolsDir())) return p;
+    p.exe = FindPy();
+    p.bundled = false;
+    return p;
+}
+
+// vgmstream-cli / ffmpeg where build_all.py's find_exe looks: PATH, then the DLC tools folder
+static bool HaveTool(const char* name)
+{
+    std::string exe = std::string(name) + ".exe";
+    if (!InPath(exe.c_str()).empty()) return true;
+    for (const char* sub : { "", "vgmstream\\", "ffmpeg\\", "bin\\" })
+        if (FileExists(ToolsDir() + "\\" + sub + exe)) return true;
+    return false;
+}
+
+// ---- HTTPS (WinHTTP), only to the release's own address
+
+struct HttpResult {
+    DWORD status;
+    long long total;  // the size of the file (also from a probe)
+    std::string error;
+};
+
+static std::string WinHttpError(DWORD e)
+{
+    switch (e) {
+    case ERROR_WINHTTP_NAME_NOT_RESOLVED: return "the server's name could not be resolved (no internet connection?)";
+    case ERROR_WINHTTP_CANNOT_CONNECT: return "could not connect to the server";
+    case ERROR_WINHTTP_TIMEOUT: return "the server did not answer in time";
+    case ERROR_WINHTTP_SECURE_FAILURE: return "the secure connection failed (certificate or TLS)";
+    case ERROR_WINHTTP_CONNECTION_ERROR: return "the connection was broken off";
+    }
+    char t[48];
+    sprintf(t, "network error %lu", e);
+    return t;
+}
+
+// the hosts the DLC tools may come from: github.com (the release) and the GitHub hosts its downloads are redirected to
+static bool GitHubHost(const wchar_t* h)
+{
+    static const wchar_t sfx[] = L".githubusercontent.com";
+    size_t n = wcslen(h), m = wcslen(sfx);
+    return !_wcsicmp(h, L"github.com") || (n > m && !_wcsicmp(h + n - m, sfx));
+}
+
+// the address a request ended up at (after redirects) is https on a GitHub host
+static bool FinalUrlOk(HINTERNET q)
+{
+    DWORD bytes = 0;
+    WinHttpQueryOption(q, WINHTTP_OPTION_URL, NULL, &bytes);
+    if (!bytes || bytes > 65536) return false;
+    std::vector<wchar_t> u(bytes / sizeof(wchar_t) + 1, L'\0');
+    if (!WinHttpQueryOption(q, WINHTTP_OPTION_URL, u.data(), &bytes)) return false;
+    wchar_t host[256];
+    URL_COMPONENTS uc = { sizeof(uc) };
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 256;
+    return WinHttpCrackUrl(u.data(), 0, 0, &uc) && uc.nScheme == INTERNET_SCHEME_HTTPS && GitHubHost(host);
+}
+
+// GET url (https on github.com only, redirects followed to GitHub's download hosts only); the body goes to sink
+// (false = stop), at most maxBytes of it. probe: only the size (a request for its first byte), nothing is kept.
+static bool HttpFetch(const std::string& url, bool probe, long long maxBytes,
+                      const std::function<bool(const char*, DWORD)>& sink, HttpResult& r)
+{
+    r.status = 0;
+    r.total = -1;
+    r.error.clear();
+    std::wstring w = Widen(url);
+    wchar_t host[256], path[2048];
+    URL_COMPONENTS uc = { sizeof(uc) };
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = 2048;
+    if (!WinHttpCrackUrl(w.c_str(), 0, 0, &uc) || uc.nScheme != INTERNET_SCHEME_HTTPS || _wcsicmp(host, L"github.com")) {
+        r.error = "not an https address on github.com: " + url;
+        return false;
+    }
+#ifndef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+#define WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY 4
+#endif
+    HINTERNET s = WinHttpOpen(L"glimpse_fix-config", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!s) s = WinHttpOpen(L"glimpse_fix-config", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!s) {
+        r.error = WinHttpError(GetLastError());
+        return false;
+    }
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+#ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+    protocols |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+#endif
+    if (!WinHttpSetOption(s, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols))) {
+        protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;  // an older Windows without TLS 1.3
+        WinHttpSetOption(s, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+    }
+    // the probe runs on the window's thread: short timeouts, so a bad connection does not hang the window for long
+    if (probe) WinHttpSetTimeouts(s, 5000, 8000, 8000, 10000);
+    else WinHttpSetTimeouts(s, 10000, 15000, 30000, 60000);
+    HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
+    HINTERNET q = c ? WinHttpOpenRequest(c, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : NULL;
+    bool ok = false;
+    if (q && WinHttpSendRequest(q, probe ? L"Range: bytes=0-0" : WINHTTP_NO_ADDITIONAL_HEADERS, probe ? (DWORD)-1L : 0,
+                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(q, NULL)) {
+        DWORD len = sizeof(r.status);
+        WinHttpQueryHeaders(q, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &r.status, &len,
+                            WINHTTP_NO_HEADER_INDEX);
+        wchar_t hv[128];
+        len = sizeof(hv);
+        if (r.status == 206 && WinHttpQueryHeaders(q, WINHTTP_QUERY_CONTENT_RANGE, WINHTTP_HEADER_NAME_BY_INDEX, hv, &len, WINHTTP_NO_HEADER_INDEX)) {
+            const wchar_t* slash = wcschr(hv, L'/');  // "bytes 0-0/12345"
+            if (slash) r.total = _wtoi64(slash + 1);
+        }
+        len = sizeof(hv);
+        if (r.total < 0 && r.status == 200 && WinHttpQueryHeaders(q, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, hv, &len, WINHTTP_NO_HEADER_INDEX))
+            r.total = _wtoi64(hv);
+        if (!FinalUrlOk(q)) {
+            r.error = "the download was redirected away from GitHub";
+        } else if (r.status == 404) {
+            r.error = "it is not on GitHub (HTTP 404)";
+        } else if (r.status != 200 && !(probe && r.status == 206)) {
+            char t[48];
+            sprintf(t, "the server answered HTTP %lu", r.status);
+            r.error = t;
+        } else if (probe) {
+            ok = r.total > 0;
+            if (!ok) r.error = "the server did not say the size";
+        } else if (r.total > maxBytes) {
+            r.error = "the file is far bigger than expected";
+        } else {
+            std::vector<char> buf(1 << 16);
+            long long got = 0;
+            ok = true;
+            for (;;) {
+                DWORD n = 0;
+                if (!WinHttpReadData(q, buf.data(), (DWORD)buf.size(), &n)) {
+                    r.error = WinHttpError(GetLastError());
+                    ok = false;
+                    break;
+                }
+                if (!n) break;
+                got += n;
+                if (got > maxBytes) {
+                    r.error = "the file is far bigger than expected";
+                    ok = false;
+                    break;
+                }
+                if (!sink(buf.data(), n)) {
+                    if (r.error.empty()) r.error = "stopped";
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok && r.total >= 0 && got != r.total) {
+                r.error = "the download was cut short";
+                ok = false;
+            }
+        }
+    } else {
+        r.error = WinHttpError(GetLastError());
+    }
+    if (q) WinHttpCloseHandle(q);
+    if (c) WinHttpCloseHandle(c);
+    WinHttpCloseHandle(s);
+    return ok;
+}
+
+// the first 64 hex digits standing alone in a .sha256 file ("" if none), lower case
+static std::string ParseSha256(const std::string& t)
+{
+    for (size_t i = 0; i + 64 <= t.size(); i++) {
+        if (i && isxdigit((unsigned char)t[i - 1])) continue;
+        size_t n = 0;
+        while (i + n < t.size() && isxdigit((unsigned char)t[i + n])) n++;
+        if (n == 64) return Lower(t.substr(i, 64));
+        i += n;
+    }
+    return "";
+}
+
+struct Sha256 {
+    BCRYPT_ALG_HANDLE alg = NULL;
+    BCRYPT_HASH_HANDLE h = NULL;
+    Sha256()
+    {
+        if (BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0)))
+            BCryptCreateHash(alg, &h, NULL, 0, NULL, 0, 0);
+    }
+    ~Sha256()
+    {
+        if (h) BCryptDestroyHash(h);
+        if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+    }
+    void Add(const char* d, DWORD n) { if (h) BCryptHashData(h, (PUCHAR)d, n, 0); }
+    std::string Hex()
+    {
+        unsigned char out[32];
+        if (!h || !BCRYPT_SUCCESS(BCryptFinishHash(h, out, sizeof(out), 0))) return "";
+        char hex[65];
+        for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", out[i]);
+        return hex;
+    }
+};
+
+// the download, on a thread of its own (DownloadThread); the window reads its state twice a second (DlcPoll)
+static struct {
+    CRITICAL_SECTION cs;
+    std::string url, step, error;  // url: set before the thread starts
+    long long done, total;
+    bool ok;
+    volatile LONG cancel;
+    FILE* log;  // download.log in the work folder, the thread's own
+} s_dl;
+
+static void DlLog(const std::string& line)
+{
+    if (s_dl.log) {
+        fprintf(s_dl.log, "%s\n", line.c_str());
+        fflush(s_dl.log);
+    }
+}
+
+static void DlStep(const char* step)
+{
+    EnterCriticalSection(&s_dl.cs);
+    s_dl.step = step;
+    LeaveCriticalSection(&s_dl.cs);
+    DlLog(std::string("== ") + step);
+}
+
+// removes a folder and everything in it, but only the two this program unpacks into (never anything else)
+static void RemoveTreeIn(const std::string& dir)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+            std::string full = dir + "\\" + fd.cFileName;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) RemoveDirectoryA(full.c_str());  // the link, not its target
+                else RemoveTreeIn(full);
+            } else {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY) SetFileAttributesA(full.c_str(), FILE_ATTRIBUTE_NORMAL);
+                DeleteFileA(full.c_str());
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryA(dir.c_str());
+}
+
+static std::string ToolsNew() { return ToolsBase() + "\\tools_new"; }
+static std::string ToolsOld() { return ToolsBase() + "\\tools_old"; }
+
+static bool RemoveOwnTree(const std::string& dir)
+{
+    if (!SamePath(dir, ToolsNew()) && !SamePath(dir, ToolsOld())) return false;
+    if (DirExists(dir)) RemoveTreeIn(dir);
+    return !DirExists(dir);
+}
+
+static long long TreeSize(const std::string& dir, int* files)
+{
+    long long total = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) total += TreeSize(dir + "\\" + fd.cFileName, files);
+        } else {
+            total += ((long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+            (*files)++;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return total;
+}
+
+// runs a program without a window and waits for it; its exit code, or -1 if it did not start
+static long RunHidden(const std::string& cmd)
+{
+    std::vector<char> line(cmd.begin(), cmd.end());
+    line.push_back(0);
+    STARTUPINFOA si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessA(NULL, line.data(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) return -1;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (long)code;
+}
+
+// the zip through the shell's own zip folders (Windows before tar.exe came with it); CopyHere may return before the
+// copy is done, so it waits until the files stop growing
+static bool ShellUnzip(const std::string& zip, const std::string& dest)
+{
+    IShellDispatch* sh = NULL;
+    if (FAILED(CoCreateInstance(CLSID_Shell, NULL, CLSCTX_INPROC_SERVER, IID_IShellDispatch, (void**)&sh)) || !sh) return false;
+    bool ok = false;
+    VARIANT vz, vd;
+    VariantInit(&vz);
+    VariantInit(&vd);
+    vz.vt = vd.vt = VT_BSTR;
+    vz.bstrVal = SysAllocString(Widen(zip).c_str());
+    vd.bstrVal = SysAllocString(Widen(dest).c_str());
+    Folder *from = NULL, *to = NULL;
+    if (SUCCEEDED(sh->NameSpace(vz, &from)) && from && SUCCEEDED(sh->NameSpace(vd, &to)) && to) {
+        FolderItems* items = NULL;
+        if (SUCCEEDED(from->Items(&items)) && items) {
+            VARIANT vi, vo;
+            VariantInit(&vi);
+            VariantInit(&vo);
+            vi.vt = VT_DISPATCH;
+            vi.pdispVal = items;
+            vo.vt = VT_I4;
+            vo.lVal = 4 | 16 | 512 | 1024;  // no progress window, yes to all, no questions, no error windows
+            ok = SUCCEEDED(to->CopyHere(vi, vo));
+            items->Release();
+        }
+    }
+    if (from) from->Release();
+    if (to) to->Release();
+    VariantClear(&vz);
+    VariantClear(&vd);
+    sh->Release();
+    if (!ok) return false;
+    long long last = -1;
+    int still = 0;
+    for (int i = 0; i < 1200 && still < 6; i++) {  // at most 10 minutes; done after 3 s without change
+        Sleep(500);
+        int files = 0;
+        long long now = TreeSize(dest, &files);
+        still = now == last && files ? still + 1 : 0;
+        last = now;
+    }
+    return true;
+}
+
+static bool Unzip(const std::string& zip, const std::string& dest, std::string& err)
+{
+    std::string tar = SystemExe("tar.exe");  // Windows 10 1803 and later
+    if (!tar.empty()) {
+        long code = RunHidden(Quote(tar) + " -xf " + Quote(zip) + " -C " + Quote(dest));
+        DlLog("tar.exe: exit code " + std::to_string(code));
+        if (code == 0) return true;
+        if (!RemoveOwnTree(dest) || !CreateDirectoryA(dest.c_str(), NULL)) {  // not on top of what tar left
+            err = "The download could not be unpacked.";
+            return false;
+        }
+    }
+    DlLog("unpacking with the shell's zip folders");
+    if (ShellUnzip(zip, dest)) return true;
+    err = "The download could not be unpacked.";
+    return false;
+}
+
+// every file the unpacked bundle's manifest lists, with its size and SHA-256 (as setup_deps.ps1 Test-Bundle and
+// build_all.py check_bundle check it): the unpacking is complete and nothing in it was changed (the shell's zip folders
+// give no sign when they are done)
+static bool VerifyBundle(const std::string& root, std::string& err)
+{
+    const std::string man = root + "\\glimpse_dlc_tools_manifest.tsv";
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExA(man.c_str(), GetFileExInfoStandard, &fa) || fa.nFileSizeHigh || fa.nFileSizeLow >= (1u << 20)) {
+        err = "The download has no usable glimpse_dlc_tools_manifest.tsv; not installed.";
+        return false;
+    }
+    int n = 0;
+    std::vector<char> buf(1 << 16);
+    for (const std::string& l : ReadLines(man)) {
+        if (l.compare(0, 5, "file\t")) continue;
+        size_t a = l.find('\t', 5), b = a == std::string::npos ? a : l.find('\t', a + 1);
+        if (b == std::string::npos) {
+            err = "The DLC tools' manifest has a broken line; not installed.";
+            return false;
+        }
+        size_t c = l.find('\t', b + 1);
+        std::string rel = l.substr(5, a - 5), want = Lower(Trim(l.substr(b + 1, c == std::string::npos ? c : c - b - 1)));
+        long long size = _atoi64(l.substr(a + 1, b - a - 1).c_str());
+        if (rel.empty() || rel[0] == '/' || rel.find_first_of(":\\") != std::string::npos ||
+            ("/" + rel + "/").find("/../") != std::string::npos) {
+            err = "The DLC tools' manifest names a file outside the bundle (" + rel + "); not installed.";
+            return false;
+        }
+        for (char& ch : rel)
+            if (ch == '/') ch = '\\';
+        HANDLE h = CreateFileA((root + "\\" + rel).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+        bool same = false;
+        if (h != INVALID_HANDLE_VALUE) {
+            Sha256 sha;
+            long long got = 0;
+            DWORD r = 0;
+            while (ReadFile(h, buf.data(), (DWORD)buf.size(), &r, NULL) && r) {
+                sha.Add(buf.data(), r);
+                got += r;
+            }
+            CloseHandle(h);
+            same = got == size && sha.Hex() == want;
+        }
+        if (!same) {
+            err = "The unpacked DLC tools are incomplete or damaged (" + rel + "); not installed.";
+            return false;
+        }
+        n++;
+    }
+    if (!n) {
+        err = "The DLC tools' manifest lists no files; not installed.";
+        return false;
+    }
+    DlLog("checked " + std::to_string(n) + " files against the manifest");
+    return true;
+}
+
+// The unpacked bundle in place of the old one: only the bundle's own items (anything else in the zip refuses it), each
+// replacing its namesake in ToolsDir() (moved to tools_old first, then removed; nothing else there is touched). The
+// version file goes first out and last in, so a half done swap is never taken for a bundle.
+static bool PlaceTools(const std::string& root, std::string& err)
+{
+    std::string ver;
+    if (!BundleIn(root, &ver)) {
+        err = "The download is not a DLC tools bundle this program knows (no glimpse_dlc_tools.txt of format 1 with "
+              "python\\python.exe).";
+        return false;
+    }
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((root + "\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        bool bad = false;
+        do {
+            if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+            bool known = false;
+            for (const char* item : kToolsItems) known = known || !_stricmp(fd.cFileName, item);
+            if (!known) {
+                err = std::string("The download holds ") + fd.cFileName + ", which is not part of the DLC tools; not installed.";
+                bad = true;
+            }
+        } while (!bad && FindNextFileA(h, &fd));
+        FindClose(h);
+        if (bad) return false;
+    }
+    if (!VerifyBundle(root, err)) return false;
+    DlLog("bundle " + ver);
+    std::string tools = ToolsDir(), old = ToolsOld();
+    CreateDirectoryA(ToolsBase().c_str(), NULL);
+    CreateDirectoryA(tools.c_str(), NULL);
+    RemoveOwnTree(old);
+    CreateDirectoryA(old.c_str(), NULL);
+    std::string verFile = tools + "\\" + kToolsVersionFile;
+    if (FileExists(verFile) && !MoveFileExA(verFile.c_str(), (old + "\\" + kToolsVersionFile).c_str(), 0)) {
+        err = "The old " + verFile + " could not be replaced.";
+        return false;
+    }
+    for (int last = 0; last < 2; last++)
+        for (const char* item : kToolsItems) {
+            if ((_stricmp(item, kToolsVersionFile) == 0) != (last == 1)) continue;
+            std::string src = root + "\\" + item, dst = tools + "\\" + item;
+            if (GetFileAttributesA(src.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+            if (GetFileAttributesA(dst.c_str()) != INVALID_FILE_ATTRIBUTES && !MoveFileExA(dst.c_str(), (old + "\\" + item).c_str(), 0)) {
+                err = "The old " + dst + " could not be replaced. Is a program from it still running?";
+                return false;
+            }
+            if (!MoveFileExA(src.c_str(), dst.c_str(), 0)) {
+                err = "Could not move the DLC tools into " + dst + ".";
+                return false;
+            }
+            DlLog("placed " + dst);
+        }
+    RemoveOwnTree(old);
+    return true;
+}
+
+static bool DownloadTools(std::string& err)
+{
+    const std::string url = s_dl.url, hashUrl = url + kToolsHashExt;
+    std::string name = url.substr(url.find_last_of('/') + 1);
+    DlLog("glimpse_fix: the DLC tools");
+    DlLog("from " + url);
+    DlStep("Getting the checksum");
+    std::string hashText;
+    HttpResult r;
+    if (!HttpFetch(hashUrl, false, 4096, [&](const char* d, DWORD n) { hashText.append(d, n); return true; }, r)) {
+        err = "The checksum " + hashUrl + " could not be downloaded: " + r.error + ".";
+        return false;
+    }
+    std::string want = ParseSha256(hashText);
+    if (want.empty()) {
+        err = "The checksum file " + hashUrl + " holds no SHA-256 checksum.";
+        return false;
+    }
+    DlLog("published SHA-256 " + want);
+
+    DlStep("Downloading");
+    std::string dir = ToolsBase() + "\\download", part = dir + "\\" + name + ".part", zip = dir + "\\" + name;
+    CreateDirectoryA(ToolsBase().c_str(), NULL);
+    CreateDirectoryA(dir.c_str(), NULL);
+    FILE* f = fopen(part.c_str(), "wb");
+    if (!f) {
+        err = "Could not write " + part + ".";
+        return false;
+    }
+    Sha256 sha;
+    bool wrote = true;
+    bool got = HttpFetch(url, false, kToolsMaxBytes, [&](const char* d, DWORD n) {
+        if (s_dl.cancel) return false;
+        if (fwrite(d, 1, n, f) != n) {
+            wrote = false;
+            return false;
+        }
+        sha.Add(d, n);
+        EnterCriticalSection(&s_dl.cs);
+        s_dl.done += n;
+        s_dl.total = r.total;
+        LeaveCriticalSection(&s_dl.cs);
+        return true;
+    }, r);
+    wrote = fclose(f) == 0 && wrote;
+    if (!got || !wrote) {
+        DeleteFileA(part.c_str());
+        err = s_dl.cancel ? "Stopped." : !wrote ? "Could not write " + part + " (is the drive full?)." : "The download failed: " + r.error + ".";
+        return false;
+    }
+    std::string have = sha.Hex();
+    DlLog("downloaded " + std::to_string(s_dl.done) + " bytes, SHA-256 " + have);
+    if (have != want) {
+        DeleteFileA(part.c_str());
+        err = "The download does not match its published checksum, so it was not used (a damaged download, or not the "
+              "published file). Nothing was installed.";
+        return false;
+    }
+    if (!MoveFileExA(part.c_str(), zip.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        err = "Could not write " + zip + ".";
+        return false;
+    }
+
+    if (s_dl.cancel) {  // stopped after the last byte: nothing is unpacked (once unpacking runs, it is let finish)
+        DeleteFileA(zip.c_str());
+        err = "Stopped.";
+        return false;
+    }
+    DlStep("Unpacking");
+    std::string fresh = ToolsNew();
+    RemoveOwnTree(fresh);
+    CreateDirectoryA(fresh.c_str(), NULL);
+    bool ok = Unzip(zip, fresh, err);
+    if (ok && s_dl.cancel) {  // stopped while unpacking: nothing is put in place
+        ok = false;
+        err = "Stopped.";
+    }
+    if (ok) {
+        DlStep("Installing");
+        ok = PlaceTools(fresh, err);  // the zip has no top folder
+    }
+    RemoveOwnTree(fresh);
+    DeleteFileA(zip.c_str());
+    return ok;
+}
+
+static DWORD WINAPI DownloadThread(LPVOID)
+{
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);  // the shell's zip folders
+    std::string err;
+    bool ok = DownloadTools(err);
+    DlLog(ok ? "RESULT: OK" : "FAILED: " + err);
+    EnterCriticalSection(&s_dl.cs);
+    s_dl.ok = ok;
+    s_dl.error = err;
+    LeaveCriticalSection(&s_dl.cs);
+    if (s_dl.log) fclose(s_dl.log);
+    s_dl.log = NULL;
+    CoUninitialize();
+    return 0;
+}
+
+// ---------------------------------------------------------------- DLC: finding the Xbox DLC on this PC
+
+struct DlcPackage {
+    std::string file, name;  // name: the display name in the package's header
+};
+
+static DWORD Be32(const unsigned char* p) { return (DWORD)p[0] << 24 | (DWORD)p[1] << 16 | (DWORD)p[2] << 8 | p[3]; }
+
+// a Split/Second DLC package as build_all.py's find_packages takes it: an STFS file (LIVE, PIRS or CON) of at least
+// 0xB000 bytes whose header has the game's title id 425607E7 and content type 2 (DLC); only its header is read
+static bool ReadPackage(const std::string& fn, DlcPackage& p)
+{
+    HANDLE h = CreateFileA(fn.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    unsigned char hd[0x500];
+    DWORD n = 0;
+    LARGE_INTEGER size = {};
+    bool ok = GetFileSizeEx(h, &size) && size.QuadPart >= 0xB000 && ReadFile(h, hd, sizeof(hd), &n, NULL) && n == sizeof(hd);
+    CloseHandle(h);
+    if (!ok || (memcmp(hd, "LIVE", 4) && memcmp(hd, "PIRS", 4) && memcmp(hd, "CON ", 4))) return false;
+    if (Be32(hd + 0x360) != 0x425607E7 || Be32(hd + 0x344) != 2) return false;  // title id, content type (stfs.py)
+    wchar_t w[0x41] = {};
+    for (int i = 0; i < 0x40; i++) w[i] = (wchar_t)(hd[0x411 + 2 * i] << 8 | hd[0x412 + 2 * i]);  // UTF-16 big endian
+    char a[0x100];
+    p.file = fn;
+    p.name = WideCharToMultiByte(CP_ACP, 0, w, -1, a, sizeof(a), NULL, NULL) > 0 ? Trim(a) : "";
+    return true;
+}
+
+// a folder on a network share (\\server\share, or a mapped network drive); GetDriveType does not touch the share
+static bool OnNetwork(const std::string& p)
+{
+    if (p.size() >= 2 && (p[0] == '\\' || p[0] == '/') && (p[1] == '\\' || p[1] == '/')) return true;
+    if (p.size() < 2 || p[1] != ':') return false;
+    char root[4] = { p[0], ':', '\\', 0 };
+    return GetDriveTypeA(root) == DRIVE_REMOTE;
+}
+
+// the packages directly in dir; anyName = false: only files without an extension (as the console names them)
+static std::vector<DlcPackage> PackagesIn(const std::string& dir, bool anyName)
+{
+    std::vector<DlcPackage> out;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileExA((dir + "\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, 2 /* large fetch */);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    int tried = 0;
+    do {
+        // not a file only in the cloud (OneDrive): reading its header would download it
+        if (fd.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_OFFLINE | 0x00040000 | 0x00400000)) continue;
+        if ((((long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow) < 0xB000) continue;
+        if (!anyName && strchr(fd.cFileName, '.')) continue;
+        if (++tried > 300) break;  // a folder full of big files is not a DLC folder
+        DlcPackage p;
+        if (ReadPackage(dir + "\\" + fd.cFileName, p)) out.push_back(p);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return out;
+}
+
+// the subfolders of dir (no links, none of Windows' own)
+static std::vector<std::string> SubDirs(const std::string& dir)
+{
+    std::vector<std::string> out;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileExA((dir + "\\*").c_str(), FindExInfoBasic, &fd, FindExSearchLimitToDirectories, NULL, 2);
+    if (h == INVALID_HANDLE_VALUE) return out;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        const char* n = fd.cFileName;
+        if (!strcmp(n, ".") || !strcmp(n, "..") || n[0] == '$' || !_stricmp(n, "System Volume Information") ||
+            !_stricmp(n, "Windows") || !_stricmp(n, "AppData") || !_stricmp(n, "WinSxS") || !_stricmp(n, "node_modules") ||
+            !_stricmp(n, ".git"))
+            continue;
+        out.push_back(dir + "\\" + n);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return out;
+}
+
+// The folder that holds the packages, for a folder as the user may give it: the packages' own folder, the 00000002
+// folder, the title folder 425607E7, or a content folder of Xenia or an Xbox drive (<profile>\425607E7\00000002).
+// "" if there are none.
+static std::string PackageFolder(const std::string& given, std::vector<DlcPackage>& pk, bool anyName)
+{
+    std::string dir = NoTrailingSlash(given);
+    pk.clear();
+    if (dir.empty() || !DirExists(dir)) return "";
+    std::string tries[] = { dir, dir + "\\00000002", dir + "\\425607E7\\00000002" };
+    for (int i = 0; i < 3; i++) {
+        if (i && !DirExists(tries[i])) continue;
+        pk = PackagesIn(tries[i], anyName || i > 0);
+        if (!pk.empty()) return tries[i];
+    }
+    for (const std::string& sub : SubDirs(dir)) {
+        std::string t = sub + "\\425607E7\\00000002";
+        if (!DirExists(t)) continue;
+        pk = PackagesIn(t, true);
+        if (!pk.empty()) return t;
+    }
+    return "";
+}
+
+// "7 packages: Deadline, High Octane, The Elite (2), ..."
+static std::string PackageSummary(const std::vector<DlcPackage>& pk)
+{
+    static const struct { const char *key, *name; } known[] = {
+        { "Deadline", "Deadline" }, { "High Octane", "High Octane" }, { "Elite", "The Elite" }, { "Onslaught", "Onslaught" },
+        { "Survival", "Survival At The Rock" }, { "Unlock", "Master Unlock" },
+    };
+    struct Name {
+        std::string text;
+        int order, count;  // order: the known packs in the order above, others after them
+    };
+    std::vector<Name> names;
+    for (const DlcPackage& p : pk) {
+        Name n = { p.name.empty() ? "unnamed" : p.name, 99, 1 };
+        for (int i = 0; i < (int)(sizeof(known) / sizeof(known[0])); i++)
+            if (strstr(p.name.c_str(), known[i].key)) {
+                n.text = known[i].name;
+                n.order = i;
+                break;
+            }
+        bool seen = false;
+        for (Name& e : names)
+            if (e.text == n.text) {
+                e.count++;
+                seen = true;
+            }
+        if (!seen) names.push_back(n);
+    }
+    std::stable_sort(names.begin(), names.end(), [](const Name& a, const Name& b) { return a.order < b.order; });
+    std::string out = std::to_string(pk.size()) + (pk.size() == 1 ? " package: " : " packages: ");
+    for (size_t i = 0; i < names.size(); i++)
+        out += (i ? ", " : "") + names[i].text + (names[i].count > 1 ? " (" + std::to_string(names[i].count) + ")" : "");
+    return out;
+}
+
+struct DlcPlace {
+    std::string dir;
+    std::vector<DlcPackage> packs;
+};
+
+struct DlcScan {
+    DWORD start;
+    std::vector<DlcPlace> found;
+    bool Late() const { return GetTickCount() - start > 1500; }  // the scan stays below about 1.5 s, whatever the drives
+    void Add(const std::string& dir, bool anyName)
+    {
+        DlcPlace p;
+        p.dir = PackageFolder(dir, p.packs, anyName);
+        if (p.dir.empty()) return;
+        for (const DlcPlace& f : found)
+            if (SamePath(f.dir, p.dir)) return;
+        found.push_back(p);
+    }
+    // a portable Xenia (xenia*.exe) at most two folders below root: its folder "content"
+    void Xenia(const std::string& root, int depth)
+    {
+        if (Late()) return;
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileExA((root + "\\xenia*.exe").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            FindClose(h);
+            Add(root + "\\content", true);
+        }
+        if (depth < 2)
+            for (const std::string& sub : SubDirs(root)) Xenia(sub, depth + 1);
+    }
+};
+
+// Where Split/Second DLC packages are on this PC, cheapest and likeliest places first, in about 1.5 s at most: the
+// folder used before, Xenia's content folders (Documents\Xenia, portable installs on the drives and in the user's
+// folders), dumps on the Desktop, in Downloads and Documents (two folders deep), and the Xbox layout
+// Content\<profile>\425607E7\00000002 on every fixed and removable drive. Whole drives are never searched.
+static std::vector<DlcPlace> FindDlcPlaces(const std::string& before)
+{
+    DlcScan s = { GetTickCount() };
+    // never a network folder (a redirected Documents, a mapped drive): a disconnected one stalls every look at it
+    auto local = [](const std::string& p) { return OnNetwork(p) ? std::string() : p; };
+    if (!before.empty() && !OnNetwork(before)) s.Add(before, true);
+    std::string docs = local(KnownFolder(FOLDERID_Documents)), desk = local(KnownFolder(FOLDERID_Desktop)),
+                down = local(KnownFolder(FOLDERID_Downloads)), home = local(EnvVar("USERPROFILE"));
+    if (!docs.empty()) s.Add(docs + "\\Xenia\\content", true);
+    std::vector<std::string> drives;
+    DWORD mask = GetLogicalDrives();
+    for (int i = 2; i < 26; i++) {  // not A: and B:
+        if (!(mask & (1u << i))) continue;
+        std::string d = std::string(1, (char)('A' + i)) + ":";
+        UINT type = GetDriveTypeA((d + "\\").c_str());
+        if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE) drives.push_back(d);
+    }
+    for (const std::string& d : drives) {  // Xbox drive layout (and a copy of it)
+        if (s.Late()) break;
+        s.Add(d + "\\Content", true);
+        s.Add(d + "\\425607E7", true);
+    }
+    for (const std::string& u : { desk, down, docs }) {
+        if (u.empty() || s.Late()) continue;
+        s.Add(u, false);
+        for (const std::string& sub : SubDirs(u)) {
+            if (s.Late()) break;
+            s.Add(sub, false);  // also sub\425607E7 and sub\<x>\425607E7\00000002
+        }
+    }
+    for (const std::string& u : { desk, down, docs, home })
+        if (!u.empty()) s.Xenia(u, 0);
+    for (const std::string& d : drives) s.Xenia(d, 0);
+    return s.found;
+}
+
+// ---------------------------------------------------------------- DLC: the game folder through Steam
+
+// Valve's text KeyValues (libraryfolders.vdf, appmanifest_*.acf): every value of key (any depth); quoted strings
+// with \\ and \" escapes, // comments
+static std::vector<std::string> VdfValues(const std::string& t, const char* key, bool numberedPaths = false)
+{
+    std::vector<std::pair<bool, std::string>> tok;  // (a string, its text); false: a brace
+    size_t i = 0;
+    while (i < t.size()) {
+        char c = t[i];
+        if (isspace((unsigned char)c)) {
+            i++;
+        } else if (c == '/' && i + 1 < t.size() && t[i + 1] == '/') {
+            while (i < t.size() && t[i] != '\n') i++;
+        } else if (c == '{' || c == '}') {
+            tok.push_back({ false, std::string(1, c) });
+            i++;
+        } else {
+            std::string s;
+            if (c == '"') {
+                for (i++; i < t.size() && t[i] != '"'; i++) {
+                    if (t[i] == '\\' && i + 1 < t.size()) {
+                        char e = t[++i];
+                        s += e == 'n' ? '\n' : e == 't' ? '\t' : e;
+                    } else {
+                        s += t[i];
+                    }
+                }
+                i++;
+            } else {
+                while (i < t.size() && !isspace((unsigned char)t[i]) && t[i] != '{' && t[i] != '}' && t[i] != '"') s += t[i++];
+            }
+            tok.push_back({ true, s });
+        }
+    }
+    std::vector<std::string> out;
+    for (size_t k = 0; k + 1 < tok.size(); k++) {
+        if (!tok[k].first || !tok[k + 1].first) continue;
+        const std::string& name = tok[k].second;
+        bool numbered = numberedPaths && !name.empty() && name.find_first_not_of("0123456789") == std::string::npos &&
+                        tok[k + 1].second.find(':') != std::string::npos;  // the old libraryfolders.vdf: "1" "D:\\..."
+        if (!_stricmp(name.c_str(), key) || numbered) out.push_back(tok[k + 1].second);
+        k++;  // the value
+    }
+    return out;
+}
+
+static std::string ReadText(const std::string& fn)
+{
+    std::string all;
+    for (const std::string& l : ReadLines(fn)) all += l + "\n";
+    return all;
+}
+
+static std::string RegString(HKEY root, const char* key, const char* value)
+{
+    char buf[MAX_PATH];
+    DWORD n = sizeof(buf);
+    if (RegGetValueA(root, key, value, RRF_RT_REG_SZ, NULL, buf, &n) != ERROR_SUCCESS) return "";
+    std::string s = buf;
+    for (char& c : s)
+        if (c == '/') c = '\\';
+    return NoTrailingSlash(s);
+}
+
+// Split/Second's folder as Steam has it (app 297860), read only: Steam's folder from the registry, its libraries
+// from steamapps\libraryfolders.vdf, the game's installdir from appmanifest_297860.acf; "" if none has SplitSecond.exe
+static std::string SteamGameDir()
+{
+    std::vector<std::string> steam = { RegString(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath"),
+                                        RegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Valve\\Steam", "InstallPath"),
+                                        RegString(HKEY_LOCAL_MACHINE, "SOFTWARE\\Valve\\Steam", "InstallPath") };
+    std::vector<std::string> libs;
+    auto addLib = [&](std::string p) {
+        for (char& c : p)
+            if (c == '/') c = '\\';
+        p = NoTrailingSlash(p);
+        if (p.empty()) return;
+        for (const std::string& l : libs)
+            if (SamePath(l, p)) return;
+        libs.push_back(p);
+    };
+    for (const std::string& s : steam) {
+        if (s.empty()) continue;
+        addLib(s);
+        for (const char* vdf : { "\\steamapps\\libraryfolders.vdf", "\\config\\libraryfolders.vdf" })
+            for (const std::string& p : VdfValues(ReadText(s + vdf), "path", true)) addLib(p);
+    }
+    for (const std::string& lib : libs) {
+        std::vector<std::string> dir = VdfValues(ReadText(lib + "\\steamapps\\appmanifest_297860.acf"), "installdir");
+        if (dir.empty() || dir[0].empty() || dir[0].find("..") != std::string::npos) continue;
+        std::string game = lib + "\\steamapps\\common\\" + dir[0];
+        if (FileExists(game + "\\SplitSecond.exe")) return game;
+    }
+    for (const std::string& lib : libs)  // a library without the manifest (copied over by hand)
+        if (FileExists(lib + "\\steamapps\\common\\SplitSecond\\SplitSecond.exe")) return lib + "\\steamapps\\common\\SplitSecond";
     return "";
 }
 
@@ -904,6 +1998,7 @@ static std::string FindTools(HWND owner)
     std::vector<std::string> cand;
     std::string set = NoTrailingSlash(GetValue(s_toolsOpt));
     if (!set.empty()) cand.insert(cand.end(), { set, set + "\\dlc", set + "\\tools\\dlc" });
+    cand.push_back(GameDir() + "\\glimpse_tools\\dlc");  // this program elsewhere, the game folder found through Steam
     char exe[MAX_PATH];
     GetModuleFileNameA(NULL, exe, MAX_PATH);
     std::string d = exe;
@@ -950,7 +2045,8 @@ static void OpenDlcLog(HWND wnd)
 
 static bool DlcStart(HWND wnd, DlcTask task, const std::string& script, const std::string& args)
 {
-    std::string py = FindPy();
+    Python python = FindPython();
+    const std::string& py = python.exe;
     if (py.empty()) {
         MessageBoxA(wnd, kNoPython, "glimpse_fix", MB_OK | MB_ICONINFORMATION);
         return false;
@@ -969,7 +2065,8 @@ static bool DlcStart(HWND wnd, DlcTask task, const std::string& script, const st
         return false;
     }
     HANDLE nul = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
-    std::string cmd = Quote(py) + " -3 -I -X utf8 " + Quote(script) + " " + args + " --status " + Quote(s_taskStatus);
+    std::string cmd = Quote(py) + (python.bundled ? " -I -X utf8 " : " -3 -I -X utf8 ") + Quote(script) + " " + args + " --status " +
+                      Quote(s_taskStatus);
     std::vector<char> line(cmd.begin(), cmd.end());
     line.push_back(0);
     STARTUPINFOA si = { sizeof(si) };
@@ -1013,9 +2110,10 @@ static bool DlcStart(HWND wnd, DlcTask task, const std::string& script, const st
 
 static void DlcStop()
 {
-    if (!DlcBusy()) return;
+    if (!DlcBusy() || s_task == DLC_DEPS) return;  // the DirectX installer is let finish
     s_taskStopped = true;
-    if (s_taskJob) TerminateJobObject(s_taskJob, 1);
+    if (s_task == DLC_DOWNLOAD) InterlockedExchange(&s_dl.cancel, 1);  // the thread stops at its next read
+    else if (s_taskJob) TerminateJobObject(s_taskJob, 1);
     else TerminateProcess(s_taskProc, 1);
 }
 
@@ -1053,14 +2151,20 @@ static void DlcFailed(HWND wnd, const std::string& text, const std::vector<std::
     if (MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_YESNO | MB_ICONWARNING) == IDYES) OpenDlcLog(wnd);
 }
 
+static void FlowAskInstall(HWND wnd, const DlcStatus& st);
+static void FlowDone(HWND wnd, const DlcStatus& st);
+
 static void DlcFinished(HWND wnd, DlcTask task, DWORD code, const DlcStatus& st)
 {
+    bool flow = s_flow;
     if (s_taskStopped) {
-        DlcSetText(task == DLC_BUILD ? "Build stopped. Build DLC starts it again; finished steps are kept."
+        s_flow = false;
+        DlcSetText(task == DLC_BUILD ? "Stopped. Set up DLC (or Build) goes on from there; the finished steps are kept."
                                      : "Stopped.", false);
         return;
     }
     if (st.state.empty() || st.state == "RUNNING") {
+        s_flow = false;
         char m[160];
         sprintf(m, "Python did not finish the %s (exit code %lu). See the log.",
                 task == DLC_BUILD ? "build" : task == DLC_UPLAN || task == DLC_UNINSTALL ? "uninstall" : "install", code);
@@ -1071,8 +2175,24 @@ static void DlcFinished(HWND wnd, DlcTask task, DWORD code, const DlcStatus& st)
     }
     bool ok = st.state == "OK" || st.state == "WARN";
     if (!ok) {
+        s_flow = false;
         DlcSetText(st.text, true);
-        DlcFailed(wnd, st.text, st.details);
+        Status(flow ? "Set up DLC stopped" : "The DLC task failed");
+        DlcFailed(wnd, flow ? "Set up DLC stopped: " + st.text : st.text, st.details);
+        return;
+    }
+    if (flow) {  // "Set up DLC": the next step
+        if (task == DLC_BUILD) {
+            s_flowNotes = st.state == "WARN" ? st.details : std::vector<std::string>();
+            Status("DLC built");
+            DlcInstall(wnd, false);  // the dry run: what the install would do
+            if (!DlcBusy()) s_flow = false;
+        } else if (task == DLC_PLAN) {
+            FlowAskInstall(wnd, st);
+        } else {
+            s_flow = false;
+            FlowDone(wnd, st);
+        }
         return;
     }
     if (task == DLC_BUILD) {
@@ -1147,26 +2267,52 @@ static const char* DlcTaskVerb(DlcTask t)
     case DLC_PLAN: return "Checking the install";
     case DLC_INSTALL: return "Installing";
     case DLC_UPLAN: return "Checking the uninstall";
+    case DLC_DOWNLOAD: return "Getting the DLC tools";
+    case DLC_DEPS: return "Installing the DirectX runtime";
     default: return "Removing";
     }
 }
+
+static void DlcDownloadFinished(HWND wnd);
+static void DlcDepsFinished(HWND wnd);
 
 // WM_TIMER while a task runs: its state on the page, and what follows once it has ended
 static void DlcPoll(HWND wnd)
 {
     if (!DlcBusy()) return;
     bool ended = WaitForSingleObject(s_taskProc, 0) == WAIT_OBJECT_0;
-    DlcStatus st = ReadDlcStatus(s_taskStatus);
     if (!ended) {
         DWORD secs = (GetTickCount() - s_taskStart) / 1000;
         char head[96];
-        sprintf(head, "%s (%lu:%02lu%s%s): ", DlcTaskVerb(s_task), secs / 60, secs % 60, st.step.empty() ? "" : ", step ",
-                st.step.c_str());
-        DlcSetText(head + (st.text.empty() ? std::string("starting Python") : st.text), false);
+        std::string text;
+        if (s_task == DLC_DOWNLOAD) {
+            EnterCriticalSection(&s_dl.cs);
+            std::string step = s_dl.step;
+            long long done = s_dl.done, total = s_dl.total;
+            LeaveCriticalSection(&s_dl.cs);
+            if (step == "Downloading")
+                step = Megabytes(done) + (total > 0 ? " of " + Megabytes(total) : std::string()) + " downloaded";
+            sprintf(head, "%s (%lu:%02lu): ", DlcTaskVerb(s_task), secs / 60, secs % 60);
+            text = head + step;
+        } else if (s_task == DLC_DEPS) {
+            // setup_deps.ps1's last line of output
+            std::string last;
+            for (const std::string& l : ReadLines(s_dlcLogPath))
+                if (!Trim(l).empty()) last = Trim(l);
+            sprintf(head, "%s (%lu:%02lu): ", DlcTaskVerb(s_task), secs / 60, secs % 60);
+            text = head + (last.empty() ? std::string("starting") : last);
+        } else {
+            DlcStatus st = ReadDlcStatus(s_taskStatus);
+            sprintf(head, "%s (%lu:%02lu%s%s): ", DlcTaskVerb(s_task), secs / 60, secs % 60, st.step.empty() ? "" : ", step ",
+                    st.step.c_str());
+            text = head + (st.text.empty() ? std::string("starting Python") : st.text);
+        }
+        DlcSetText(text, false);
         return;
     }
     DWORD code = 1;
-    GetExitCodeProcess(s_taskProc, &code);
+    if (s_task == DLC_DOWNLOAD) GetExitCodeThread(s_taskProc, &code);
+    else GetExitCodeProcess(s_taskProc, &code);
     CloseHandle(s_taskProc);
     s_taskProc = NULL;
     if (s_taskJob) CloseHandle(s_taskJob);
@@ -1175,7 +2321,16 @@ static void DlcPoll(HWND wnd)
     DlcTask task = s_task;
     s_task = DLC_NONE;
     DlcButtons();
-    DlcFinished(wnd, task, code, st);
+    if (task == DLC_DOWNLOAD) DlcDownloadFinished(wnd);
+    else if (task == DLC_DEPS) DlcDepsFinished(wnd);
+    else DlcFinished(wnd, task, code, ReadDlcStatus(s_taskStatus));
+}
+
+static bool StartBuild(HWND wnd, const std::string& dump, const std::string& tools)
+{
+    if (!DlcStart(wnd, DLC_BUILD, tools + "\\build_all.py", "--dump " + Quote(dump) + " --game " + Quote(GameDir()))) return false;
+    Status("DLC build started; this window can stay open or be used meanwhile");
+    return true;
 }
 
 static void DlcBuild(HWND wnd)
@@ -1204,8 +2359,7 @@ static void DlcBuild(HWND wnd)
     }
     std::string tools = FindTools(wnd);
     if (tools.empty()) return;
-    if (DlcStart(wnd, DLC_BUILD, tools + "\\build_all.py", "--dump " + Quote(dump) + " --game " + Quote(game)))
-        Status("DLC build started; this window can stay open or be used meanwhile");
+    StartBuild(wnd, dump, tools);
 }
 
 // the dry run first (for the game folder of this INI), then, after the question, --apply for that same folder
@@ -1236,6 +2390,468 @@ static void DlcUninstall(HWND wnd, bool apply)
     if (tools.empty()) return;
     DlcStart(wnd, apply ? DLC_UNINSTALL : DLC_UPLAN, tools + "\\install_dlc.py",
              "--game " + Quote(s_taskGame) + " --uninstall" + (apply ? " --apply" : ""));
+}
+
+// ---------------------------------------------------------------- DLC: "Set up DLC", all of it in one go
+
+static void Open();
+
+// the packages in the folder of [DLC] DumpFolder, on the line below it
+static void DlcShowFound()
+{
+    if (!s_dlcFound) return;
+    std::string cur = NoTrailingSlash(GetValue(*Find("DumpFolder"))), t;
+    std::vector<DlcPackage> pk;
+    if (cur.empty()) t = "No folder yet: Set up DLC looks for it on this PC (Xenia, Desktop, Downloads, Xbox USB drives).";
+    else if (OnNetwork(cur)) t = "A network folder: Set up DLC looks into it when it runs.";  // not on every page change
+    else if (!PackageFolder(cur, pk, true).empty()) t = "Found " + PackageSummary(pk);
+    else t = DirExists(cur) ? "No Split/Second DLC packages in this folder." : "This folder does not exist.";
+    SetWindowTextA(s_dlcFound, t.c_str());
+}
+
+static void SetDumpFolder(const std::string& dir)
+{
+    SetWindowTextA(Find("DumpFolder")->ctrl, dir.c_str());  // EN_CHANGE saves it
+    DlcShowFound();
+}
+
+// a folder picked by hand; dir = the folder that holds its packages
+static bool PickDlcFolder(HWND wnd, std::string& dir)
+{
+    std::string pick = NoTrailingSlash(GetValue(*Find("DumpFolder")));
+    if (!PickFolder(wnd, L"Your Split/Second DLC: the folder 425607E7, 00000002, or a folder with the package files", pick)) return false;
+    std::vector<DlcPackage> pk;
+    std::string at = PackageFolder(pick, pk, true);
+    if (at.empty()) {
+        std::string m = "There are no Split/Second DLC packages in\n" + pick +
+                        "\n\nPick the folder 425607E7 of your Xbox 360 or Xenia content, its subfolder 00000002, or a folder "
+                        "with the package files (the long hex names, as the console keeps them).";
+        MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    dir = at;
+    return true;
+}
+
+// the place found that has every package the others have (the same dump twice, or a fuller one), else -1
+static int BestPlace(const std::vector<DlcPlace>& places)
+{
+    std::vector<std::vector<std::string>> sets;
+    for (const DlcPlace& p : places) {
+        std::vector<std::string> n;
+        for (const DlcPackage& k : p.packs) n.push_back(Lower(k.file.substr(k.file.find_last_of('\\') + 1)));
+        std::sort(n.begin(), n.end());
+        sets.push_back(n);
+    }
+    for (size_t i = 0; i < sets.size(); i++) {
+        bool all = true;
+        for (size_t j = 0; j < sets.size() && all; j++)
+            all = i == j || std::includes(sets[i].begin(), sets[i].end(), sets[j].begin(), sets[j].end());
+        if (all) return (int)i;
+    }
+    return -1;
+}
+
+// the places found as a menu below anchor, and "Other folder..."
+static bool ChooseDlcFolder(HWND wnd, HWND anchor, const std::vector<DlcPlace>& places, std::string& dir)
+{
+    std::vector<DlcPackage> pk;
+    std::string cur = PackageFolder(GetValue(*Find("DumpFolder")), pk, true);  // ticked: the folder set now
+    HMENU menu = CreatePopupMenu();
+    AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, "Split/Second DLC found on this PC:");
+    for (size_t i = 0; i < places.size() && i < 20; i++) {
+        std::string t;
+        for (char c : places[i].dir) t += c == '&' ? std::string("&&") : std::string(1, c);
+        t += "\t" + std::to_string(places[i].packs.size()) + " packages";
+        AppendMenuA(menu, MF_STRING | (SamePath(places[i].dir, cur) ? MF_CHECKED : 0), i + 1, t.c_str());
+    }
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, 1000, "Other folder...");
+    RECT r;
+    GetWindowRect(anchor, &r);
+    bool right = anchor == s_dlcBrowse;
+    int pick = TrackPopupMenu(menu, TPM_RETURNCMD | (right ? TPM_RIGHTALIGN : TPM_LEFTALIGN) | TPM_TOPALIGN, right ? r.right : r.left,
+                              r.bottom + S(2), 0, wnd, NULL);
+    DestroyMenu(menu);
+    if (pick == 1000) return PickDlcFolder(wnd, dir);
+    if (pick < 1 || pick > (int)places.size()) return false;
+    dir = places[pick - 1].dir;
+    return true;
+}
+
+// "..." next to the folder: what the search finds, or the folder picker straight away
+static void BrowseDlcFolder(HWND wnd)
+{
+    HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    std::vector<DlcPlace> places = FindDlcPlaces(NoTrailingSlash(GetValue(*Find("DumpFolder"))));
+    SetCursor(old);
+    std::string dir;
+    if (places.empty() ? PickDlcFolder(wnd, dir) : ChooseDlcFolder(wnd, s_dlcBrowse, places, dir)) SetDumpFolder(dir);
+}
+
+// the game folder: this INI's, else (after asking) the one Steam has
+static bool EnsureGameDir(HWND wnd)
+{
+    std::string game = GameDir();
+    if (FileExists(game + "\\data\\resident.ark")) return true;
+    std::string steam = SteamGameDir();
+    if (!steam.empty() && !SamePath(steam, game) && FileExists(steam + "\\data\\resident.ark") && steam.size() + 24 < MAX_PATH) {
+        std::string q = "These settings are not in the Split/Second folder:\n" + std::string(s_path) + "\n\nSteam has the game in\n" +
+                        steam + "\n\nUse that game folder? Its SplitSecondPad.ini is edited from then on (Open INI... picks another one).";
+        if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return false;
+        strcpy(s_path, (steam + "\\SplitSecondPad.ini").c_str());
+        s_viaSteam = true;
+        Open();
+        DlcShowFound();
+        return true;
+    }
+    std::string m = "Split/Second was not found: these settings are not in the game folder (there is no data\\resident.ark next "
+                    "to them), and Steam does not have the game either:\n" + std::string(s_path) +
+                    "\n\nOpen the SplitSecondPad.ini in the game folder (Open INI...), then Set up DLC again.";
+    MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+    return false;
+}
+
+// the DLC folder: the one set if it has packages, else what the search finds (asked only when the places found differ)
+static bool EnsureDumpFolder(HWND wnd, std::string& dump)
+{
+    std::string cur = NoTrailingSlash(GetValue(*Find("DumpFolder")));
+    std::vector<DlcPackage> pk;
+    dump = PackageFolder(cur, pk, true);
+    if (!dump.empty()) return true;
+    DlcSetText("Looking for your Xbox DLC on this PC...", false);
+    UpdateWindow(s_dlcState);
+    HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    std::vector<DlcPlace> places = FindDlcPlaces(cur);
+    SetCursor(old);
+    int best = BestPlace(places);
+    if (best >= 0) {
+        dump = places[best].dir;
+    } else if (places.empty()) {
+        DlcRefresh();
+        MessageBoxA(wnd, "Your Split/Second DLC was not found in the usual places (Xenia, Desktop, Downloads, Documents, Xbox USB "
+                         "drives).\n\nIn the next window, pick the folder 425607E7 of your Xbox 360 or Xenia content, its subfolder "
+                         "00000002, or a folder with the package files.", "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        if (!PickDlcFolder(wnd, dump)) return false;
+    } else if (!ChooseDlcFolder(wnd, s_dlcSetup, places, dump)) {
+        DlcRefresh();
+        return false;
+    }
+    SetDumpFolder(dump);
+    return true;
+}
+
+// what the staged build holds, in words: "11 cars, Quarry, Minepit Park and the Deadline and Survival Race modes"
+static std::string ContentSummary(const std::vector<std::string>& manifest)
+{
+    std::vector<std::string> parts;
+    std::vector<std::string> cars = SplitList(TsvValue(manifest, "cars")), modes = SplitList(TsvValue(manifest, "mode"));
+    if (!cars.empty()) parts.push_back(std::to_string(cars.size()) + (cars.size() == 1 ? " car" : " cars"));
+    for (const std::string& t : SplitList(TsvValue(manifest, "track"))) parts.push_back(!_stricmp(t.c_str(), "nem_quarry") ? "Minepit Park" : t);
+    if (!modes.empty()) parts.push_back("the " + JoinAnd(modes) + (modes.size() == 1 ? " mode" : " modes"));
+    return JoinAnd(parts);
+}
+
+// a [DLC] key as the summary names it
+static std::string IniShortName(const Option& o)
+{
+    static const struct { const char *key, *name; } names[] = {
+        { "Overlays", "Converted DLC" }, { "Tracks", "DLC tracks" }, { "Modes", "Deadline game mode" }, { "Music", "DLC race music" },
+        { "Cars", "DLC cars in the car select" },
+    };
+    for (auto& n : names)
+        if (!strcmp(o.key, n.key)) return n.name;
+    return Trim(o.text);
+}
+
+static bool StartBuild(HWND wnd, const std::string& dump, const std::string& tools);
+
+static void FlowBuild(HWND wnd)
+{
+    if (!StartBuild(wnd, s_flowDump, s_flowTools)) s_flow = false;
+    DlcButtons();
+}
+
+// setup_deps.ps1 -DirectXOnly for the DirectX runtime: only that, whatever else is there or missing (no bundle, Python,
+// numpy, vgmstream-cli or ffmpeg is downloaded, installed or replaced: the user was asked about the DirectX runtime
+// alone). The 64 bit PowerShell (it checks System32), without a window, its output in deps.log, whose last line the
+// state shows; not in the job, so closing this program does not stop an installer.
+static bool StartDeps(HWND wnd)
+{
+    std::string ps = SystemExe("WindowsPowerShell\\v1.0\\powershell.exe");
+    if (ps.empty()) ps = "powershell.exe";
+    std::string line = Quote(ps) + " -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + Quote(s_flowTools + "\\setup_deps.ps1") +
+                       " -DirectXOnly";
+    std::vector<char> l(line.begin(), line.end());
+    l.push_back(0);
+    CreateDirectoryA(ToolsBase().c_str(), NULL);
+    CreateDirectoryA(DlcWork().c_str(), NULL);
+    s_dlcLogPath = DlcWork() + "\\deps.log";
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE log = CreateFileA(s_dlcLogPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE nul = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+    STARTUPINFOA si = { sizeof(si) };
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nul;
+    si.hStdOutput = si.hStdError = log;
+    PROCESS_INFORMATION pi = {};
+    BOOL ok = log != INVALID_HANDLE_VALUE &&
+              CreateProcessA(NULL, l.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, s_flowTools.c_str(), &si, &pi);
+    if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+    if (!ok) {
+        MessageBoxA(wnd, "setup_deps.ps1 could not be started. Set up DLC goes on without the DLC tracks.", "glimpse_fix",
+                    MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    s_taskProc = pi.hProcess;
+    s_taskJob = NULL;
+    s_task = DLC_DEPS;
+    s_taskStart = GetTickCount();
+    s_taskStopped = false;
+    s_taskRan = true;
+    SetTimer(wnd, kDlcTimer, 500, NULL);
+    DlcButtons();
+    DlcSetText("Installing the DirectX runtime (Windows asks for admin rights). Set up DLC goes on once it is done.", false);
+    return true;
+}
+
+static void DlcDepsFinished(HWND wnd)
+{
+    if (!s_flow) return;
+    if (!D3DCompilerThere()) s_skipDirectX = true;  // the build says what it left out
+    FlowBuild(wnd);
+}
+
+// the DirectX runtime for the tracks (asked once), then the build
+static void FlowAfterTools(HWND wnd)
+{
+    if (FindPython().exe.empty()) {
+        s_flow = false;
+        MessageBoxA(wnd, kNoPython, "glimpse_fix", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (!D3DCompilerThere() && !s_skipDirectX) {
+        bool canRun = FileExists(s_flowTools + "\\setup_deps.ps1");
+        std::string q = "The DLC tracks Quarry and Minepit Park need Microsoft's DirectX End-User Runtime (June 2010), which is "
+                        "not on this PC (D3DCompiler_41.dll is missing).\n\n";
+        q += canRun ? "Install it now? It comes from Microsoft (setup_deps.ps1 gets it), and Windows asks for admin rights.\n\n"
+                      "No: go on without the tracks; the DLC cars and the Deadline mode work all the same."
+                    : "Go on without the tracks? The DLC cars and the Deadline mode work all the same.";
+        int a = MessageBoxA(wnd, q.c_str(), "glimpse_fix", (canRun ? MB_YESNOCANCEL : MB_OKCANCEL) | MB_ICONQUESTION);
+        if (a == IDCANCEL) {
+            s_flow = false;
+            DlcSetText("Not set up.", false);
+            return;
+        }
+        if (a == IDYES && StartDeps(wnd)) return;
+        s_skipDirectX = true;
+    }
+    FlowBuild(wnd);
+}
+
+static bool StartDownload(HWND wnd, const std::string& url)
+{
+    CreateDirectoryA(ToolsBase().c_str(), NULL);
+    CreateDirectoryA(DlcWork().c_str(), NULL);
+    s_dl.url = url;
+    s_dl.step = "Starting";
+    s_dl.error.clear();
+    s_dl.done = s_dl.total = 0;
+    s_dl.ok = false;
+    s_dl.cancel = 0;
+    s_dlcLogPath = DlcWork() + "\\download.log";
+    s_dl.log = fopen(s_dlcLogPath.c_str(), "w");
+    HANDLE t = CreateThread(NULL, 0, DownloadThread, NULL, 0, NULL);
+    if (!t) {
+        if (s_dl.log) fclose(s_dl.log);
+        s_dl.log = NULL;
+        MessageBoxA(wnd, "The download could not be started.", "glimpse_fix", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    s_taskProc = t;
+    s_taskJob = NULL;
+    s_task = DLC_DOWNLOAD;
+    s_taskStart = GetTickCount();
+    s_taskStopped = false;
+    s_taskRan = true;
+    SetTimer(wnd, kDlcTimer, 500, NULL);
+    DlcButtons();
+    DlcSetText("Getting the DLC tools: starting", false);
+    return true;
+}
+
+static void DlcDownloadFinished(HWND wnd)
+{
+    bool flow = s_flow;
+    if (s_taskStopped) {
+        s_flow = false;
+        // a Stop that came while it was unpacking or putting the tools in place: they were installed all the same
+        DlcSetText(s_dl.ok ? "Stopped. The DLC tools were installed already." : "Download stopped; nothing was installed.", false);
+        return;
+    }
+    if (!s_dl.ok) {
+        s_flow = false;
+        DlcSetText("The DLC tools could not be downloaded.", true);
+        DlcFailed(wnd, "The DLC tools could not be downloaded or put in place:\n" + s_dl.error, std::vector<std::string>());
+        return;
+    }
+    Status("DLC tools installed");
+    DlcSetText("The DLC tools are ready.", false);
+    if (flow) FlowAfterTools(wnd);
+}
+
+// Python (the DLC tools' own or the py launcher) and what the tracks need; else the DLC tools are offered, with their
+// size and where they come from, and downloaded only after Yes
+static void FlowGetTools(HWND wnd)
+{
+    Python py = FindPython();
+    bool trackTools = py.bundled || (HaveTool("vgmstream-cli") && HaveTool("ffmpeg"));
+    if (!py.exe.empty() && trackTools) {
+        FlowAfterTools(wnd);
+        return;
+    }
+    bool tooOld = FileExists(ToolsDir() + "\\" + kToolsPython);  // there, but not a bundle this program knows (FindPython)
+    std::string url = ToolsUrl();
+    HttpResult r = {};
+    bool reach = false;
+    if (!url.empty()) {
+        DlcSetText("Looking up the DLC tools on GitHub...", false);
+        UpdateWindow(s_dlcState);
+        HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+        reach = HttpFetch(url, true, 0, [](const char*, DWORD) { return true; }, r);
+        SetCursor(old);
+    } else {
+        r.error = "this program's version is not known";
+    }
+    if (!reach) {
+        if (!py.exe.empty()) {
+            s_flowNotes.push_back("The DLC tools could not be reached (" + r.error + "), so the Python on this PC is used; the DLC "
+                                  "tracks may be left out.");
+            FlowAfterTools(wnd);
+            return;
+        }
+        s_flow = false;
+        DlcSetText("Not set up: converting the DLC needs Python 3 or the DLC tools.", true);
+        std::string m = "The DLC tools could not be downloaded from\n" + url + "\n(" + r.error + ").\n\n" + kNoPython;
+        MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    std::string q;
+    if (py.exe.empty())
+        q = std::string(tooOld ? "The DLC tools on this PC are incomplete or of a kind this version of glimpse_fix does not know."
+                               : "Converting the DLC needs the DLC tools of glimpse_fix (Python with numpy, vgmstream-cli and "
+                                 "ffmpeg). They are not on this PC yet.") + "\n\nDownload them now?";
+    else
+        q = "Python was found, but not vgmstream-cli and ffmpeg, which the DLC tracks need. The DLC tools of glimpse_fix bring "
+            "all of it (Python with numpy, vgmstream-cli and ffmpeg).\n\nDownload them now? (No: go on with the Python on this "
+            "PC; the DLC tracks may be left out.)";
+    q += "\n\nSize: " + Megabytes(r.total) + "\nFrom: " + url + "\nTo: " + ToolsDir() +
+         "\n\nThe download is checked against the SHA-256 checksum published next to it. Your DLC is not uploaded anywhere.";
+    if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+        if (!StartDownload(wnd, url)) s_flow = false;
+        return;
+    }
+    if (!py.exe.empty()) {
+        FlowAfterTools(wnd);
+        return;
+    }
+    s_flow = false;
+    DlcSetText("Not set up: converting the DLC needs the DLC tools (or Python 3).", false);
+}
+
+// the install plan in plain words, then the install after one Yes (older archives in glimpse_dlc are moved aside)
+static void FlowAskInstall(HWND wnd, const DlcStatus& st)
+{
+    std::string what = ContentSummary(ReadLines(DlcStaging() + "\\" + kDlcManifest)), files = st.text;
+    const char pre[] = "Ready to install: ";
+    if (!files.compare(0, sizeof(pre) - 1, pre)) files = files.substr(sizeof(pre) - 1);
+    size_t dot = files.find(". ");
+    if (dot != std::string::npos) files = files.substr(0, dot);
+    if (!files.empty() && files.back() == '.') files.pop_back();
+    std::string q = "Add the converted DLC to the game?\n\n";
+    if (!what.empty()) q += "Adds: " + what + ".\n";
+    q += "Into: " + s_taskGame + "\\glimpse_dlc\nFiles: " + files + ".\n\nYour saves are backed up first. Only files this program "
+         "installed before are replaced; nothing else in the game folder is changed. Uninstall takes it out again.";
+    if (!st.others.empty())
+        q += "\n\nglimpse_dlc also holds archives that are not from this build (" + JoinAnd(st.others) + "). The game would lay "
+             "them over the new DLC, so they are moved to glimpse_dlc_replaced_<date> in the game folder; Uninstall puts them back.";
+    for (size_t i = 0; i < s_flowNotes.size() && i < 3; i++) q += "\n\nNote: " + s_flowNotes[i];
+    if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        s_flow = false;
+        DlcSetText("Not installed. The converted DLC is kept: Set up DLC (or Install) adds it later.", false);
+        return;
+    }
+    DlcInstall(wnd, true, !st.others.empty());
+    if (!DlcBusy()) s_flow = false;
+}
+
+// installed: the [DLC] keys the build needs on (no question: Set up DLC was asked for), and the summary
+static void FlowDone(HWND wnd, const DlcStatus& st)
+{
+    std::vector<std::string> m = ReadLines(DlcStaging() + "\\" + kDlcManifest), on;
+    for (const std::string& l : m) {
+        if (l.compare(0, 4, "ini\t")) continue;
+        std::string kv = l.substr(4);
+        size_t tab = kv.find('\t');
+        if (tab == std::string::npos) continue;
+        Option* o = Find(kv.substr(0, tab).c_str());
+        if (!o || strcmp(o->section, "DLC") || o->kind != BOOL_OPT || kv.substr(tab + 1) != "1" || IsOn(o->key)) continue;
+        SetValue(*o, "1");
+        on.push_back(IniShortName(*o));
+    }
+    bool saved = true;
+    if (!on.empty()) {
+        LoadControls();
+        saved = SaveIni();
+    }
+    std::string what = ContentSummary(m);
+    std::string text = (what.empty() ? std::string("The converted DLC is") : what + " are") + " now in the game.";
+    std::string keys = on.empty() ? " Its settings on this page were on already." : " Turned on for it: " + JoinAnd(on) + ".";
+    std::string msg = text + keys;
+    if (!saved) msg += "\n\nThe settings could not be saved to " + std::string(s_path) + ".";
+    if (!FileExists(s_taskGame + "\\dinput8.dll"))
+        msg += "\n\nglimpse_fix itself (dinput8.dll) is not in the game folder yet; the DLC shows up only with it.";
+    for (size_t i = 0; i < s_flowNotes.size() && i < 3; i++) msg += "\n\nNote: " + s_flowNotes[i];
+    if (st.state == "WARN")
+        for (size_t i = 0; i < st.details.size() && i < 4; i++) msg += "\n\n" + st.details[i];
+    DlcSetText(text + keys, st.state == "WARN");
+    Status(saved ? "DLC set up" : "Could not write the INI");
+    MessageBoxA(wnd, msg.c_str(), "glimpse_fix", MB_OK | (st.state == "WARN" ? MB_ICONWARNING : MB_ICONINFORMATION));
+}
+
+static void DlcSetup(HWND wnd)
+{
+    static bool asking;  // a click that comes while its own questions are open (they let messages through)
+    if (asking) return;
+    if (DlcBusy()) {
+        if (FlowStoppable()) {
+            const char* q = s_task == DLC_DOWNLOAD ? "Stop the download of the DLC tools?"
+                                                   : "Stop Set up DLC? The conversion steps finished so far are kept.";
+            HANDLE task = s_taskProc;  // the flow goes on while the question is open: stop only the step it was about
+            asking = true;
+            bool yes = MessageBoxA(wnd, q, "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES;
+            asking = false;
+            if (yes && s_taskProc == task && FlowStoppable()) DlcStop();
+        }
+        return;
+    }
+    asking = true;
+    bool ready = EnsureGameDir(wnd);
+    std::string dump, tools;
+    if (ready) ready = EnsureDumpFolder(wnd, dump);
+    if (ready) tools = FindTools(wnd);
+    asking = false;
+    if (!ready || tools.empty() || DlcBusy()) return;
+    s_flow = true;
+    s_flowNotes.clear();
+    s_flowDump = dump;
+    s_flowTools = tools;
+    s_taskRan = true;
+    asking = true;
+    FlowGetTools(wnd);  // asks before the download and the DirectX runtime, then starts the first step
+    asking = false;
 }
 
 static const char* const kPageText[kPageCount] = {
@@ -1275,8 +2891,12 @@ static void ShowPage(int page)
     ShowWindow(s_undoText, presets);
     if (page == 0) UpdateUndo();
     int dlc = page == kDlcPage ? SW_SHOW : SW_HIDE;
-    for (HWND h : { s_dlcBrowse, s_dlcBuild, s_dlcInstall, s_dlcUninstall, s_dlcLog, s_dlcState }) ShowWindow(h, dlc);
-    if (page == kDlcPage) DlcRefresh();
+    for (HWND h : { s_dlcBrowse, s_dlcFound, s_dlcSetup, s_dlcBuild, s_dlcInstall, s_dlcUninstall, s_dlcLog, s_dlcState })
+        ShowWindow(h, dlc);
+    if (page == kDlcPage) {
+        DlcRefresh();
+        DlcShowFound();
+    }
     s_infoWarn = false;
     SetWindowTextA(s_info, page == 0 ? "Before a preset is applied, your own settings are kept, and \"Back to your settings\" "
                                        "puts them back. Presets change only this INI, never the game's own options or your profile."
@@ -1460,9 +3080,10 @@ static HWND Child(const char* cls, const char* text, DWORD style, int x, int y, 
 }
 
 enum { ID_NAV0 = 10, ID_PRESET0 = 40, ID_OPEN = 30, ID_CLOSE = 31, ID_RESTORE = 32, ID_UNDO = 33, ID_LAUNCH = 34,
-       ID_DLCBROWSE = 35, ID_DLCBUILD = 36, ID_DLCINSTALL = 37, ID_DLCLOG = 38, ID_DLCUNINSTALL = 39, ID_OPTION0 = 100 };
-static_assert(ID_NAV0 + kPageCount <= ID_OPEN && ID_DLCUNINSTALL < ID_PRESET0 && ID_PRESET0 + kPresetCount <= ID_OPTION0,
-              "control ids overlap");
+       ID_DLCBROWSE = 35, ID_DLCBUILD = 36, ID_DLCINSTALL = 37, ID_DLCLOG = 38, ID_DLCUNINSTALL = 39, ID_DLCSETUP = 50,
+       ID_OPTION0 = 100 };
+static_assert(ID_NAV0 + kPageCount <= ID_OPEN && ID_DLCUNINSTALL < ID_PRESET0 && ID_PRESET0 + kPresetCount <= ID_DLCSETUP &&
+              ID_DLCSETUP < ID_OPTION0, "control ids overlap");
 
 
 static void CreateControls()
@@ -1524,6 +3145,10 @@ static void CreateControls()
             SendMessageA(o.ctrl, EM_LIMITTEXT, TextLimit(o), 0);
             s_dlcBrowse = Child("BUTTON", "...", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(browseX), y, S(40), S(28), ID_DLCBROWSE,
                                 R_ACTION, s_font);
+            // the line below it: the packages found in that folder (a row of its own, kDlcExtraRows)
+            s_dlcFound = Child("STATIC", "", SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, S(kContentX), y + S(kRowH) + S(2),
+                               S(kWidth - kContentX - 24), S(22), 0, R_DIM, s_fontSmall);
+            row[page]++;
         } else if (o.kind == BOOL_OPT) {
             o.ctrl = Child("BUTTON", "", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(ctrlX), y + S(2), S(46), S(22), id, R_TOGGLE, s_font);
         } else if (o.kind == TEXT) {
@@ -1538,20 +3163,23 @@ static void CreateControls()
             o.value = Child("STATIC", "", SS_LEFT | SS_CENTERIMAGE, S(ctrlX) + S(200), y, S(140), S(26), 0, R_VALUE, s_font);
         }
     }
-    // the DLC page: after its options the buttons, then the state of the last build or install (kDlcExtraRows)
+    // the DLC page: after its options Set up DLC, the single steps as smaller buttons beside it, then the state of the
+    // last task (kDlcExtraRows)
     int dlcY = S(kRowTop) + row[kDlcPage] * S(kRowH) + S(10);
-    s_dlcBuild = Child("BUTTON", DlcBusy() && s_task == DLC_BUILD ? "Stop" : "Build DLC", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
-                       S(kContentX), dlcY, S(130), S(32), ID_DLCBUILD, R_ACTION, s_font);
-    s_dlcInstall = Child("BUTTON", "Install", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX + 140), dlcY, S(110), S(32),
-                         ID_DLCINSTALL, R_ACTION, s_font);
-    s_dlcUninstall = Child("BUTTON", "Uninstall", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX + 260), dlcY, S(110), S(32),
-                           ID_DLCUNINSTALL, R_ACTION, s_font);
-    s_dlcLog = Child("BUTTON", "Open log", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX + 380), dlcY, S(110), S(32), ID_DLCLOG,
-                     R_ACTION, s_font);
-    s_dlcState = Child("STATIC", s_dlcText.c_str(), SS_LEFT | SS_NOPREFIX, S(kContentX), dlcY + S(42), S(kWidth - kContentX - 24),
-                       S(46), 0, R_LABEL, s_font);
-    EnableWindow(s_dlcInstall, !DlcBusy());
-    EnableWindow(s_dlcUninstall, !DlcBusy());
+    s_dlcSetup = Child("BUTTON", "Set up DLC", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(kContentX), dlcY, S(150), S(34), ID_DLCSETUP,
+                       R_PRIMARY, s_fontBold);
+    const int smallX = kContentX + 150 + 24, smallW = 92, smallStep = 100;
+    s_dlcBuild = Child("BUTTON", "Build", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(smallX), dlcY + S(4), S(smallW), S(26),
+                       ID_DLCBUILD, R_ACTION, s_fontSmall);
+    s_dlcInstall = Child("BUTTON", "Install", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(smallX + smallStep), dlcY + S(4), S(smallW),
+                         S(26), ID_DLCINSTALL, R_ACTION, s_fontSmall);
+    s_dlcUninstall = Child("BUTTON", "Uninstall", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(smallX + 2 * smallStep), dlcY + S(4),
+                           S(smallW), S(26), ID_DLCUNINSTALL, R_ACTION, s_fontSmall);
+    s_dlcLog = Child("BUTTON", "Open log", WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY, S(smallX + 3 * smallStep), dlcY + S(4), S(smallW),
+                     S(26), ID_DLCLOG, R_ACTION, s_fontSmall);
+    s_dlcState = Child("STATIC", s_dlcText.c_str(), SS_LEFT | SS_NOPREFIX, S(kContentX), dlcY + S(46), S(kWidth - kContentX - 24),
+                       S(66), 0, R_LABEL, s_font);
+    DlcButtons();
     s_info = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(kHeight - 122), S(kWidth - kContentX - 24), S(72), 0,
                    R_DIM, s_font);
     s_status = Child("STATIC", "", WS_VISIBLE | SS_LEFT | SS_PATHELLIPSIS | SS_CENTERIMAGE, S(kContentX), S(kHeight - 46),
@@ -1585,11 +3213,13 @@ static void Open()
     s_backedUp = false;
     s_opened.clear();
     if (LoadIni()) s_opened = s_lines;
+    const char* steam = s_viaSteam ? " (found through Steam)" : "";
     if (s_opened.empty()) {
         s_lines.clear();
-        Status("No SplitSecondPad.ini here yet: it is created with the first change.");
+        std::string msg = std::string("No SplitSecondPad.ini here yet: it is created with the first change.") + steam;
+        Status(msg.c_str());
     } else {
-        std::string msg = std::string("Editing ") + s_path;
+        std::string msg = std::string("Editing ") + s_path + steam;
         Status(msg.c_str());
     }
     LoadControls();
@@ -1702,12 +3332,25 @@ static void DrawButton(const DRAWITEMSTRUCT* di)
         if (focus) FocusOutline(dc, r, S(8));
         return;
     }
+    if (role == R_PRIMARY) {  // Set up DLC: a filled pill in the accent colour, dark text
+        FillRect(dc, &r, s_backBrush);
+        COLORREF fill = disabled ? kField : pressed ? RGB(215, 98, 12) : kAccent;
+        RoundRect(dc, r, S(10), fill, fill);
+        SelectObject(dc, s_fontBold);
+        SetTextColor(dc, disabled ? kOff : kBack);
+        DrawTextA(dc, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        if (focus) {
+            RECT f = { r.left + S(3), r.top + S(3), r.right - S(3), r.bottom - S(3) };
+            FocusOutline(dc, f, S(8));
+        }
+        return;
+    }
     // presets and actions: outlined pills, filled while pressed (the launch button on the sidebar)
     FillRect(dc, &r, role == R_LAUNCH ? s_sideBrush : s_backBrush);
     bool current = role == R_PRESET && PresetMatches(kPresets[GetDlgCtrlID(di->hwndItem) - ID_PRESET0]);
     COLORREF line = current || role == R_LAUNCH ? kAccent : disabled ? kField : kBorder;
     RoundRect(dc, r, S(10), pressed ? kSideSel : role == R_LAUNCH ? kSide : kField, line);
-    SelectObject(dc, current ? s_fontBold : s_font);
+    SelectObject(dc, current ? s_fontBold : (HFONT)SendMessageA(di->hwndItem, WM_GETFONT, 0, 0));
     SetTextColor(dc, disabled ? kOff : kText);
     DrawTextA(dc, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     if (focus) {
@@ -1865,16 +3508,20 @@ static void ShowHelpFor(HWND hwnd)
         return;
     }
     struct { HWND h; const char* text; } dlc[] = {
-        { s_dlcBrowse, "Pick the Xbox DLC folder." },
-        { s_dlcBuild, "Converts your DLC on this PC with Python (tools\\dlc\\build_all.py; a few minutes, about 10 the first "
-                      "time; this window can be used meanwhile). The result goes to %LOCALAPPDATA%\\glimpse_fix\\dlc_staging; "
-                      "the game folder is not changed. Nothing is downloaded or sent anywhere." },
-        { s_dlcInstall, "Shows what it will do, then copies the converted files into glimpse_dlc in the game folder, after "
-                        "a copy of your saves (Split Second backup_<date>_dlc). It only ever replaces or removes files it "
-                        "installed itself." },
+        { s_dlcBrowse, "The Split/Second DLC found on this PC to pick from, or another folder (425607E7, its subfolder "
+                       "00000002, or a folder with the package files)." },
+        { s_dlcSetup, "All in one go: finds your Xbox DLC and the game, gets the DLC tools if they are missing (asks first), "
+                      "converts the DLC on this PC (a few minutes, about 10 the first time; this window can be used meanwhile), "
+                      "shows what it will add and, after your Yes, installs it into glimpse_dlc in the game folder (your saves "
+                      "are backed up first) and turns on the settings it needs." },
+        { s_dlcBuild, "Single step: converts your DLC on this PC with Python (tools\\dlc\\build_all.py). The result goes to "
+                      "%LOCALAPPDATA%\\glimpse_fix\\dlc_staging; the game folder is not changed. Nothing is sent anywhere." },
+        { s_dlcInstall, "Single step: shows what it will do, then copies the converted files into glimpse_dlc in the game "
+                        "folder, after a copy of your saves (Split Second backup_<date>_dlc). It only ever replaces or removes "
+                        "files it installed itself." },
         { s_dlcUninstall, "Shows what it will do, then removes the files Install copied into glimpse_dlc (after a copy of your "
                           "saves) and puts back what Install moved aside. Files that were there before stay." },
-        { s_dlcLog, "The log of the last build, install or uninstall." },
+        { s_dlcLog, "The log of the last build, install, uninstall or download." },
     };
     for (auto& d : dlc)
         if (hwnd == d.h && d.h) {
@@ -1968,6 +3615,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
                     SendMessageA(o.ctrl, EM_SETSEL, at > (DWORD)back ? at - back : 0, at > (DWORD)back ? at - back : 0);
                 }
                 Changed(o);
+                if (!strcmp(o.key, "DumpFolder")) SetTimer(wnd, kFoundTimer, 400, NULL);  // the packages line, once typing pauses
             }
             if (code == BN_SETFOCUS || (IsText(o) && code == EN_SETFOCUS)) ShowHelpFor(o.ctrl);
         } else if (id >= ID_NAV0 && id < ID_NAV0 + kPageCount) {
@@ -1982,13 +3630,12 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
             Status(r > 32 ? "Starting Split/Second through Steam" : "Could not open Steam (is it installed?)");
         } else if (id == ID_LAUNCH && code == BN_SETFOCUS) {
             ShowHelpFor(s_launch);
-        } else if (id >= ID_DLCBROWSE && id <= ID_DLCUNINSTALL && code == BN_SETFOCUS) {
+        } else if (((id >= ID_DLCBROWSE && id <= ID_DLCUNINSTALL) || id == ID_DLCSETUP) && code == BN_SETFOCUS) {
             ShowHelpFor((HWND)lp);
         } else if (id == ID_DLCBROWSE && code == BN_CLICKED) {
-            Option* o = Find("DumpFolder");
-            std::string dir = NoTrailingSlash(GetValue(*o));
-            if (PickFolder(wnd, L"Your Xbox 360 DLC folder (425607E7 or its subfolder 00000002)", dir))
-                SetWindowTextA(o->ctrl, dir.c_str());  // EN_CHANGE saves it
+            BrowseDlcFolder(wnd);
+        } else if (id == ID_DLCSETUP && code == BN_CLICKED) {
+            DlcSetup(wnd);
         } else if (id == ID_DLCBUILD && code == BN_CLICKED) {
             DlcBuild(wnd);
         } else if (id == ID_DLCINSTALL && code == BN_CLICKED) {
@@ -2002,7 +3649,13 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         } else if (id == ID_RESTORE) {
             RestoreBackup(wnd);
         } else if (id == ID_OPEN) {
-            if (PickIni(wnd)) Open();
+            if (DlcBusy()) {
+                Status("Not while a DLC task runs");
+            } else if (PickIni(wnd)) {
+                s_viaSteam = false;
+                Open();
+                if (s_page == kDlcPage) ShowPage(s_page);
+            }
         } else if (id == ID_CLOSE) {
             SendMessageA(wnd, WM_CLOSE, 0, 0);
         }
@@ -2010,21 +3663,43 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_TIMER:
         if (wp == kDlcTimer) DlcPoll(wnd);
+        if (wp == kFoundTimer) {
+            KillTimer(wnd, kFoundTimer);
+            DlcShowFound();
+        }
         return 0;
     case WM_CLOSE:
-        // a DLC build or a dry run may be stopped (a build keeps its finished steps); an install or uninstall is let finish
+        // a DLC build, the download or a dry run may be stopped (a build keeps its finished steps); an install or
+        // uninstall is let finish; the DirectX installer runs on in its own window
         if (s_task == DLC_INSTALL || s_task == DLC_UNINSTALL) {
             MessageBoxA(wnd, s_task == DLC_INSTALL ? "The DLC is being installed. Please wait until it is done."
                                                    : "The DLC is being removed. Please wait until it is done.",
                         "glimpse_fix", MB_OK | MB_ICONINFORMATION);
             return 0;
         }
-        if (DlcBusy()) {
-            const char* q = s_task == DLC_BUILD ? "The DLC build is still running. Stop it and close?"
-                                                : "The DLC install is still being checked (nothing has been changed yet). "
-                                                  "Stop and close?";
+        if (DlcBusy() && s_task != DLC_DEPS) {
+            const char* q = s_task == DLC_BUILD      ? "The DLC build is still running. Stop it and close?"
+                            : s_task == DLC_DOWNLOAD ? "The DLC tools are still being downloaded. Stop and close?"
+                                                     : "The DLC install is still being checked (nothing has been changed yet). "
+                                                       "Stop and close?";
             if (MessageBoxA(wnd, q, "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return 0;
+            // the task may have ended while the question was open, and Set up DLC gone on with the next one
+            if (s_task == DLC_INSTALL || s_task == DLC_UNINSTALL) {
+                MessageBoxA(wnd, "The DLC is being installed or removed now. Please wait until it is done.", "glimpse_fix",
+                            MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
             DlcStop();
+            if (s_task == DLC_DOWNLOAD && WaitForSingleObject(s_taskProc, 10000) == WAIT_TIMEOUT) {
+                // not in the middle of putting the tools in place (a Stop does not end that): wait for it
+                EnterCriticalSection(&s_dl.cs);
+                bool placing = s_dl.step == "Installing";
+                LeaveCriticalSection(&s_dl.cs);
+                if (placing) {
+                    SetCursor(LoadCursor(NULL, IDC_WAIT));
+                    WaitForSingleObject(s_taskProc, INFINITE);
+                }
+            }
         }
         DestroyWindow(wnd);
         return 0;
@@ -2075,7 +3750,7 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         EnumChildWindows(wnd, DestroyChild, 0);
         for (Option& o : kOptions) o.label = o.ctrl = o.value = NULL;
         s_undo = s_undoText = s_launch = NULL;
-        s_dlcBrowse = s_dlcBuild = s_dlcInstall = s_dlcUninstall = s_dlcLog = s_dlcState = NULL;
+        s_dlcBrowse = s_dlcFound = s_dlcSetup = s_dlcBuild = s_dlcInstall = s_dlcUninstall = s_dlcLog = s_dlcState = NULL;
         CreateControls();
         DlcButtons();
         LoadControls();
@@ -2105,15 +3780,22 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show)
     s_sideBrush = CreateSolidBrush(kSide);
     s_fieldBrush = CreateSolidBrush(kField);
 
-    // the INI next to this program, else ask
+    InitializeCriticalSection(&s_dl.cs);
+    SetErrorMode(SEM_FAILCRITICALERRORS);  // no "insert a disk" windows while the DLC search looks at the drives
+
+    // the INI next to this program when it is in the game folder or has an INI next to it (as before); else the one
+    // in the game folder Steam has (only read here), else ask
     GetModuleFileNameA(NULL, s_path, MAX_PATH);
     char* slash = strrchr(s_path, '\\');
     strcpy(slash ? slash + 1 : s_path, "SplitSecondPad.ini");
-    if (GetFileAttributesA(s_path) == INVALID_FILE_ATTRIBUTES) {
-        char exe[MAX_PATH];
-        strcpy(exe, s_path);
-        strcpy(strrchr(exe, '\\') + 1, "SplitSecond.exe");
-        if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES && !PickIni(NULL)) return 0;
+    if (!FileExists(GameDir() + "\\SplitSecond.exe") && GetFileAttributesA(s_path) == INVALID_FILE_ATTRIBUTES) {
+        std::string steam = SteamGameDir();
+        if (!steam.empty() && steam.size() + 24 < MAX_PATH) {
+            strcpy(s_path, (steam + "\\SplitSecondPad.ini").c_str());
+            s_viaSteam = true;
+        } else if (GetFileAttributesA(s_path) == INVALID_FILE_ATTRIBUTES && !PickIni(NULL)) {
+            return 0;
+        }
     }
 
     WNDCLASSEXA wc = { sizeof(wc) };

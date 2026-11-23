@@ -30,6 +30,15 @@ projects, under licenses that allow this:
      CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
      DEALINGS IN THE SOFTWARE.
 
+3. The DLC tools (glimpse_fix-dlc-tools-<version>.zip: a separate download, not in this zip)
+   The programs the DLC converters run, unmodified, each under its own license: Python (embeddable, python.org;
+   PSF License), numpy (PyPI; BSD 3-Clause), vgmstream-cli (github.com/vgmstream/vgmstream; ISC style license)
+   and ffmpeg (an LGPL build of FFmpeg-Builds; GNU LGPL 2.1 or later). They are not part of glimpse_fix and not
+   under its GPL; the zip carries their license texts, THIRD_PARTY_dlc_tools.txt (where each one's source is) and
+   a manifest with the version, download URL and SHA-256 of everything. setup_deps.bat -Install unpacks it into
+   %LOCALAPPDATA%\glimpse_fix\tools. D3DCompiler_41.dll is never part of it (Microsoft's DirectX End-User Runtime,
+   installed only with Microsoft's own installer).
+
 
 No game data is part of glimpse_fix: what the DLC converters need of the game (the PC archives, the Havok class
 layouts of SplitSecond.exe) and of the DLC (your own Xbox 360 packages) is read on your PC, and the converted files

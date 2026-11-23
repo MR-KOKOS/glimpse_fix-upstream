@@ -1,12 +1,18 @@
 # glimpse_fix: build the PC files of your own Xbox 360 Split/Second DLC, in one go.
 #
-#   py -3 -I build_all.py --dump <DLC folder> --game <Split/Second folder> [--staging <dir>] [--work <dir>]
+#   py -3 -I build_all.py --dump <DLC folder> [--game <Split/Second folder>] [--staging <dir>] [--work <dir>]
 #       [--no-mode] [--no-track] [--force] [--vgmstream <vgmstream-cli.exe>] [--ffmpeg <ffmpeg.exe>]
 #       [--status <file>] [--hkref <hkref.json>] [--tu4-texts <json>]
 #   py -3 -I build_all.py --check [--staging <dir>] [--game <Split/Second folder>]
 #   py -3 -I build_all.py --preflight [--game <Split/Second folder>] [--dump <DLC folder>] [--work <dir>]
+#   py -3 -I build_all.py --find-game
 #
-# Needs: Python 3.8+ (the cars); the DLC tracks also numpy, vgmstream-cli, ffmpeg and D3DCompiler_41.dll.
+# Needs: Python 3.8+ (the cars); the DLC tracks also numpy, vgmstream-cli, ffmpeg and D3DCompiler_41.dll. The DLC
+# tools bundle (tools/make_dlc_tools.py, unpacked into %LOCALAPPDATA%\glimpse_fix\tools) has all of them but the
+# DLL: when it is there, this script restarts itself in the bundle's python\python.exe -I -X utf8 (unless
+# --no-bundle-python) and uses its vgmstream-cli and ffmpeg (BUNDLE_DIR).
+# --game: default the Steam install of Split/Second (find_steam_game: Steam's folder from the registry, its
+# steamapps\libraryfolders.vdf, appmanifest_297860.acf, steamapps\common\<installdir>\SplitSecond.exe; read only).
 # --tu4-texts (or GLIMPSE_TU4_TEXTS): optional: a TU4 text table (JSON) made outside glimpse_fix (mode/tu4text.py
 # format, game data, never shipped). The official texts need it and the release cannot produce it (it is made with a
 # local development tool that is not part of glimpse_fix); passed to every step, whose converters then use the
@@ -65,6 +71,7 @@ for _p in (HERE, os.path.join(HERE, 'misc')):
         sys.path.insert(0, _p)
 
 TITLE_ID = 0x425607E7
+STEAM_APP = 297860                     # Split/Second on Steam: the game folder when --game is not given
 MANIFEST = 'glimpse_dlc_manifest.tsv'
 MANIFEST_VERSION = 1
 # overlays load in name order: the car pack first, track_* last (it holds the pack's entries too)
@@ -104,6 +111,19 @@ CAR_MODELS = {'deadline': ('Musclecar_17', 'Musclecar_18', 'Musclecar_19', 'Truc
 EXE_DIRS = (os.path.join(os.path.dirname(HERE), 'bin'),                          # glimpse_tools\bin next to dlc
             os.path.join(os.environ.get('LOCALAPPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Local'),
                          'glimpse_fix', 'tools'))
+# the DLC tools bundle (tools/make_dlc_tools.py, glimpse_fix-dlc-tools-<version>.zip of the release), unpacked into
+# %LOCALAPPDATA%\glimpse_fix\tools: python\python.exe (embeddable Python with numpy), vgmstream\vgmstream-cli.exe,
+# ffmpeg\ffmpeg.exe, the version file and the manifest (every file's size and SHA-256). When it is there, build_all.py
+# runs in its Python (it restarts itself there; --no-bundle-python: not) and takes its vgmstream-cli and ffmpeg
+# before any in PATH.
+BUNDLE_DIR = EXE_DIRS[1]
+BUNDLE_VERSION = 'glimpse_dlc_tools.txt'
+BUNDLE_MANIFEST = 'glimpse_dlc_tools_manifest.tsv'
+BUNDLE_FORMATS = (1,)
+BUNDLE_EXES = {'python': ('python', 'python.exe'), 'vgmstream-cli': ('vgmstream', 'vgmstream-cli.exe'),
+               'ffmpeg': ('ffmpeg', 'ffmpeg.exe')}
+NO_BUNDLE_ENV = 'GLIMPSE_NO_BUNDLE_PYTHON'   # set for the restarted build_all.py (no second restart); set by hand = opt-out
+                                             # like --no-bundle-python
 # the helper that installs the programs above in their current versions (setup_deps.ps1 next to this script)
 SETUP_HINT = ' Run setup_deps.bat -Install (next to build_all.py) to get it.'
 NEED_FREE_WORK = 4 << 30     # extracted packages, intermediate archives and the staging copy
@@ -260,9 +280,139 @@ def say(*a):
     sys.stdout.flush()
 
 
+# ------------------------------------------------------------------------------------------------- Steam
+def vdf_parse(text):
+    """Valve's text KeyValues (libraryfolders.vdf, appmanifest_*.acf) as nested dicts; keys lower-case. Quoted
+    strings with backslash escapes (\\\\ \\" \\n \\t), { }, // comments."""
+    toks, i, n = [], 0, len(text)
+    esc = {'n': '\n', 't': '\t', '\\': '\\', '"': '"'}
+    while i < n:
+        c = text[i]
+        if c in ' \t\r\n':
+            i += 1
+        elif c == '/' and text.startswith('//', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+        elif c in '{}':
+            toks.append(c)
+            i += 1
+        elif c == '"':
+            i += 1
+            s = []
+            while i < n and text[i] != '"':
+                if text[i] == '\\' and i + 1 < n:
+                    s.append(esc.get(text[i + 1], '\\' + text[i + 1]))
+                    i += 2
+                else:
+                    s.append(text[i])
+                    i += 1
+            toks.append(('s', ''.join(s)))
+            i += 1
+        else:   # an unquoted token
+            j = i
+            while j < n and text[j] not in ' \t\r\n{}"':
+                j += 1
+            toks.append(('s', text[i:j]))
+            i = j
+    root, stack, key = {}, [], None
+    cur = root
+    for t in toks:
+        if t == '{':
+            d = {}
+            if key is not None:
+                cur[key.lower()] = d
+            stack.append(cur)
+            cur, key = d, None
+        elif t == '}':
+            cur = stack.pop() if stack else root
+            key = None
+        elif key is None:
+            key = t[1]
+        else:
+            cur[key.lower()] = t[1]
+            key = None
+    return root
+
+
+def steam_roots():
+    """Steam's folder from the registry (HKCU SteamPath, HKLM InstallPath), read only."""
+    out = []
+    try:
+        import winreg
+    except ImportError:
+        return out
+    for hive, key, name in ((winreg.HKEY_CURRENT_USER, r'Software\Valve\Steam', 'SteamPath'),
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Valve\Steam', 'InstallPath'),
+                            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Valve\Steam', 'InstallPath')):
+        try:
+            with winreg.OpenKey(hive, key, 0, winreg.KEY_READ) as k:
+                v, _ = winreg.QueryValueEx(k, name)
+        except OSError:
+            continue
+        if isinstance(v, str) and v.strip():
+            p = os.path.normpath(v.strip())
+            if os.path.isdir(p) and norm(p) not in (norm(x) for x in out):
+                out.append(p)
+    return out
+
+
+def steam_libraries(root):
+    """The library folders of steamapps\\libraryfolders.vdf (old and new layout), Steam's own folder first."""
+    libs = [root]
+    fn = os.path.join(root, 'steamapps', 'libraryfolders.vdf')
+    try:
+        with open(fn, encoding='utf-8', errors='replace') as f:
+            d = vdf_parse(f.read())
+    except OSError:
+        return libs
+    lf = d.get('libraryfolders')
+    for k, v in sorted(lf.items() if isinstance(lf, dict) else (), key=lambda kv: (len(kv[0]), kv[0])):
+        p = v.get('path') if isinstance(v, dict) else (v if k.isdigit() else None)
+        if isinstance(p, str) and p.strip() and os.path.isabs(p.strip()):   # never a folder relative to the current one
+            p = os.path.normpath(p.strip())
+            if norm(p) not in (norm(x) for x in libs):
+                libs.append(p)
+    return libs
+
+
+def find_steam_game():
+    """(game folder, how it was found) of Split/Second (app STEAM_APP) in the Steam libraries, or (None, why not).
+    Only reads: the registry, libraryfolders.vdf, appmanifest_<app>.acf; the folder must hold SplitSecond.exe."""
+    roots = steam_roots()
+    if not roots:
+        return None, 'Steam was not found in the registry'
+    tried = []
+    for root in roots:
+        for lib in steam_libraries(root):
+            acf = os.path.join(lib, 'steamapps', 'appmanifest_%d.acf' % STEAM_APP)
+            if not os.path.isfile(acf):
+                tried.append(lib)
+                continue
+            try:
+                with open(acf, encoding='utf-8', errors='replace') as f:
+                    st = vdf_parse(f.read()).get('appstate', {})
+            except OSError:
+                continue
+            inst = st.get('installdir') if isinstance(st, dict) else None
+            if not isinstance(inst, str) or not inst or os.path.basename(inst) != inst or inst in ('.', '..'):
+                continue
+            game = os.path.join(lib, 'steamapps', 'common', inst)
+            if os.path.isfile(os.path.join(game, 'SplitSecond.exe')):
+                return game, 'Steam library %s (appmanifest_%d.acf)' % (lib, STEAM_APP)
+            tried.append('%s (listed, but no SplitSecond.exe in %s)' % (lib, game))
+    return None, 'not in the Steam libraries %s' % ', '.join(tried)
+
+
 # ------------------------------------------------------------------------------------------------- inputs
 def find_game(game, read_data=True):
-    """(game folder, resident.ark); read_data=False (install): only that it is the game folder."""
+    """(game folder, resident.ark); read_data=False (install): only that it is the game folder. game None: the Steam
+    install of Split/Second (find_steam_game), else an error asking for --game."""
+    if not game:
+        game, how = find_steam_game()
+        if not game:
+            raise BuildError('No --game given and Split/Second was not found through Steam (%s). Give the game folder '
+                             '(the one with SplitSecond.exe) with --game.' % how)
+        say('game folder found through Steam: %s (%s)' % (game, how))
     game = os.path.abspath(game)
     res = os.path.join(game, 'data', 'resident.ark')
     if not read_data:
@@ -478,11 +628,73 @@ def find_ci(root, rel):
     return p
 
 
+def read_bundle(folder=None):
+    """The DLC tools bundle's version file ({key: value}, 'exe' lines as {name: path}), or None when there is none or
+    its format is unknown."""
+    folder = folder or BUNDLE_DIR
+    fn = os.path.join(folder, BUNDLE_VERSION)
+    try:
+        lines = open(fn, encoding='utf-8-sig').read().splitlines()
+    except OSError:
+        return None
+    b = {'exe': {}, 'folder': folder}
+    for line in lines:
+        f = line.split('\t')
+        if line.startswith('#') or len(f) < 2:
+            continue
+        if f[0] == 'exe' and len(f) >= 3:
+            b['exe'][f[1]] = os.path.join(folder, *f[2].split('/'))
+        else:
+            b[f[0]] = f[1]
+    try:
+        if int(b.get('format', '0')) not in BUNDLE_FORMATS:
+            return None
+    except ValueError:
+        return None
+    return b
+
+
+def bundle_exe(name, b=None):
+    """<bundle>\\python\\python.exe, ...\\vgmstream\\vgmstream-cli.exe, ...\\ffmpeg\\ffmpeg.exe when the bundle has it."""
+    b = b or read_bundle()
+    if not b:
+        return None
+    p = os.path.join(b['folder'], *BUNDLE_EXES[name])
+    return p if os.path.isfile(p) else None
+
+
+def same_file(p, q):
+    try:
+        return os.path.samefile(p, q)
+    except OSError:
+        return norm(p) == norm(q)
+
+
+def check_bundle(b):
+    """Problems of the bundle against its manifest (each file's size and SHA-256): [] when complete."""
+    fn = os.path.join(b['folder'], BUNDLE_MANIFEST)
+    if not os.path.isfile(fn):
+        return ['the bundle has no %s' % BUNDLE_MANIFEST]
+    probs, n = [], 0
+    for line in open(fn, encoding='utf-8-sig'):
+        f = line.rstrip('\r\n').split('\t')
+        if f[0] != 'file' or len(f) < 4:
+            continue
+        p = os.path.join(b['folder'], *f[1].split('/'))
+        n += 1
+        if not os.path.isfile(p):
+            probs.append('missing: %s' % f[1])
+        elif os.path.getsize(p) != int(f[2]) or sha256(p) != f[3]:
+            probs.append('changed or damaged: %s' % f[1])
+    return probs if n else ['%s lists no files' % BUNDLE_MANIFEST]
+
+
 def find_exe(given, name):
-    """--vgmstream/--ffmpeg, else PATH, else <dir>\\<name>.exe or <dir>\\{vgmstream,ffmpeg,bin}\\<name>.exe of EXE_DIRS."""
+    """--vgmstream/--ffmpeg, else the DLC tools bundle's, else PATH, else <dir>\\<name>.exe or
+    <dir>\\{vgmstream,ffmpeg,bin}\\<name>.exe of EXE_DIRS."""
     if given:
         return given if os.path.isfile(given) else None
-    hit = shutil.which(name)
+    hit = bundle_exe(name) or shutil.which(name)
     if hit:
         return hit
     for own in EXE_DIRS:
@@ -538,7 +750,8 @@ def requirements(a, want_track):
     if want_track:
         flags = python_flags()
         if flags is None:
-            warnings.append('The DLC tracks left out: numpy is missing (py -3 -m pip install numpy). Only the cars are built.' + SETUP_HINT)
+            warnings.append('The DLC tracks left out: numpy is missing in this Python (%s). Only the cars are built.%s'
+                            % (sys.executable, SETUP_HINT))
             want_track, flags = False, ['-I']
         else:
             say('numpy found (steps run with %s)' % ' '.join(flags))
@@ -939,6 +1152,9 @@ def build(a, status):
     say('Python %s (%s)' % (sys.version.split()[0], sys.executable))
     if sys.version_info < (3, 8):
         raise BuildError('Python 3.8 or newer is needed (this is %s).' % sys.version.split()[0])
+    b = read_bundle()
+    if b:
+        say('DLC tools bundle %s (%s)' % (b.get('bundle', '?'), b['folder']))
     say('game: %s (resident.ark %d bytes)' % (game, os.path.getsize(resident)))
     pkgs, others, by_role = find_packages(a.dump)
     for p in pkgs:
@@ -1314,6 +1530,10 @@ def build(a, status):
 def check_main(a):
     staging = os.path.abspath(a.staging)
     game = os.path.abspath(a.game) if a.game else None
+    if not game:   # the comparison with the installed files, read only: the Steam install when there is one
+        game, how = find_steam_game()
+        if game:
+            say('game folder found through Steam: %s (%s)' % (game, how))
     errors, notes, m = check_staging(staging, game)
     if m:
         say('Staging folder %s, built %s' % (staging, m['meta'].get('built', '?')))
@@ -1342,14 +1562,25 @@ def preflight_main(a):
     errors += probs
     want_track, vgm, ffm, flags, more = requirements(a, not a.no_track)
     warnings += more
+    b = read_bundle()
+    used = [x for x in (sys.executable, vgm, ffm) if x and b and inside(x, b['folder'])]
+    if b:
+        say('DLC tools bundle %s in %s: Python %s, numpy %s, vgmstream %s, ffmpeg %s; %s' % (
+            b.get('bundle', '?'), b['folder'], b.get('python', '?'), b.get('numpy', '?'), b.get('vgmstream', '?'),
+            b.get('ffmpeg', '?'), 'in use' if used else 'NOT in use'))
+        if used:
+            bprobs = check_bundle(b)
+            say('DLC tools bundle: %s' % ('every file checked' if not bprobs else '%d problem(s)' % len(bprobs)))
+            errors += ['DLC tools bundle %s (unpack it again: setup_deps.bat -Install)' % p for p in bprobs[:10]]
+    else:
+        say('DLC tools bundle: none in %s' % BUNDLE_DIR)
     py = [sys.executable] + flags + ['-B', '-X', 'utf8']
     game = resident = None
-    if a.game:
-        try:
-            game, resident = find_game(a.game)
-            say('game: %s (resident.ark %d bytes)' % (game, os.path.getsize(resident)))
-        except BuildError as ex:
-            errors.append(str(ex))
+    try:
+        game, resident = find_game(a.game)
+        say('game: %s (resident.ark %d bytes)' % (game, os.path.getsize(resident)))
+    except BuildError as ex:
+        (errors if a.game else warnings).append(str(ex))
     env = converter_env(resident or '')
     scripts = [s for s in ENTRY_SCRIPTS if want_track or s not in TRACK_SCRIPTS]
     for s, err in sorted(load_scripts(py, env, scripts).items()):
@@ -1455,12 +1686,38 @@ def dlcaudio_main(argv):
     return 0
 
 
+def in_bundle_python(argv):
+    """Runs this script again in the DLC tools bundle's Python when there is one and this is another Python
+    (--no-bundle-python or GLIMPSE_NO_BUNDLE_PYTHON: not). Returns its exit code, or None to go on here."""
+    if '--no-bundle-python' in argv or os.environ.get(NO_BUNDLE_ENV) or '-h' in argv or '--help' in argv:
+        return None
+    b = read_bundle()
+    exe = bundle_exe('python', b)
+    if not exe or same_file(exe, sys.executable):
+        return None
+    say('Python: the DLC tools bundle %s has its own (%s); running there.' % (b.get('bundle', '?'), exe))
+    env = dict(os.environ)
+    env[NO_BUNDLE_ENV] = '1'
+    env.pop('PYTHONPATH', None)
+    try:
+        return subprocess.run([exe, '-I', '-X', 'utf8', os.path.abspath(__file__)] + list(argv), env=env).returncode
+    except KeyboardInterrupt:
+        return 1
+
+
 def main(argv):
     if argv[:1] == ['_dlcaudio']:
         return dlcaudio_main(argv[1:])
+    code = in_bundle_python(argv)
+    if code is not None:
+        return code
     ap = argparse.ArgumentParser(description='Build the PC files of your own Xbox 360 Split/Second DLC (see README_build.md).')
     ap.add_argument('--dump', help='the Xbox 360 DLC folder (425607E7, or its 00000002 subfolder)')
-    ap.add_argument('--game', help='the Split/Second folder (read only)')
+    ap.add_argument('--game', help='the Split/Second folder (read only; default: the Steam install of Split/Second)')
+    ap.add_argument('--find-game', action='store_true', help='only print the game folder found through Steam '
+                                                             '(exit code 1: none)')
+    ap.add_argument('--no-bundle-python', action='store_true', help='run in this Python even when the DLC tools '
+                                                                    'bundle has its own')
     ap.add_argument('--staging', default=default_staging(), help='where the result goes (default %(default)s)')
     ap.add_argument('--work', default=default_work(), help='intermediate files (default %(default)s)')
     ap.add_argument('--no-mode', action='store_true', help='without the game mode Deadline (the cars only)')
@@ -1480,6 +1737,14 @@ def main(argv):
                                                              'converts nothing')
     ap.add_argument('--status', help='status file for the settings program')
     a = ap.parse_args(argv)
+    if a.find_game:
+        game, how = find_steam_game()
+        if game:
+            say('game\t%s' % game)
+            say('how\t%s' % how)
+            return 0
+        say('none\t%s' % how)
+        return 1
     if a.preflight:
         st = Status(a.status, 1)
         try:
@@ -1503,8 +1768,8 @@ def main(argv):
         st.n = 1
         st.write('OK' if not errors else 'FAILED', 'Staging folder OK' if not errors else errors[0], errors)
         return 0 if not errors else 1
-    if not a.dump or not a.game:
-        ap.error('--dump and --game are needed (or --check)')
+    if not a.dump:
+        ap.error('--dump is needed (or --check, --preflight); --game too unless Steam has Split/Second')
     status = Status(a.status, 12)   # build() sets the real count once it knows the packages
     say('glimpse_fix DLC build, %s' % datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     say('DLC folder %s' % os.path.abspath(a.dump))
