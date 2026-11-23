@@ -90,8 +90,8 @@ static void RefreshSlot(int slot)
     if (was != p.connected) Log("pad %d %s", slot, p.connected ? "connected" : "disconnected");
 }
 
-// VirtualPads=0: the frame hook refreshes the slots that the pad-driven extras read, and notes pad use
-// for the prompt bar glyphs (with virtual pads their GetDeviceState does both)
+// Pads not wrapped: the frame hook keeps the slots' connection state current and notes pad use for the
+// prompt bar glyphs (with virtual pads their GetDeviceState does both)
 void RefreshPadSlots()
 {
     for (int i = 0; i < XUSER_MAX_COUNT && pXInputGetState; i++) {

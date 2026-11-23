@@ -70,7 +70,7 @@ struct Option {
 
 static Option kOptions[] = {
     // Controller
-    { "Controller", "VirtualPads", RANGE, "Virtual pads", "XInput slots presented as Xbox 360 pads. Lower this to make room for a wheel within the four-joystick limit. At 0 the extras still run, but the photo mode cannot keep pad input from the game and pad remaps for the boost and handbrake do not apply.", "4", 0, 0, 4, 1, 0 },
+    { "Controller", "VirtualPads", RANGE, "Virtual pads", "XInput slots presented as Xbox 360 pads. Lower this to make room for a wheel within the four-joystick limit. At 0 the extras still run, but the game reads the pad itself and acts on every button, so the boost, handbrake, power bar fill and photo mode then work with their keys only.", "4", 0, 0, 4, 1, 0 },
     { "Controller", "HideXInputFromDirectInput", BOOL_OPT, "Hide the real pads from DirectInput", "Keeps XInput controllers from showing up twice.", "1" },
     { "Controller", "SeparateTriggers", BOOL_OPT, "Separate triggers", "LT and RT on their own axes, so you can brake and accelerate at the same time. Off = the stock shared axis.", "1" },
     { "Controller", "StickDeadzone", RANGE, "Stick deadzone", "Radial deadzone of the sticks.", "0.15", 0, 0, 0.5, 0.01, 2 },

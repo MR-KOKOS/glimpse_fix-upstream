@@ -90,12 +90,14 @@ static bool Push(BYTE* body, float accel, float dt)
     return true;
 }
 
+// Pads not wrapped (VirtualPads=0): the game reads the pad itself and the fix cannot take a button away from
+// it (RacePad), so the pad's X and Y would boost and also do the game's own action: keys only then
 static WORD PadButtons()
 {
     WORD buttons = 0;
     XINPUT_STATE st;
     // polling empty slots is slow, so only the ones the pad wrapper has seen connected
-    for (DWORD i = 0; i < XUSER_MAX_COUNT && pXInputGetState; i++)
+    for (DWORD i = 0; i < XUSER_MAX_COUNT && PadsWrapped(); i++)
         if (PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS) buttons |= st.Gamepad.wButtons;
     return buttons;
 }
@@ -313,7 +315,7 @@ static void Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, float dt)
         BYTE slots = 0;
         XINPUT_STATE st;
         if (forward > 8.0f && g_cfg.handbrakeButton)
-            for (DWORD i = 0; i < XUSER_MAX_COUNT && pXInputGetState; i++)
+            for (DWORD i = 0; i < XUSER_MAX_COUNT && PadsWrapped(); i++)
                 if (PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS &&
                     (st.Gamepad.wButtons & g_cfg.handbrakeButton))
                     slots |= 1 << i;

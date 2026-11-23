@@ -126,12 +126,13 @@ both. The three cascades then cover a longer distance, so close shadows get a li
 screen and the Low and Medium levels keep their per-level settings.
 
 **Per-frame extras without virtual pads.** The per-frame extras (`OnInputFrame`) normally run from
-the poll of virtual pad 0. With `VirtualPads=0` nothing polls a virtual pad, so the fix runs them
-from the first `PeekMessageA` call in the game's input update instead, and refreshes the XInput
-slots there for the pad-driven extras. The main loop calls that update once per pass, before
-simulation and rendering, at both frame rates. The hook checks the call site and import slot at
-startup and logs whether installation succeeds. Verification of the Russian depot's hook
-signatures is pending.
+the poll of virtual pad 0. When the game's DirectInput interface is not wrapped (`VirtualPads=0`, or
+no XInput DLL) nothing polls a virtual pad, so the fix runs them from the first `PeekMessageA` call
+in the game's input update instead, and keeps the XInput slots' connection state there. The main
+loop calls that update once per pass, before simulation and rendering, at both frame rates. The
+hook checks the call site and import slot at startup and logs whether installation succeeds. The
+game then reads the pad itself, and the fix cannot take a button away from it, so the boost, the
+handbrake, the power bar fill and the photo mode take their keys only.
 
 **Shadow resolution.** In single player all three cascades go into one depth texture of 1024x3072
 (INTZ, or the first of RAWZ, DF24, DF16, D24S8 the device takes), one above the other, drawn through
@@ -522,7 +523,8 @@ problems without it before reporting them.
   `FrameRate=30` if something looks off.
 * Boost, the power bar fill, the photo mode and the HUD key work for player 1 only; the photo mode
   only on a single screen.
-* With `VirtualPads=0` the photo mode cannot keep pad input from the game and the boost and handbrake pad remaps do not apply (see `VirtualPads` in [INI settings](INI.md)).
+* With `VirtualPads=0` the boost, the handbrake, the power bar fill and the photo mode work with
+  their keys only (see `VirtualPads` in [INI settings](INI.md)).
 * `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race
   cards, pause and result screens at 32:9 and 21:9; menus, cards and races at 24:9. Not checked yet:
   split screen, online and LAN menus, power play close-ups, the end-of-season cutscene. A screen whose

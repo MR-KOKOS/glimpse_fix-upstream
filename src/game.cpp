@@ -891,7 +891,7 @@ static const BYTE* const kInputUpdateAnchor = (const BYTE*)G(0x00558969);
 static BOOL WINAPI Hook_PeekMessageA(LPMSG msg, HWND wnd, UINT min, UINT max, UINT remove)
 {
     if (_ReturnAddress() == s_framePeekReturn) {
-        RefreshPadSlots();  // the pad-driven extras read the XInput pads; no virtual device polls them
+        RefreshPadSlots();  // no virtual device polls the XInput slots: their connection state and pad use
         OnInputFrame();
     }
     return s_peekMessage(msg, wnd, min, max, remove);
@@ -902,35 +902,34 @@ static const BYTE* Rel32CallTarget(const BYTE* call)
     return call + 5 + *(const LONG*)(call + 1);
 }
 
-// Without virtual pads no virtual device is polled, so the per-frame extras (OnInputFrame) run from the
-// first PeekMessageA in the game's input update instead. The main loop calls this update once per pass,
-// before simulation and rendering at both frame rates.
+// Without wrapped pads (VirtualPads=0 or no XInput DLL) no virtual device is polled, so the per-frame extras
+// (OnInputFrame) run from the first PeekMessageA in the game's input update instead. The main loop calls this
+// update once per pass, before simulation and rendering at both frame rates.
 static void HookFrameWithoutPads()
 {
     if (!BytesMatch(kInputUpdateAnchor + 0x22, "8B0D") || !BytesMatch(kInputUpdateAnchor + 0x28, "E8") ||
-        !BytesMatch(kInputUpdateAnchor + 0x2D, "8B178B4214568BCFFFD0"))
-        return Log("frame hook: main loop signature mismatch, hook skipped");
+        !BytesMatch(kInputUpdateAnchor + 0x2D, "8B178B4214568BCFFFD0")) {
+        Log("frame hook: main loop signature mismatch, hook skipped");
+        return;
+    }
+    // written out in each check, so tools/buildmap.py can follow the call
     if (!BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28), "83EC20538B1D") ||
-        !BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28) + 0x0A, "566A016A006A006A008D44241C508BF1FFD385C0"))
-        return Log("frame hook: input update signature mismatch, hook skipped");
-
+        !BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28) + 0x0A, "566A016A006A006A008D44241C508BF1FFD385C0")) {
+        Log("frame hook: input update signature mismatch, hook skipped");
+        return;
+    }
     const BYTE* update = Rel32CallTarget(kInputUpdateAnchor + 0x28);
-    auto slot = *(decltype(&PeekMessageA)* const*)(update + 6);  // mov ebx, [PeekMessageA IAT slot]
-    const auto peek = (decltype(&PeekMessageA))GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
-    decltype(&PeekMessageA) current;
-    if (!peek || !ReadProcessMemory(GetCurrentProcess(), slot, &current, sizeof(current), NULL) || current != peek)
-        return Log("frame hook: PeekMessageA import not where expected, hook skipped");
-
-    DWORD old;
-    if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old))
-        return Log("frame hook: cannot make PeekMessageA import writable, hook skipped (error %lu)", GetLastError());
-    s_peekMessage = peek;
+    void** slot = *(void***)(update + 6);  // mov ebx, [PeekMessageA import slot]
+    void* peek = (void*)GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
+    if (!peek || *slot != peek) {
+        Log("frame hook: PeekMessageA import not where expected, hook skipped");
+        return;
+    }
+    s_peekMessage = (decltype(&PeekMessageA))peek;
     s_framePeekReturn = update + 0x1C;
-    const bool hooked = InterlockedCompareExchangePointer((void**)slot, (void*)Hook_PeekMessageA, (void*)peek) == (void*)peek;
-    if (!VirtualProtect(slot, sizeof(*slot), old, &old))
-        Log("frame hook: cannot restore PeekMessageA import protection (error %lu)", GetLastError());
-    Log(hooked ? "frame hook: per-frame extras run from the input update (VirtualPads=0)"
-               : "frame hook: PeekMessageA import changed during installation, hook skipped");
+    void* hook = (void*)Hook_PeekMessageA;
+    WriteMemory(slot, &hook, sizeof(hook));
+    Log("frame hook: per-frame extras run from the input update (pads not wrapped)");
 }
 
 // Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
@@ -1097,7 +1096,7 @@ void ApplyGamePatches()
     s_knownBuild = true;
     Log("SplitSecond.exe build recognised (%s)", BuildName());
     const unsigned mask = g_cfg.patchMask;
-    if (!g_cfg.virtualPads) HookFrameWithoutPads();
+    if (!PadsWrapped()) HookFrameWithoutPads();
     if (g_cfg.separateTriggers && (mask & PATCH_TRIGGERS)) PatchTriggerPreset();
     if (mask & PATCH_RUMBLE) HookRumble();
     if ((g_cfg.skipIntro > 0 || g_cfg.cutsceneSkip) && (mask & PATCH_INTRO)) HookIntroSkip();

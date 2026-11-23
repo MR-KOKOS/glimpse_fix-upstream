@@ -139,6 +139,7 @@ typedef DWORD(WINAPI* XInputGetState_t)(DWORD, XINPUT_STATE*);
 typedef DWORD(WINAPI* XInputSetState_t)(DWORD, XINPUT_VIBRATION*);
 extern XInputGetState_t pXInputGetState;
 extern XInputSetState_t pXInputSetState;
+bool PadsWrapped();  // main.cpp: VirtualPads > 0 and an XInput DLL, so the game's joysticks are the virtual pads
 
 // dinput_wrap.cpp
 IDirectInput8A* WrapDirectInput8A(IDirectInput8A* real);
@@ -340,5 +341,5 @@ void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's
 void CheckOpponentEngineBanks();
 void FixReverbPresets();       // at DLL load: the console's reverb presets (Log=1: logged)
 void PatchPadNames();
-void OnInputFrame();       // called from the virtual device poll (VirtualPads=0: the input update), on the game thread
+void OnInputFrame();       // called from the virtual device poll (pads not wrapped: the input update), on the game thread
 void NotePadActivity();

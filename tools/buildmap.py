@@ -238,17 +238,18 @@ def main():
         if not m and named and named.group(1) in consts:
             m = re.search(r'([0-9A-Fa-f]+)$', '%08X' % consts[named.group(1)])
         if (offset or call) and (offset or call)[1] in consts:
+            # x: the Steam address, reported; y: the mapped one, compared
             anchor = offset or call
-            x = consts[anchor[1]]
-            if x not in table:
+            if consts[anchor[1]] not in table:
                 continue
-            y = table[x] + int(anchor[2], 16)
+            x = consts[anchor[1]] + int(anchor[2], 16)
+            y = table[consts[anchor[1]]] + int(anchor[2], 16)
             if call:
-                pos = y - BASE
-                if not (0 <= pos <= len(b) - 5 and b[pos] == 0xE8):
-                    bad.append((y, 'check', 'expected rel32 CALL for ' + at))
+                if a[x - BASE] != 0xE8 or b[y - BASE] != 0xE8:
+                    bad.append((x, 'check', 'expected rel32 CALL for ' + at))
                     continue
-                y += 5 + struct.unpack_from('<i', b, pos + 1)[0] + int(call[3] or '0', 16)
+                x += 5 + struct.unpack_from('<i', a, x - BASE + 1)[0] + int(call[3] or '0', 16)
+                y += 5 + struct.unpack_from('<i', b, y - BASE + 1)[0] + int(call[3] or '0', 16)
         elif m:
             x = int(m.group(1), 16)
             if x not in table:
@@ -267,11 +268,10 @@ def main():
                 i += 4
             else:
                 i += 1
-        pos = y - BASE
-        got = b[pos:pos + len(want)] if pos >= 0 else b''
-        print('check %s %08X: %s' % (name, y, 'ok' if got == bytes(want) else 'FAILS ' + got.hex()))
+        got = b[y - BASE:y - BASE + len(want)]
+        print('check %s %08X: %s' % (name, x, 'ok' if got == bytes(want) else 'FAILS ' + got.hex()))
         if got != bytes(want):
-            bad.append((y, 'check', 'byte check fails'))
+            bad.append((x, 'check', 'byte check fails'))
     for x, sec, why in bad:
         print('UNMAPPED %08X %-7s %s' % (x, sec, why))
     with open(out, 'w', newline='\n') as f:

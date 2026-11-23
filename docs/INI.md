@@ -8,7 +8,7 @@ The file is split into sections. INIs from older versions with everything under 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). Lower this to make room for a wheel within the game's four-joystick limit. At 0 the per-frame extras run from the game's input update instead of the pad poll. The game then reads the pad through DirectInput itself, so the photo mode cannot keep pad input from the game, and the boost and handbrake pad remaps (Y camera change to D-pad down) do not apply. |
+| `VirtualPads` | 4 | XInput slots exposed as pads (0–4). Lower this to make room for a wheel within the game's four-joystick limit. At 0 (or without an XInput DLL) the per-frame extras run from the game's input update instead of the pad poll. The game then reads the pad through DirectInput itself and acts on every button, and the fix cannot take a button away from it (the camera change on Y does not move to D-pad down). So the fix leaves the pad to the game: the boost, the handbrake, the power bar fill and the photo mode work with their keys only (`BoostKey`, `HandbrakeKey`, `PowerBarFillKey`, `PhotoModeKey` and the photo mode's keys), not with `BoostButton`, `HandbrakeButton`, LS+RS or Back, which would also do the game's own action. |
 | `HideXInputFromDirectInput` | 1 | Don't offer the real XInput devices through DirectInput as well. |
 | `SeparateTriggers` | 1 | 0 = stock shared Z axis. |
 | `StickDeadzone` | 0.15 | Radial stick deadzone (0–1). |
@@ -61,7 +61,7 @@ The file is split into sections. INIs from older versions with everything under 
 | `UltrawideFix` | 1 | Screens wider than 16:9: 1 = the race cameras keep the picture height of 16:9, 2 = experimental full ultrawide (all cameras, menus and HUD at 16:9 in the centre), 0 = stock. |
 | `ZoomKeys` | 0 | 1 = zoom the race camera while `ZoomInKey` / `ZoomOutKey` is held, `ZoomResetKey` back to `FOV`. |
 | `ZoomInKey`, `ZoomOutKey`, `ZoomResetKey` | 0x31, 0x32, 0x33 | Virtual key codes (1, 2, 3 on the top row). |
-| `PhotoMode` | 0 | 1 = photo mode with `PhotoModeKey` or the pad's Back button during a race. |
+| `PhotoMode` | 0 | 1 = photo mode with `PhotoModeKey` or the pad's Back button during a race. With `VirtualPads=0` keys only (see `VirtualPads`). |
 | `PhotoModeKey` | 0x46 | Virtual key code (F). Keys the game uses itself (Esc, P, Enter, arrows) do not work, nor do the photo mode's own controls (W A S D, I J K L, Q E, U O, Shift, Ctrl, the zoom keys). |
 | `CameraShake` | 1.0 | How much the race cameras (chase and bumper) shake on bumps and hits, against motion sickness: below 1.0 their rotation is smoothed (a low pass up to 0.12 s at 0.0), so quick shaking is filtered and turns follow a little later. |
 | `ExplosionShakeOff` | 0 | 1 = no camera shake from explosions, collapsing buildings and power plays nearby (the game's own switch for it). |
