@@ -87,6 +87,7 @@ struct Config {
     float fov;               // field of view factor of the race cameras
     int   ultrawideFix;      // wider than 16:9: 0 stock, 1 race cameras keep the 16:9 picture height (camera.cpp),
                              // 2 experimental: the game's aspect, menus and HUD at 16:9 (ultrawide.cpp)
+    bool  ultrawideBlackBackdrop;  // UltrawideFix=2: extend unlock/reward black bars to cover dimmed 3D strips
     bool  zoomKeys;          // zoom in/out while a key is held, and reset
     int   zoomInKey, zoomOutKey, zoomResetKey;  // virtual key codes
     bool  photoMode;         // free camera during a race, world held still and HUD hidden
