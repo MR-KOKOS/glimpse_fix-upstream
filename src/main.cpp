@@ -230,6 +230,7 @@ static void LoadConfig()
     g_cfg.friendsOnly = IniBool("Online", "FriendsOnly", false);
 
     // [Gameplay]
+    g_cfg.raceEndTiming = IniBool("Gameplay", "RaceEndTiming", false);
     g_cfg.unlockAll = IniBool("Gameplay", "UnlockAll", false);
     g_cfg.bonusContent = IniBool("Gameplay", "BonusContent", false);
     g_cfg.unlockDecals = IniInt("Gameplay", "UnlockDecals", 0);

@@ -60,6 +60,7 @@ struct Config {
     bool  dlcCarsCareer;     // experimental, with dlcCars: also in the career's front-end car select
     int   textureDetail;     // 0 = full; 1-3 skip that many of the textures' top mip levels
     bool  glassFix;          // car glass: no sun specular from the glass's opacity (G-buffer alpha as on the Xbox, glass.cpp)
+    bool  raceEndTiming;     // show Continue when the finish card can accept it
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's
@@ -271,6 +272,8 @@ enum { GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
 
 typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* result, const GFxValue* args, unsigned count);
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
+bool ReadMovieName(void* movie, char* out, size_t size);
+bool SwapSlot(void** slot, void* hook, void** orig);
 void ApplyGamePatches();
 
 // online.cpp - SteamLAN=1 (PROTOTYPE): the game's LAN mode over Steam. A transport for Quazal's

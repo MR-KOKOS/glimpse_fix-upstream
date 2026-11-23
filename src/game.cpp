@@ -1034,6 +1034,75 @@ void OnInputFrame()
     if (TestFeed* feed = GetTestFeed()) feed->glyphsPad = s_padGlyphsShown;
 }
 
+// The finish card has its own prompt timer, but its input handler also requires
+// TransInFinished. Let its original update show the prompt only in that state.
+using RaceEndUpdate = void (__thiscall*)(BYTE*, float);
+static RaceEndUpdate s_raceEndUpdate;
+
+static void ShortenQuickPlayFinish(BYTE* card)
+{
+    // The TransitionIn and SetVisibility command bindings use this movie holder.
+    BYTE* holder = *(BYTE**)(card + 0x7C);
+    void* movie = holder ? *(void**)(holder + 4) : NULL;
+    char name[32];
+    if (!movie || !ReadMovieName(movie, name, sizeof name) || _stricmp(name, "RaceEnd.gfx")) return;
+
+    void** vtable = *(void***)movie;
+    if (vtable != (void**)0x00C41CF4) return;
+    using GetVariable = bool (__thiscall*)(void*, GFxValue*, const char*);
+    auto get = (GetVariable)vtable[0x30 / 4];
+    GFxValue frames = {}, current = {};
+    if (!get(movie, &frames, "mcMain._totalframes") || frames.type != GFX_NUMBER || frames.num != 238 ||
+        !get(movie, &current, "mcMain._currentframe") || current.type != GFX_NUMBER ||
+        current.num < 77 || current.num >= 199)
+        return;
+
+    // Let the next normal movie advance run its frame-200 callback. Credits
+    // activation at frame 77 and the preceding sound cues have already played.
+    GFxValue frame = {};
+    frame.type = GFX_NUMBER;
+    frame.num = 199;
+    auto invoke = (GFxInvoke_t)vtable[0x48 / 4];
+    if (invoke(movie, "mcMain.gotoAndPlay", NULL, &frame, 1))
+        Log("finish card: Quick Play entrance shortened from frame %.0f", current.num);
+}
+
+static void __fastcall Hook_RaceEndUpdate(BYTE* card, void*, float delta)
+{
+    const BYTE* race = *(const BYTE**)(card + 0x38C);
+    if (card[0x394] || !race || race[0x9B2] || *(const int*)(race + 0x9C) != 1) {
+        s_raceEndUpdate(card, delta);
+        return;
+    }
+
+    int state = *(const int*)(card + 0x58);
+    if (state == 1) { // transition in
+        float& elapsed = *(float*)(card + 0x390);
+        constexpr float kQuickPlayEntrance = 3.0f;
+        bool reachedShortEntrance = elapsed < kQuickPlayEntrance && elapsed + delta >= kQuickPlayEntrance;
+        elapsed += delta;
+        if (card[0x7FC] && reachedShortEntrance) ShortenQuickPlayFinish(card);
+        return;
+    }
+    if (state == 2) s_raceEndUpdate(card, delta);
+}
+
+static void InstallRaceEndTiming()
+{
+    if (!g_cfg.raceEndTiming || CurrentBuild() != BUILD_STEAM) return;
+    void** slot = (void**)0x00C208EC;
+    if (*slot != (void*)0x008088C0 ||
+        !BytesMatch(*slot, "80B994030000007565F30F10442404") ||
+        !BytesMatch((void*)0x00808940, "578BF980BF94030000000F84B1000000837F5802")) {
+        Log("finish card: expected update or input handler missing");
+        return;
+    }
+    if (SwapSlot(slot, (void*)Hook_RaceEndUpdate, (void**)&s_raceEndUpdate))
+        Log("finish card: Continue follows transition completion");
+    else
+        Log("finish card: update slot cannot be written");
+}
+
 void ApplyGamePatches()
 {
     if (CurrentBuild() == BUILD_UNKNOWN || !BytesMatch((void*)G(0x0040F0F0), "5355568BB16CCF0000")) {
@@ -1061,5 +1130,6 @@ void ApplyGamePatches()
     if (mask & PATCH_CAMERA) PatchDepthOfField();
     if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
     CheckOpponentEngineBanks();
+    InstallRaceEndTiming();
     if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
 }

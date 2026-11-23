@@ -132,7 +132,7 @@ static bool InList(const char* list, const char* base)
 
 // movie file name: [movie+0x28] = GFxMovieDefImpl (vtable 0xC3D5CC); its file URL is the GString at
 // [[[[def+0x1C]+0x10]+0x1C]+0x20] + 0x0C
-static bool ReadMovieName(void* movie, char* out, size_t size)
+bool ReadMovieName(void* movie, char* out, size_t size)
 {
     __try {
         BYTE* p = *(BYTE**)((BYTE*)movie + 0x28);
@@ -675,7 +675,7 @@ static void __fastcall Hook_Display(void* self, void*)
     s_origSetViewport(self, &full);
 }
 
-static bool SwapSlot(void** slot, void* hook, void** orig)
+bool SwapSlot(void** slot, void* hook, void** orig)
 {
     DWORD old;
     if (!VirtualProtect(slot, 4, PAGE_READWRITE, &old)) return false;
