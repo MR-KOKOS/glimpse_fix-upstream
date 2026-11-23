@@ -111,7 +111,7 @@ static Option kOptions[] = {
     { "Camera", "HudKey", CHOICE, "HUD on/off key", "Switch the HUD off and on during a race.", "0", "0|None;" KEY_CHOICES },
     // Gameplay
     { "Gameplay", "UnlockAll", BOOL_OPT, "Everything unlocked", "All tracks, events, episodes, game modes and cars selectable. Your profile is not changed.", "0" },
-    { "Gameplay", "RaceEndTiming", BOOL_OPT, "Post-race Continue timing", "Show Continue when the single-player finish card accepts it. Shortens the Quick Play entrance and keeps the Season animation. Requires the Steam build and stock finish card.", "0" },
+    { "Gameplay", "RaceEndTiming", BOOL_OPT, "Post-race Continue timing", "Show Continue when the single-player finish card accepts it. Shortens the Quick Play entrance and keeps the Season animation. Requires the English/German Steam build and stock finish card.", "0" },
     { "Gameplay", "BonusContent", BOOL_OPT, "Bonus content", "The PC version's cheat code extras: Expressway track, Cobretti SlipStream, branded cars, Euro livery.", "0" },
     { "Gameplay", "UnlockDecals", CHOICE, "Achievements and decals", "Unlocked in the next single player race and saved with the profile (backed up to glimpse_backup first). Unobtainable = the six ranked online ones and the Pure decal.", "0", "0|As the game;2|Unobtainable only;1|All" },
     { "Gameplay", "CutsceneSkip", BOOL_OPT, "Skippable cutscenes", "The season's cutscenes (Coming up, Next time, the end sequence), the demo movies and the boot movies: the first press of A, B, X, Y, Start, Enter or Space shows \"Press again to skip\", a second press within 3 seconds skips the movie.", "1" },

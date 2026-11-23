@@ -1110,7 +1110,7 @@ static void InstallRaceEndTiming()
 {
     if (!g_cfg.raceEndTiming) return;
     if (CurrentBuild() != BUILD_STEAM) {
-        Log("finish card: Steam build only (%s)", BuildName());
+        Log("finish card: English/German Steam build only (%s)", BuildName());
         return;
     }
     void** slot = (void**)0x00C208EC;
