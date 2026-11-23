@@ -10,8 +10,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "glimpse_fix settings"
       VALUE "ProductName", "glimpse_fix"
-      VALUE "FileVersion", "2.3.0-beta.2"
-      VALUE "ProductVersion", "2.3.0-beta.2"
+      VALUE "FileVersion", "2.3.0-beta.3"
+      VALUE "ProductVersion", "2.3.0-beta.3"
       VALUE "OriginalFilename", "glimpse_config.exe"
     END
   END
