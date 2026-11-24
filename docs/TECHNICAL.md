@@ -125,6 +125,15 @@ shadow cascades from the global `Lighting/CSM_Max` settings (chosen at 0x88A3E0,
 both. The three cascades then cover a longer distance, so close shadows get a little softer. Split
 screen and the Low and Medium levels keep their per-level settings.
 
+**Per-frame extras without virtual pads.** The per-frame extras (`OnInputFrame`) normally run from
+the poll of virtual pad 0. When the game's DirectInput interface is not wrapped (`VirtualPads=0`, or
+no XInput DLL) nothing polls a virtual pad, so the fix runs them from the first `PeekMessageA` call
+in the game's input update instead, and keeps the XInput slots' connection state there. The main
+loop calls that update once per pass, before simulation and rendering, at both frame rates. The
+hook checks the call site and import slot at startup and logs whether installation succeeds. The
+game then reads the pad itself, and the fix cannot take a button away from it, so the boost, the
+handbrake, the power bar fill and the photo mode take their keys only.
+
 **Shadow resolution.** In single player all three cascades go into one depth texture of 1024x3072
 (INTZ, or the first of RAWZ, DF24, DF16, D24S8 the device takes), one above the other, drawn through
 viewports at y = 0, 1024 and 2048, with an A8R8G8B8 colour target of the same size bound that is never
@@ -450,7 +459,7 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with `UltrawideFix=2` and its `Invoke`
   with `SteamLAN=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
-  `Event::start`), read-only
+  `Event::start`, and `PeekMessageA` with `VirtualPads=0`), read-only
   strings and constants (prompt bar icon paths, route marker size),
 * the Direct3D device's vtable, and calls into the game's own functions (dictionary lookup,
   Scaleform `Invoke`/`SetVariable` for the prompt bar, `SetVisible` for the photo mode's overlays,
@@ -514,7 +523,8 @@ problems without it before reporting them.
   `FrameRate=30` if something looks off.
 * Boost, the power bar fill, the photo mode and the HUD key work for player 1 only; the photo mode
   only on a single screen.
-* With `VirtualPads=0` the per-frame extras do not run (see `VirtualPads`).
+* With `VirtualPads=0` the boost, the handbrake, the power bar fill and the photo mode work with
+  their keys only (see `VirtualPads` in [INI settings](INI.md)).
 * `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race
   cards, pause and result screens at 32:9 and 21:9; menus, cards and races at 24:9. Not checked yet:
   split screen, online and LAN menus, power play close-ups, the end-of-season cutscene. A screen whose
@@ -582,6 +592,7 @@ the Russian build's place from `src/build_ru.inc`.
 | `0x004DADE0` | `cLayer_PromptBar`: sets the PC key frames and captions |
 | `0x00CFA5E0` / `0x00CFA6E0` | JOY_AXIS_* / JOY_BUTTON_* name tables |
 | `0x00558880` | Main loop: measure frame time, accumulate ticks, `Update(ticks)`, `Render` |
+| `0x00558991` → `0x00410380` | Main-loop call to the input update. Its first `PeekMessageA` call returns to `0x0041039C` via import slot `0x00B9B270`. |
 | `0x00D747F4`, `0x00D747F0`, `0x00D199D8` | Main loop accumulator, its tick counter (`Sleep(5)` at 5), "max ticks" tweakable (10) |
 | `0x00BA0C14` | 1/30, shared by the main loop, the AI steering controller `0x524AC0`, AI look-ahead grids and data conversions |
 | `0x00BC0BC0` | `cAIPlayer` vtable slot of the AI player update `0x51A8B0`; the AI's skill (0–1) at +0x24 |

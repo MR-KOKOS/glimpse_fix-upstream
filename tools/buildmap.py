@@ -15,6 +15,8 @@ import os, re, struct, sys
 BASE = 0x400000
 ADDR = re.compile(r'\bG\(0x0*([0-9A-Fa-f]{6,8})\)')
 CHECK = re.compile(r'(?:BytesMatch|Matches)\(\s*([^,]+?),\s*"([0-9A-F]+)"\s*\)')
+OFFSET_CHECK = re.compile(r'(k\w+) \+ (0x[0-9a-fA-F]+)')
+CALL_CHECK = re.compile(r'Rel32CallTarget\((k\w+) \+ (0x[0-9a-fA-F]+)\)(?: \+ (0x[0-9a-fA-F]+))?')
 EXTRA = [0x00401000, 0x00CF5000]  # section bounds used in range checks
 # addresses that occur only as operands inside the expected bytes of a byte check. Only these (and
 # the G() addresses) are translated there: other byte groups can look like addresses by chance,
@@ -217,6 +219,9 @@ def main():
                                  open(os.path.join(root, 'src', fn), encoding='utf-8').read()):
                 consts[m.group(1)] = int(m.group(2), 16)
     for name, at, hexs in checks:
+        # Follow the same mapped anchor, offsets and direct call as the runtime hook.
+        offset = OFFSET_CHECK.fullmatch(at)
+        call = CALL_CHECK.fullmatch(at)
         m = re.search(r'0x0*([0-9A-Fa-f]{6,8})', at)
         field = re.match(r'(k\w+)\[0\]\.name$', at)
         named = re.search(r'\b(k\w+)$', at)
@@ -232,12 +237,27 @@ def main():
             continue
         if not m and named and named.group(1) in consts:
             m = re.search(r'([0-9A-Fa-f]+)$', '%08X' % consts[named.group(1)])
-        if not m:
+        if (offset or call) and (offset or call)[1] in consts:
+            # x: the Steam address, reported; y: the mapped one, compared
+            anchor = offset or call
+            if consts[anchor[1]] not in table:
+                continue
+            x = consts[anchor[1]] + int(anchor[2], 16)
+            y = table[consts[anchor[1]]] + int(anchor[2], 16)
+            if call:
+                if a[x - BASE] != 0xE8 or b[y - BASE] != 0xE8:
+                    bad.append((x, 'check', 'expected rel32 CALL for ' + at))
+                    continue
+                x += 5 + struct.unpack_from('<i', a, x - BASE + 1)[0] + int(call[3] or '0', 16)
+                y += 5 + struct.unpack_from('<i', b, y - BASE + 1)[0] + int(call[3] or '0', 16)
+        elif m:
+            x = int(m.group(1), 16)
+            if x not in table:
+                continue
+            y = table[x]
+        else:
             print('check %s %s: address not resolved' % (name, at))
             bad.append((0, 'check', 'unresolved ' + at))
-            continue
-        x = int(m.group(1), 16)
-        if x not in table:
             continue
         want = bytearray(bytes.fromhex(hexs))
         i = 0
@@ -248,7 +268,7 @@ def main():
                 i += 4
             else:
                 i += 1
-        got = b[table[x] - BASE:table[x] - BASE + len(want)]
+        got = b[y - BASE:y - BASE + len(want)]
         print('check %s %08X: %s' % (name, x, 'ok' if got == bytes(want) else 'FAILS ' + got.hex()))
         if got != bytes(want):
             bad.append((x, 'check', 'byte check fails'))

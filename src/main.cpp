@@ -309,6 +309,13 @@ static FARPROC Real(const char* name)
     return s_realDinput ? GetProcAddress(s_realDinput, name) : NULL;
 }
 
+// The game's DirectInput interface is wrapped and presents the XInput pads (Proxy_DirectInput8Create). Otherwise the
+// game reads every controller itself, and the per-frame extras leave the pad to it (keys only)
+bool PadsWrapped()
+{
+    return g_cfg.virtualPads > 0 && pXInputGetState;
+}
+
 extern "C" HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer)
 {
     DirectInput8Create_t fn = (DirectInput8Create_t)Real("DirectInput8Create");
@@ -332,7 +339,7 @@ extern "C" HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version
         DlcInstallPickups();  // [DLC] Pickups / DeadlineBonus: the same, checks build and overlay itself
         DlcInstallCars();   // [DLC] Cars: the same, checks build, UnlockAll and overlay itself
     }
-    if (riid == IID_IDirectInput8A && pXInputGetState && g_cfg.virtualPads > 0)
+    if (riid == IID_IDirectInput8A && PadsWrapped())
         *out = WrapDirectInput8A((IDirectInput8A*)*out);
     return hr;
 }

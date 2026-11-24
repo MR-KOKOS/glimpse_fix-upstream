@@ -1,5 +1,6 @@
 // Split/Second controller fix - patches into SplitSecond.exe (Steam build, image base 0x400000)
 #include "common.h"
+#include <intrin.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -883,6 +884,54 @@ static void ScaleShadowDistance()
     }
 }
 
+static decltype(&PeekMessageA) s_peekMessage;
+static const void* s_framePeekReturn;
+static const BYTE* const kInputUpdateAnchor = (const BYTE*)G(0x00558969);
+
+static BOOL WINAPI Hook_PeekMessageA(LPMSG msg, HWND wnd, UINT min, UINT max, UINT remove)
+{
+    if (_ReturnAddress() == s_framePeekReturn) {
+        RefreshPadSlots();  // no virtual device polls the XInput slots: their connection state and pad use
+        OnInputFrame();
+    }
+    return s_peekMessage(msg, wnd, min, max, remove);
+}
+
+static const BYTE* Rel32CallTarget(const BYTE* call)
+{
+    return call + 5 + *(const LONG*)(call + 1);
+}
+
+// Without wrapped pads (VirtualPads=0 or no XInput DLL) no virtual device is polled, so the per-frame extras
+// (OnInputFrame) run from the first PeekMessageA in the game's input update instead. The main loop calls this
+// update once per pass, before simulation and rendering at both frame rates.
+static void HookFrameWithoutPads()
+{
+    if (!BytesMatch(kInputUpdateAnchor + 0x22, "8B0D") || !BytesMatch(kInputUpdateAnchor + 0x28, "E8") ||
+        !BytesMatch(kInputUpdateAnchor + 0x2D, "8B178B4214568BCFFFD0")) {
+        Log("frame hook: main loop signature mismatch, hook skipped");
+        return;
+    }
+    // written out in each check, so tools/buildmap.py can follow the call
+    if (!BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28), "83EC20538B1D") ||
+        !BytesMatch(Rel32CallTarget(kInputUpdateAnchor + 0x28) + 0x0A, "566A016A006A006A008D44241C508BF1FFD385C0")) {
+        Log("frame hook: input update signature mismatch, hook skipped");
+        return;
+    }
+    const BYTE* update = Rel32CallTarget(kInputUpdateAnchor + 0x28);
+    void** slot = *(void***)(update + 6);  // mov ebx, [PeekMessageA import slot]
+    void* peek = (void*)GetProcAddress(GetModuleHandleA("user32.dll"), "PeekMessageA");
+    if (!peek || *slot != peek) {
+        Log("frame hook: PeekMessageA import not where expected, hook skipped");
+        return;
+    }
+    s_peekMessage = (decltype(&PeekMessageA))peek;
+    s_framePeekReturn = update + 0x1C;
+    void* hook = (void*)Hook_PeekMessageA;
+    WriteMemory(slot, &hook, sizeof(hook));
+    Log("frame hook: per-frame extras run from the input update (pads not wrapped)");
+}
+
 // Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
 // through one function (0x471530), which the options menu calls with the level it shows and saves, and
 // which clamps that level to the range of the level's tweakable (registered at 0xB6B2F0 with 0..3, the
@@ -1047,6 +1096,7 @@ void ApplyGamePatches()
     s_knownBuild = true;
     Log("SplitSecond.exe build recognised (%s)", BuildName());
     const unsigned mask = g_cfg.patchMask;
+    if (!PadsWrapped()) HookFrameWithoutPads();
     if (g_cfg.separateTriggers && (mask & PATCH_TRIGGERS)) PatchTriggerPreset();
     if (mask & PATCH_RUMBLE) HookRumble();
     if ((g_cfg.skipIntro > 0 || g_cfg.cutsceneSkip) && (mask & PATCH_INTRO)) HookIntroSkip();

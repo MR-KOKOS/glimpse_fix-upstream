@@ -778,10 +778,11 @@ void CameraTick()
     last = now.QuadPart;
     if (dt > 0.1f) dt = 0.1f;
 
-    // the first pad that is connected
+    // the first pad that is connected. Pads not wrapped (VirtualPads=0): the game reads the pad itself and
+    // would act on Back, B, Y, A and the sticks as well, so the photo mode takes keys only
     XINPUT_STATE st = {};
     bool padOk = false;
-    for (DWORD i = 0; i < XUSER_MAX_COUNT && !padOk && pXInputGetState; i++)
+    for (DWORD i = 0; i < XUSER_MAX_COUNT && !padOk && PadsWrapped(); i++)
         padOk = PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS;
     const XINPUT_GAMEPAD& pad = st.Gamepad;
     bool focus = GameHasFocus();
