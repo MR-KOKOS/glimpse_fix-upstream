@@ -711,6 +711,18 @@ static void* PromptBar()
     }
 }
 
+// the prompt bar's movie as the game holds it right now (NULL when there is none)
+void* PromptBarMovieNow()
+{
+    void* bar = PromptBar();
+    if (!bar) return NULL;
+    __try {
+        return PromptBarMovie(bar);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return NULL;
+    }
+}
+
 static void UpdatePromptBar(bool pad)
 {
     if (pad != s_padGlyphsShown) MuteGameIconPaths(pad);
@@ -916,6 +928,13 @@ static const BYTE* Rel32CallTarget(const BYTE* call)
 // Without wrapped pads (VirtualPads=0 or no XInput DLL) no virtual device is polled, so the per-frame extras
 // (OnInputFrame) run from the first PeekMessageA in the game's input update instead. The main loop calls this
 // update once per pass, before simulation and rendering at both frame rates.
+static bool s_frameHooked;
+
+bool FrameHookInstalled()
+{
+    return s_frameHooked;
+}
+
 static void HookFrameWithoutPads()
 {
     if (!BytesMatch(kInputUpdateAnchor + 0x22, "8B0D") || !BytesMatch(kInputUpdateAnchor + 0x28, "E8") ||
@@ -940,7 +959,9 @@ static void HookFrameWithoutPads()
     s_framePeekReturn = update + 0x1C;
     void* hook = (void*)Hook_PeekMessageA;
     WriteMemory(slot, &hook, sizeof(hook));
-    Log("frame hook: per-frame extras run from the input update (pads not wrapped)");
+    s_frameHooked = *slot == hook;
+    if (s_frameHooked) Log("frame hook: per-frame extras run from the input update (pads not wrapped)");
+    else Log("frame hook: input update slot could not be written");
 }
 
 // Graphics quality limit (QualityCap): the game sets its quality level (0xD0F7E8, 0 Low .. 3 Very High) only
@@ -1002,6 +1023,7 @@ void OnInputFrame()
     }
     if (s_knownBuild && g_cfg.fixIconSize && (g_cfg.patchMask & PATCH_ICONSIZE)) FixPowerplayIconSize();
     if (s_knownBuild && (g_cfg.patchMask & PATCH_UNLOCK)) ApplyUnlocks();
+    if (s_knownBuild) LapMenuTick();
     if (s_knownBuild && (g_cfg.patchMask & PATCH_FLARES)) ApplyLensFlare();
     if (s_knownBuild && g_cfg.explosionShakeOff && (g_cfg.patchMask & PATCH_CAMERA)) ApplyExplosionShake();
     if (s_knownBuild && (g_cfg.boost || g_cfg.powerFill || g_cfg.aiBoost || g_cfg.handbrake) && (g_cfg.patchMask & PATCH_BOOST)) BoostTick();
@@ -1255,6 +1277,8 @@ void ApplyGamePatches()
     HookSoundBanks();
     HookVoiceDspCreation();
     HookReverbLog();
+    InstallMenuHook();
+    InstallLapMenu();
     if ((g_cfg.log || g_cfg.photoMode || g_cfg.opponentEngines) && (mask & PATCH_AUDIODIAG))
         InstallAudioDiagnostics();
 }

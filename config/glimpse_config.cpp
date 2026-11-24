@@ -126,6 +126,8 @@ static Option kOptions[] = {
     { "Camera", "PhotoModeKey", CHOICE, "  Photo mode key", "Keys the game uses itself (Esc, P, Enter, arrows) and the photo mode's own controls are not offered.", "0x46", PHOTO_KEY_CHOICES },
     { "Camera", "HudKey", CHOICE, "HUD on/off key", "Switch the HUD off and on during a race.", "0", "0|None;" KEY_CHOICES },
     // Gameplay
+    { "Gameplay", "LapSelect", BOOL_OPT, "Pick laps on the track select", "On quick play Race's track select the difficulty button (Tab, pad Y) picks the laps (the track's own count shown) and saves them as Laps. Other modes, the season, split screen, LAN and online keep their own laps. A race with a changed lap count keeps no personal best. Off while SteamLAN is on. Steam build only (not the Russian depot).", "0" },
+    { "Gameplay", "Laps", RANGE, "  Laps per race", "The lap count quick play Race runs with 'Pick laps on the track select' on; the track select picks 1-10 and saves it here. 0 = as the game.", "0", 0, 0, 16, 1, 0 },
     { "Gameplay", "UnlockAll", BOOL_OPT, "Everything unlocked", "All tracks, events, episodes, game modes and cars selectable. Your profile is not changed.", "0" },
     { "Gameplay", "RaceEndTiming", BOOL_OPT, "Post-race Continue timing", "Show Continue when the single-player finish card accepts it. Shortens the offline Quick Play entrance and keeps the Season animation; split screen and online stay stock. Steam build only (not the Russian depot), requires the stock finish card.", "0" },
     { "Gameplay", "BonusContent", BOOL_OPT, "Bonus content", "The PC version's cheat code extras: Expressway track, Cobretti SlipStream, branded cars, Euro livery.", "0" },
@@ -197,7 +199,13 @@ static const char* const kDlcModeKeys[] = { "Modes", "Pickups", "PickupVignette"
 static const int kDlcExtraRows = 5;
 
 // options the presets do not touch
-static bool OutsidePresets(const Option& o) { return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online") || !strcmp(o.section, "DLC"); }
+// Debug, Online and DLC are the user's own; so is Laps, which the game's lap choice keeps up to date
+// itself (a preset that names Laps, "Original game", still sets it: see InPreset)
+static bool OutsidePresets(const Option& o)
+{
+    return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online") || !strcmp(o.section, "DLC") ||
+           !strcmp(o.key, "Laps");
+}
 
 // the page an option is shown on: its INI section; [Graphics] is split into the display and the effects,
 // [Gameplay] into the game, the boost and handbrake, and the AI boost
@@ -232,16 +240,18 @@ static std::string Trim(const std::string& s)
     return a == std::string::npos ? "" : s.substr(a, b - a + 1);
 }
 
-static bool LoadIni()
+static bool LoadIni(const char* path = s_path)
 {
     s_lines.clear();
-    FILE* f = fopen(s_path, "rb");
+    FILE* f = fopen(path, "rb");
     if (!f) return false;
     std::string all;
     char buf[4096];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
+    bool bad = ferror(f) != 0;
     fclose(f);
+    if (bad) return false;
     if (all.compare(0, 3, "\xEF\xBB\xBF") == 0) all.erase(0, 3);  // UTF-8 byte order mark
     s_crlf = all.find("\r\n") != std::string::npos || all.find('\n') == std::string::npos;
     size_t start = 0;
@@ -283,10 +293,45 @@ static bool SaveLines(const char* path, const std::vector<std::string>& lines)
     return false;
 }
 
-static bool SaveIni()
+// The game and this tool both write the INI (the game only [Gameplay] Laps). A named mutex, held by the tool from
+// reading the file to replacing it and by the game around its one-key write, keeps the two from overlapping:
+// without it nothing is written.
+struct IniLock {
+    HANDLE h;
+    DWORD wait;
+    IniLock() : h(CreateMutexA(NULL, FALSE, "Local\\GlimpseFixIni")),
+                wait(h ? WaitForSingleObject(h, 1000) : WAIT_FAILED) {}
+    ~IniLock()
+    {
+        if (ok()) ReleaseMutex(h);
+        if (h) CloseHandle(h);
+    }
+    bool ok() const { return wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED; }
+    const char* error() const
+    {
+        return wait == WAIT_TIMEOUT ? "The INI is busy. Try again." : "Could not acquire the INI lock. Try again.";
+    }
+};
+
+// Every change here starts from the file as it is now, so a lap count the game wrote meanwhile survives
+// saving anything else here. False (nothing changed) when the file exists but cannot be read whole; a
+// missing file is fine, the change creates it.
+static bool Refresh(bool keepMissing = true)
+{
+    std::vector<std::string> before = s_lines;
+    if (LoadIni()) return true;
+    bool missing = GetFileAttributesA(s_path) == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND;
+    if (!missing || keepMissing) s_lines.swap(before);
+    return missing;
+}
+
+// The write itself; only under IniLock, after Refresh (Changed, ApplyPreset, PutBackUndo, SaveValues)
+static bool WriteIni(const std::vector<std::string>& before)
 {
     if (!s_backedUp && !s_opened.empty()) s_backedUp = SaveLines(BackupPath().c_str(), s_opened);
-    return SaveLines(s_path, s_lines);
+    if (SaveLines(s_path, s_lines)) return true;
+    s_lines = before;
+    return false;
 }
 
 // line index of key in section, -1 if missing; *sectionEnd gets the line after the section's last key
@@ -298,6 +343,7 @@ static int FindKey(const char* section, const char* key, int* sectionEnd)
         std::string t = Trim(s_lines[i]);
         if (t.size() > 2 && t[0] == '[' && t.back() == ']') {
             current = t.substr(1, t.size() - 2);
+            if (end < 0 && !_stricmp(current.c_str(), section)) end = i + 1;
             continue;
         }
         if (_stricmp(current.c_str(), section)) continue;
@@ -599,6 +645,7 @@ static void UpdateEnables()
         { "Tracks", IsOn("Overlays") }, { "TracksOnline", IsOn("Overlays") && IsOn("Tracks") },
         { "Music", IsOn("Overlays") && IsOn("Tracks") },
         { "OpponentEngineVolume", IsOn("OpponentEngines") },
+        { "Laps", IsOn("LapSelect") },
     };
     for (auto& r : rules) {
         Option* o = Find(r.key);
@@ -621,10 +668,12 @@ static bool SameNumber(const std::string& a, const std::string& b)
     return ea != a.c_str() && eb != b.c_str() && !*ea && !*eb && fabs(x - y) < 1e-6;
 }
 
-static void LoadControls()
+// one control from the INI lines; LoadControls does them all
+static void LoadControl(Option& o)
 {
+    bool was = s_loading;
     s_loading = true;
-    for (Option& o : kOptions) {
+    {
         std::string v = GetValue(o);
         if (o.kind == BOOL_OPT) {
             s_toggle[IndexOf(o)] = atoi(v.c_str()) != 0;
@@ -654,6 +703,13 @@ static void LoadControls()
             ShowValue(o, real);  // a value set by hand beyond the slider's range shows as it is
         }
     }
+    s_loading = was;
+}
+
+static void LoadControls()
+{
+    s_loading = true;
+    for (Option& o : kOptions) LoadControl(o);
     s_loading = false;
     UpdateEnables();
     for (HWND b : s_preset) InvalidateRect(b, NULL, TRUE);  // the preset that matches is outlined
@@ -682,13 +738,46 @@ static void Changed(Option& o)
         ShowValue(o, d);
         v = FormatRange(o, d);
     }
+    char msg[200 + MAX_PATH];
+    IniLock lock;
+    if (!lock.ok()) {
+        Status(lock.error());
+        LoadControl(o);
+        return;
+    }
+    if (!Refresh()) {
+        _snprintf_s(msg, _TRUNCATE, "Could not read %s; nothing was saved", s_path);
+        Status(msg);
+        LoadControl(o);  // back to what the file holds
+        return;
+    }
+    const auto before = s_lines;
     SetValue(o, v);
+    bool saved = WriteIni(before);
+    if (!saved) LoadControl(o);
+    // the game may have written Laps meanwhile: its slider follows (only that one, so a text field being
+    // typed in keeps its caret)
+    if (strcmp(o.key, "Laps"))
+        if (Option* laps = Find("Laps")) LoadControl(*laps);
     UpdateEnables();
     for (HWND b : s_preset) InvalidateRect(b, NULL, TRUE);
-    char msg[200];
-    if (SaveIni()) sprintf(msg, "Saved  %s = %s", o.key, v.c_str());
-    else sprintf(msg, "Could not write %s", s_path);
+    if (saved) _snprintf_s(msg, _TRUNCATE, "Saved  %s = %s", o.key, v.c_str());
+    else _snprintf_s(msg, _TRUNCATE, "Could not write %s", s_path);
     Status(msg);
+}
+
+// Settings changed by the program itself (DLC on/off, the tools folder): as a change on a page, under the INI
+// lock and from the file as it is now, so a lap count the game saved meanwhile stays. NULL when saved, else why not.
+static const char* SaveValues(const std::vector<std::pair<const Option*, std::string>>& values)
+{
+    IniLock lock;
+    if (!lock.ok()) return lock.error();
+    if (!Refresh()) return "Could not read the INI; nothing was saved";
+    const auto before = s_lines;
+    for (const auto& v : values) SetValue(*v.first, v.second);
+    bool saved = WriteIni(before);
+    LoadControls();
+    return saved ? NULL : "Could not write the INI";
 }
 
 // ---------------------------------------------------------------- DLC: build and install
@@ -2131,8 +2220,7 @@ static std::string FindTools(HWND owner)
     if (!PickFolder(owner, L"The folder tools of glimpse_fix (with dlc\\build_all.py)", pick)) return "";
     for (const std::string& c : { pick, pick + "\\dlc", pick + "\\tools\\dlc" })
         if (FileExists(c + "\\build_all.py") && FileExists(c + "\\install_dlc.py")) {
-            SetValue(s_toolsOpt, NoTrailingSlash(pick));
-            SaveIni();
+            if (const char* err = SaveValues({ { &s_toolsOpt, NoTrailingSlash(pick) } })) Status(err);
             return c;
         }
     MessageBoxA(owner, "There is no dlc\\build_all.py in that folder.", "glimpse_fix", MB_OK | MB_ICONWARNING);
@@ -2252,9 +2340,10 @@ static void DlcOfferIni(HWND wnd)
     if (off.empty()) return;
     std::string q = "Turn on " + names + " now?\n\nThe converted DLC is only used with these on (this page).";
     if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
-    for (Option* o : off) SetValue(*o, "1");
-    LoadControls();
-    Status(SaveIni() ? "Saved: the converted DLC is on" : "Could not write the INI");
+    std::vector<std::pair<const Option*, std::string>> values;
+    for (Option* o : off) values.push_back({ o, "1" });
+    const char* err = SaveValues(values);
+    Status(err ? err : "Saved: the converted DLC is on");
 }
 
 static void DlcFailed(HWND wnd, const std::string& text, const std::vector<std::string>& details)
@@ -2364,9 +2453,8 @@ static void DlcFinished(HWND wnd, DlcTask task, DWORD code, const DlcStatus& st)
         if (IsOn("Overlays")) {
             m += "\n\nTurn off \"Converted DLC\" now?";
             if (MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-                SetValue(*Find("Overlays"), "0");
-                LoadControls();
-                Status(SaveIni() ? "Saved: the converted DLC is off" : "Could not write the INI");
+                const char* err = SaveValues({ { Find("Overlays"), "0" } });
+                Status(err ? err : "Saved: the converted DLC is off");
             }
         } else {
             MessageBoxA(wnd, m.c_str(), "glimpse_fix", MB_OK | MB_ICONINFORMATION);
@@ -2508,7 +2596,7 @@ static void DlcUninstall(HWND wnd, bool apply)
 
 // ---------------------------------------------------------------- DLC: "Set up DLC", all of it in one go
 
-static void Open();
+static bool Open(const char* path = NULL, bool viaSteam = false);
 
 // the packages in the folder of [DLC] DumpFolder, on the line below it
 static void DlcShowFound()
@@ -2613,9 +2701,7 @@ static bool EnsureGameDir(HWND wnd)
         std::string q = "These settings are not in the Split/Second folder:\n" + std::string(s_path) + "\n\nSteam has the game in\n" +
                         steam + "\n\nUse that game folder? Its SplitSecondPad.ini is edited from then on (Open INI... picks another one).";
         if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return false;
-        strcpy(s_path, (steam + "\\SplitSecondPad.ini").c_str());
-        s_viaSteam = true;
-        Open();
+        if (!Open((steam + "\\SplitSecondPad.ini").c_str(), true)) return false;
         DlcShowFound();
         return true;
     }
@@ -2905,6 +2991,7 @@ static void FlowAskInstall(HWND wnd, const DlcStatus& st)
 static void FlowDone(HWND wnd, const DlcStatus& st)
 {
     std::vector<std::string> m = ReadLines(DlcStaging() + "\\" + kDlcManifest), on;
+    std::vector<std::pair<const Option*, std::string>> values;
     for (const std::string& l : m) {
         if (l.compare(0, 4, "ini\t")) continue;
         std::string kv = l.substr(4);
@@ -2912,14 +2999,10 @@ static void FlowDone(HWND wnd, const DlcStatus& st)
         if (tab == std::string::npos) continue;
         Option* o = Find(kv.substr(0, tab).c_str());
         if (!o || strcmp(o->section, "DLC") || o->kind != BOOL_OPT || kv.substr(tab + 1) != "1" || IsOn(o->key)) continue;
-        SetValue(*o, "1");
+        values.push_back({ o, "1" });
         on.push_back(IniShortName(*o));
     }
-    bool saved = true;
-    if (!on.empty()) {
-        LoadControls();
-        saved = SaveIni();
-    }
+    bool saved = values.empty() || !SaveValues(values);
     std::string what = ContentSummary(m);
     std::string text = (what.empty() ? std::string("The converted DLC is") : what + " are") + " now in the game.";
     std::string keys = on.empty() ? " Its settings on this page were on already." : " Turned on for it: " + JoinAnd(on) + ".";
@@ -3027,8 +3110,8 @@ struct Preset {
     const char* values;  // "Key=value;..."
 };
 static const Preset kPresets[kPresetCount] = {
-    { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off.", "" },
-    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, the PC's car glass, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off (Pick laps too; the lap count you picked is kept for when you switch it on again).", "" },
+    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, the PC's car glass, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
       "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",
@@ -3046,11 +3129,19 @@ static std::string PresetValue(const Preset& p, const Option& o)
     return list.substr(s, list.find(';', s) - s);
 }
 
-// whether every option (Debug aside) currently has the value the preset gives it
+// the options a preset sets: all but those outside presets, plus any of those the preset names itself
+static bool InPreset(const Preset& p, const Option& o)
+{
+    if (!OutsidePresets(o)) return true;
+    std::string list = std::string(";") + p.values + ";", pat = std::string(";") + o.key + "=";
+    return strcmp(o.section, "Debug") && strcmp(o.section, "Online") && strcmp(o.section, "DLC") && list.find(pat) != std::string::npos;
+}
+
+// whether every option the preset sets currently has the value the preset gives it
 static bool PresetMatches(const Preset& p)
 {
     for (const Option& o : kOptions) {
-        if (OutsidePresets(o)) continue;
+        if (!InPreset(p, o)) continue;
         std::string want = PresetValue(p, o), have = GetValue(o);
         if (!_stricmp(want.c_str(), have.c_str())) continue;
         if (!strcmp(o.key, "OpponentEngineVolume")) {
@@ -3093,7 +3184,33 @@ static bool SaveUndo(const Preset& p)
     lines.push_back("; glimpse_fix: your settings from before a preset (\"Back to your settings\" on the Presets page)");
     lines.push_back(head);
     for (const Option& o : kOptions)
-        if (!OutsidePresets(o)) lines.push_back(std::string(o.key) + "=" + GetValue(o));
+        if (InPreset(p, o)) lines.push_back(std::string(o.key) + "=" + GetValue(o));
+    return SaveLines(UndoPath().c_str(), lines);
+}
+
+// A kept file from an earlier preset lacks a key the new preset sets but the earlier one did not (only Laps:
+// "Original game"): it gets the current value, so going back still restores it. Other presets never touch
+// Laps, so after them a lap count picked in the game since stays.
+static bool ExtendUndo(const Preset& p)
+{
+    Option* laps = Find("Laps");
+    if (!laps || !InPreset(p, *laps)) return true;
+    FILE* f = fopen(UndoPath().c_str(), "rb");
+    if (!f) return false;
+    std::vector<std::string> lines;
+    char line[512];
+    bool has = false;
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        std::string l = Trim(line);
+        if (!_strnicmp(l.c_str(), "Laps=", 5)) has = true;
+        lines.push_back(line);
+    }
+    bool bad = ferror(f) != 0;
+    fclose(f);
+    if (bad) return false;
+    if (has) return true;
+    lines.push_back(std::string("Laps=") + GetValue(*laps));
     return SaveLines(UndoPath().c_str(), lines);
 }
 
@@ -3133,17 +3250,29 @@ static void UpdateUndo()
 
 static void ApplyPreset(const Preset& p)
 {
-    if ((!UndoExists() || !AnyPresetMatches()) && !SaveUndo(p)) {
+    IniLock lock;
+    if (!lock.ok()) {
+        Status(lock.error());
+        return;
+    }
+    if (!Refresh()) {
+        Status("Could not read the INI; the preset was not applied");
+        return;
+    }
+    bool fresh = !UndoExists() || !AnyPresetMatches();
+    if (fresh ? !SaveUndo(p) : !ExtendUndo(p)) {
         Status("Could not keep your settings, the preset was not applied");
         return;
     }
+    const auto before = s_lines;
     for (Option& o : kOptions) {
-        if (OutsidePresets(o)) continue;
+        if (!InPreset(p, o)) continue;
         SetValue(o, PresetValue(p, o));
     }
+    bool saved = WriteIni(before);
     LoadControls();
     char msg[160];
-    sprintf(msg, SaveIni() ? "Preset \"%s\" saved" : "Could not write the INI", p.name);
+    sprintf(msg, saved ? "Preset \"%s\" saved" : "Could not write the INI", p.name);
     Status(msg);
     UpdateUndo();
 }
@@ -3164,7 +3293,7 @@ static void PutBackUndo()
         size_t eq = l.find('=');
         if (l.empty() || l[0] == ';' || eq == std::string::npos) continue;
         Option* o = Find(l.substr(0, eq).c_str());
-        if (o && !OutsidePresets(*o)) values.push_back({ o, l.substr(eq + 1) });
+        if (o && (!OutsidePresets(*o) || !strcmp(o->key, "Laps"))) values.push_back({ o, l.substr(eq + 1) });
     }
     bool bad = ferror(f) != 0;
     fclose(f);
@@ -3172,12 +3301,27 @@ static void PutBackUndo()
         Status("The file with your earlier settings could not be read; nothing was changed");
         return;
     }
+    IniLock lock;
+    if (!lock.ok()) {
+        Status(lock.error());
+        return;
+    }
+    if (!Refresh()) {
+        Status("Could not read the INI; nothing was changed");
+        return;
+    }
+    const auto before = s_lines;
+    int laps = FindKey("Gameplay", "Laps", NULL);
+    // Only Original game sets Laps. Undo its reset only while its saved zero is still present.
+    bool restoreLaps = laps >= 0 && ValueAt(laps) == "0";
     // an option the file does not name came after it was written: it had its default then
     for (Option& o : kOptions)
         if (!OutsidePresets(o)) SetValue(o, o.def);
-    for (auto& v : values) SetValue(*v.first, v.second);
+    for (const auto& v : values)
+        if (restoreLaps || strcmp(v.first->key, "Laps")) SetValue(*v.first, v.second);
+    bool saved = WriteIni(before);
     LoadControls();
-    if (SaveIni()) {
+    if (saved) {
         DeleteFileA(UndoPath().c_str());
         Status("Your settings are back");
     } else {
@@ -3314,7 +3458,7 @@ static void CreateControls()
           ID_CLOSE, R_ACTION, s_font);
 }
 
-static bool PickIni(HWND owner)
+static bool PickIni(HWND owner, char* picked = s_path)
 {
     char file[MAX_PATH];
     strcpy(file, s_path);
@@ -3326,12 +3470,21 @@ static bool PickIni(HWND owner)
     ofn.lpstrTitle = "SplitSecondPad.ini in the Split/Second folder";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
     if (!GetOpenFileNameA(&ofn)) return false;
-    strcpy(s_path, file);
+    strcpy(picked, file);
     return true;
 }
 
-static void Open()
+static bool Open(const char* path, bool viaSteam)
 {
+    IniLock lock;
+    if (!lock.ok()) {
+        Status(lock.error());
+        return false;
+    }
+    if (path) {
+        strcpy(s_path, path);
+        s_viaSteam = viaSteam;
+    }
     s_backedUp = false;
     s_opened.clear();
     if (LoadIni()) s_opened = s_lines;
@@ -3346,9 +3499,33 @@ static void Open()
     }
     LoadControls();
     UpdateUndo();
+    return true;
 }
 
-// puts the backup back and reloads it
+// Restore the backed-up settings while keeping the current lap choice (including an omitted Laps key).
+static bool RestoreSettings(const char* backup)
+{
+    if (!Refresh(false)) return false;
+    const Option& laps = *Find("Laps");
+    int current = FindKey(laps.section, laps.key, NULL);
+    if (current < 0) current = FindKey("Game", laps.key, NULL);  // older INIs
+    std::string value = current >= 0 ? ValueAt(current) : "";
+    std::vector<std::string> live;
+    live.swap(s_lines);
+    bool crlf = s_crlf;
+    if (LoadIni(backup)) {
+        for (const char* section : { laps.section, "Game" }) {
+            int line;
+            while ((line = FindKey(section, laps.key, NULL)) >= 0) s_lines.erase(s_lines.begin() + line);
+        }
+        if (current >= 0) SetValue(laps, value);
+        if (SaveLines(s_path, s_lines)) return true;
+    }
+    s_lines.swap(live);
+    s_crlf = crlf;
+    return false;
+}
+
 static void RestoreBackup(HWND wnd)
 {
     std::string bak = BackupPath();
@@ -3356,9 +3533,14 @@ static void RestoreBackup(HWND wnd)
         MessageBoxA(wnd, "There is no backup yet. It is made before the first change.", "glimpse_fix", MB_OK | MB_ICONINFORMATION);
         return;
     }
-    std::string q = "Replace the settings with the backup?\n\n" + bak;
+    std::string q = "Restore the backed-up settings and keep your current lap choice?\n\n" + bak;
     if (MessageBoxA(wnd, q.c_str(), "glimpse_fix", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
-    if (!CopyFileA(bak.c_str(), s_path, FALSE)) {
+    IniLock lock;
+    if (!lock.ok()) {
+        Status(lock.error());
+        return;
+    }
+    if (!RestoreSettings(bak.c_str())) {
         Status("Could not restore the backup");
         return;
     }
@@ -3801,11 +3983,12 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
         } else if (id == ID_OPEN) {
             if (DlcBusy()) {
                 Status("Not while a DLC task runs");
-            } else if (PickIni(wnd)) {
-                s_viaSteam = false;
-                Open();
-                CheckLargeAddressAware(wnd);
-                if (s_page == kDlcPage) ShowPage(s_page);
+            } else {
+                char picked[MAX_PATH];
+                if (PickIni(wnd, picked) && Open(picked)) {
+                    CheckLargeAddressAware(wnd);
+                    if (s_page == kDlcPage) ShowPage(s_page);
+                }
             }
         } else if (id == ID_CLOSE) {
             SendMessageA(wnd, WM_CLOSE, 0, 0);
