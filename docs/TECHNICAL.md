@@ -526,7 +526,8 @@ problems without it before reporting them.
   own pad (Steam build only). Which pad drives which car is learnt from the first steering in each race
   (the car that steers with a pad's stick while the other one does not); until then that pad's extras
   stay off. The keys go to the player without a learnt pad, else to player 1. The boost's motion blur
-  stays off there, as one blur covers the whole screen.
+  stays off there, as one blur covers the whole screen. Tested with two pads (`HandbrakeMode=1`); not
+  yet tested: one player on the keyboard with a single pad, and `HandbrakeMode=2` in split screen.
 * With `VirtualPads=0` the boost, the handbrake, the power bar fill and the photo mode work with
   their keys only (see `VirtualPads` in [INI settings](INI.md)).
 * `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race
