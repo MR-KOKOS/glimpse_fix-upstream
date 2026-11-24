@@ -536,8 +536,13 @@ problems without it before reporting them.
   joystick (e.g. a wheel) is present, since those names are shared by all devices.
 * 60 fps: races, AI and physics were checked; not every power play and cutscene was. Set
   `FrameRate=30` if something looks off.
-* Boost, the power bar fill, the photo mode and the HUD key work for player 1 only; the photo mode
-  only on a single screen.
+* The photo mode and the HUD key work for player 1 only, the photo mode only on a single screen. In
+  split screen the boost, the power bar fill and the handbrake work for both players, each with their
+  own pad (Steam build only). Which pad drives which car is learnt from the first steering in each race
+  (the car that steers with a pad's stick while the other one does not); until then that pad's extras
+  stay off. The keys go to the player without a learnt pad, else to player 1. The boost's motion blur
+  stays off there, as one blur covers the whole screen. Tested with two pads (`HandbrakeMode=1`); not
+  yet tested: one player on the keyboard with a single pad, and `HandbrakeMode=2` in split screen.
 * With `VirtualPads=0` the boost, the handbrake, the power bar fill and the photo mode work with
   their keys only (see `VirtualPads` in [INI settings](INI.md)).
 * `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race
@@ -633,6 +638,7 @@ the Russian build's place from `src/build_ru.inc`.
 | `0x00D71208`, `0x00D113B8` | "Physics/Change Phys dt/Slow motion activated", "Slow Motion cheat speed" |
 | `0x00D1BC94`, `0x00D1BC9C` | "UI/HUD/3D Components/Render Powerbar", "Render Infobar" |
 | `0x00D64E0C` | UI layers: `[+8][id]`; player 1's `Hud.gfx` is layer `0x3B` (vtable `0xBD0E1C`, `[+0x68]+4` GFx movie view) |
+| `0x00D6EE78` | Front end's race setup (`0x453300`): +0 game type, +0x9C screens, +0xD0 the two local players' cars, +0xD8 their controllers (the game's own numbering, not the XInput slot); set by `0x78E3E0` / `0x78E240`, read by the player input through `0x78E4C0` |
 | `0x00D64E00` | +0x208 `cAnchoviesPC` achievements (vtable `0xC4AAC4`, unlock `0xA17F90`; +0x2C unlocked, +0x38 count 47); ids 41–46 come from ranked online results (`0x802870`) |
 | `0x00D71954`, `0x00D11B6C` | "Anchovies/UnlockAnchovy", "UnlockAnchovieID", read by the race update `0x4BF180` |
 | `0x00D64E6C` | HasPureSave (decal id 47); decal table `0x00D6FABC` (id, title), 48 entries |

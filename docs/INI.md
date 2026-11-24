@@ -78,15 +78,15 @@ The file is split into sections. INIs from older versions with everything under 
 | `BonusContent` | 0 | 1 = the PC version's cheat code extras: Expressway track, Cobretti SlipStream, retailer branded cars, Euro livery pack. |
 | `WreckTime` | 0 | **Highly experimental: can softlock the game, especially together with the photo mode.** Seconds from a wreck of your car to the respot (about 4 s in the game; 0 = as the game): the game's respot logic is left out until then, the crash camera keeps showing the wreck. The photo mode holds the respot of all cars while it is on. |
 | `UnlockDecals` | 0 | Achievements and their decals: 1 = all, 2 = only the unobtainable ones (achievements 41–46 from ranked online races and the Pure decal; the "all achievements" decal follows once the rest is earned). Unlocked in the next single player race and saved with the profile, so they stay when set back to 0; the Pure decal shows while this is set. The `.sav` files are copied to `glimpse_backup` before the first unlock. |
-| `Boost` | 0 | 1 = X held gives player 1 extra speed along the car's heading. |
+| `Boost` | 0 | 1 = X held gives player 1 extra speed along the car's heading; in split screen both players, each with their own pad (Steam build). |
 | `BoostKey` | 0xA0 | Keyboard key for the boost, a virtual key code (0xA0 = left Shift). 0 = pad only. |
 | `BoostButton` | X | Pad button for the boost: `X`, `Y`, `LS`, `RS` (stick clicks) or `None`. |
 | `BoostAcceleration` | 15 | Boost in m/s² (1–100). |
 | `BoostMaxSpeed` | 90 | No boost above this speed, m/s (10–200; 90 = 324 km/h). |
 | `BoostMotionBlur` | 3.0 | Motion blur multiplier at full boost (1–5). |
-| `PowerBarFill` | 0 | 1 = LS+RS (both sticks pressed) fills player 1's power play bar. |
+| `PowerBarFill` | 0 | 1 = LS+RS (both sticks pressed) fills player 1's power play bar; in split screen each player's own. |
 | `PowerBarFillKey` | 0xA2 | Keyboard key that works like LS+RS (0xA2 = left Ctrl). 0 = pad only. |
-| `Handbrake` | 0 | 1 = handbrake for player 1 while `HandbrakeButton` or `HandbrakeKey` is held (in a network race the host's setting applies to everybody). |
+| `Handbrake` | 0 | 1 = handbrake for player 1 (in split screen for both players) while `HandbrakeButton` or `HandbrakeKey` is held (in a network race the host's setting applies to everybody). |
 | `HandbrakeButton` | Y | Pad button: `X`, `Y`, `LS`, `RS` or `None`. When the boost or the handbrake uses Y, the game's camera change moves to D-pad down during a race. |
 | `HandbrakeKey` | 0x58 | Keyboard key, a virtual key code (0x58 = X). 0 = none. |
 | `HandbrakeMode` | 1 | 1 = drift: the game's own slide physics (as when a power play blast throws a car sideways) with the pull and turn below. 2 = brake: the brake pedal fully pressed above 30 km/h. |

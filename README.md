@@ -103,8 +103,10 @@ redistributes the paid Xbox DLC without a license. Please reproduce problems wit
 
 * 60 fps: races, AI and physics were checked, not every power play and cutscene; `FrameRate=30` if
   something looks off.
-* Boost, handbrake, power bar fill, photo mode and HUD key are for player 1 only; the photo mode only
-  on a single screen, and once your car is wrecked the crash sequence decides the view.
+* Photo mode and HUD key are for player 1 only, the photo mode only on a single screen; once your car
+  is wrecked the crash sequence decides the view. In split screen boost, handbrake and power bar fill
+  work for both players (Steam build, not the Russian depot); tested with two pads, not yet with one
+  player on the keyboard.
 * Full ultrawide mode, Online over Steam and the DLC are experimental.
 * HDR runs in a borderless window; the Steam overlay may not show.
 * With a wheel or other DirectInput device, the controls screen names inputs generically.
