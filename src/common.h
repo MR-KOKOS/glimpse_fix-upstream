@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <dinput.h>
 #include <xinput.h>
+#include <stdint.h>
 
 enum GlyphStyle { GLYPHS_AUTO_XBOX, GLYPHS_AUTO_PS, GLYPHS_KEYBOARD };
 
@@ -60,6 +61,7 @@ struct Config {
     bool  dlcCarsCareer;     // experimental, with dlcCars: also in the career's front-end car select
     int   textureDetail;     // 0 = full; 1-3 skip that many of the textures' top mip levels
     bool  glassFix;          // car glass: no sun specular from the glass's opacity (G-buffer alpha as on the Xbox, glass.cpp)
+    bool  raceEndTiming;     // show Continue when the finish card can accept it
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's
@@ -107,7 +109,7 @@ enum PatchBits {
     /* 0x100: was RenderScale, removed */ PATCH_PADNAMES = 0x200, PATCH_LOD = 0x400, PATCH_D3D = 0x800,
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
-    PATCH_ONLINE = 0x400000,
+    PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -224,6 +226,8 @@ void UltrawidePresent(IDirect3DDevice9* dev);   // diag.cpp's Present hook, befo
 void UltrawideDeviceLost();                     // diag.cpp's Reset hook, before Reset
 void UltrawideDeviceReset(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp);  // after a successful Reset
 bool UltrawideBinkHook(const void* fn);         // fn is one of its Bink import hooks
+bool ReadMovieName(void* movie, char* out, size_t size);  // Steam GFxMovieDefImpl
+bool SwapSlot(void** slot, void* hook, void** orig);
 bool IntroSkipBinkHook(const void* fn);         // game.cpp: fn is one of the intro skip's Bink import hooks
 
 // camera.cpp
@@ -260,7 +264,7 @@ void WriteMemory(void* at, const void* src, size_t len);
 // reads unguarded: call it inside __try
 bool ClassIs(void** vt, DWORD col, const char* name);
 
-// Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x48 Invoke
+// Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x30 GetVariable, +0x48 Invoke
 struct GFxValue {
     DWORD type;
     DWORD pad;
@@ -273,6 +277,7 @@ enum { GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
 
 typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* result, const GFxValue* args, unsigned count);
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
+typedef bool(__thiscall* GFxGetVariable_t)(void* movie, GFxValue* result, const char* path);
 void ApplyGamePatches();
 
 // online.cpp - SteamLAN=1 (PROTOTYPE): the game's LAN mode over Steam. A transport for Quazal's
@@ -313,6 +318,7 @@ void DlcOnlineSignature(char* sig, size_t sigSize, char* names, size_t namesSize
 // the converter's DLC cars the merged overlay brings (dlccars.cpp): their count, the IDs comma separated into ids
 int DlcCarsInOverlay(char* ids, size_t idsSize);
 bool DlcOverlayHas(const char* path);  // the merged resident.ark is in use and has this path (dlcfs.cpp)
+bool ResidentEntryMatches(const char* path, size_t size, uint32_t crc);
 void DlcInstallModes();    // [DLC] Modes: right after ApplyGamePatches (dlcmode.cpp)
 struct IDirect3DSurface9;
 // dlcpickups.cpp - [DLC] Pickups=1: Deadline's green pickup boxes (stop the countdown)
