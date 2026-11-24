@@ -394,6 +394,7 @@ static bool s_extendMask1;        // set while a kExtendMask1 movie is in Displa
 static bool s_rootMaskExtended;   // true only while the active depth-1 mask itself was extended by a P_MASK rule
 static bool s_mirrorNow;          // set while the pause menu is in Display
 static int s_maskPhase;           // 0 none, 1 submitting mask shapes, 2 drawing masked content
+static int s_maskSubmitMode;      // BeginSubmitMask mode, meaningful during mask submission
 static int s_maskDepth;           // nested stencil mask depth (mirrors GRenderer+0x170)
 static float s_stageL, s_stageR, s_stageH, s_visL, s_visR, s_visT, s_visB;  // renderer units
 
@@ -496,11 +497,10 @@ static bool VertBounds(int first, int n, float& minx, float& maxx, float& miny, 
 // widened to the left by e px and the x mapping compensated so everything lands on the same pixels.
 static bool BeginEdgeCopy(float* m, D3DVIEWPORT9& saved, DWORD& sc)
 {
-    if (!s_dev || s_edgeVpW <= 0 || FAILED(s_dev->GetViewport(&saved))) return false;
+    float sw = s_stageR - s_stageL;
+    if (sw <= 0 || !s_dev || s_edgeVpW <= 0 || FAILED(s_dev->GetViewport(&saved))) return false;
     s_dev->GetRenderState(D3DRS_SCISSORTESTENABLE, &sc);
     s_dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-    float sw = s_stageR - s_stageL;
-    if (sw <= 0) return false;
     float k = s_edgeVpW / sw;
     DWORD want = (DWORD)(fabsf(kEdgeOffset) * k + 32.0f);
     if (want < 128) want = 128;
@@ -571,7 +571,8 @@ static void __fastcall Hook_RDrawTri(void* r, void*, int base, int minIdx, int c
         s_rDrawTri(r, base, minIdx, count, start, tris);
         return;
     }
-    if (s_maskPhase == 1 && s_maskDepth == 1 && rule && rule->phase == P_MASK && rule->act == R_BOTH)
+    // Mode 2 can already report depth 1 while submitting the geometry that removes a child mask.
+    if (s_maskPhase == P_MASK && s_maskSubmitMode == 0 && rule && rule->phase == P_MASK && rule->act == R_BOTH)
         s_rootMaskExtended = true;
     // stage edges map to the screen edges: shapes reaching past a stage edge keep their overshoot beyond the
     // screen edge, shapes wholly outside the stage move with it, thin lines and square sprites (glows) stay
@@ -608,9 +609,9 @@ static void __fastcall Hook_RDrawTri(void* r, void*, int base, int minIdx, int c
         s_rDrawTri(r, base, minIdx, count, start, tris);
         return;
     }
-    // a shape's anti-aliased fringe fades over its outermost pixel: one pushed exactly to a screen edge would
-    // leave a 1 px line there, so edges near a screen edge go 2 px beyond it (also top and bottom, within 5 px
-    // at 1440p scaled with screen height: some letterbox bars and car unlock fills sit up to 4 px inside stage)
+    // A shape's anti-aliased fringe can leave a 1 px line, so snap nearby edges 2 px past the screen.
+    // The top/bottom tolerance is deliberately 5 px at 1440p for all kExtend movies' shapes that reach
+    // a screen side. It scales with screen height and catches bars and fills that sit 4 px inside the stage.
     float ny0 = 0, sy = 1;
     if (s_scrW > 0 && s_scrH > 0) {
         float ux = (s_visR - s_visL) / s_scrW, uy = (s_visB - s_visT) / s_scrH;
@@ -666,6 +667,7 @@ static void __fastcall Hook_RBeginMask(void* r, void*, int a)
     if (a == 0) { s_maskDepth = 1; s_rootMaskExtended = false; }
     else if (a == 1) s_maskDepth++;
     else if (a == 2 && s_maskDepth > 0) s_maskDepth--;
+    s_maskSubmitMode = a;
     s_maskPhase = 1;
     s_rBeginMask(r, a);
 }
