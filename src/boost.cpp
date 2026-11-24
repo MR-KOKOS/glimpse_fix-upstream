@@ -1,9 +1,10 @@
-// Split/Second PC fix - boost (X or BoostKey held), full power bar (LS+RS or PowerBarFillKey) for player 1,
-// boost for the AI cars
+// Split/Second PC fix - boost (X or BoostKey held), full power bar (LS+RS or PowerBarFillKey) and handbrake for
+// player 1, in split screen for both players (each with their own pad), boost for the AI cars
 //
 // All of it works on game data reached from the in-game resources global, no code is touched:
 //   [0xD66B28] cInGameResources  +0xE4 cGameLogic (vtable 0xBA9A74): +0x18 player count, +0x1C players,
-//                                +0x58 local (human) players, they come first
+//                                +0x58 (not the local players: 8 in an 8-car split screen race too); the
+//                                local players come first (split screen: Seats)
 //   player i cPlayerLogic (0xBA63D4): +0xE8 cPowerBar (0xBA8644) +0x2C output (0xBA8680), +8 power 0..100
 //                                     +0xAC cVehicleState (0xBA7378) +0x40 vehicle list, +4 + i*4 vehicle i
 //   vehicle +0x584 chassis hkpRigidBody (0xBE9C90): +0x100 forward axis, +0x110 position,
@@ -13,6 +14,7 @@
 // and the game is not paused (the chassis moved since the last frame).
 #include "common.h"
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 static void* const* const kInGameResources = (void* const*)G(0x00D66B28);
@@ -90,15 +92,19 @@ static bool Push(BYTE* body, float accel, float dt)
     return true;
 }
 
+// The buttons of one XInput slot, or of every pad (kAllPads: single screen, any pad drives player 1).
 // Pads not wrapped (VirtualPads=0): the game reads the pad itself and the fix cannot take a button away from
 // it (RacePad), so the pad's X and Y would boost and also do the game's own action: keys only then
-static WORD PadButtons()
+static const int kAllPads = -2;
+
+static WORD PadButtons(int pad = kAllPads)
 {
     WORD buttons = 0;
     XINPUT_STATE st;
     // polling empty slots is slow, so only the ones the pad wrapper has seen connected
     for (DWORD i = 0; i < XUSER_MAX_COUNT && PadsWrapped(); i++)
-        if (PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS) buttons |= st.Gamepad.wButtons;
+        if ((pad == kAllPads || pad == (int)i) && PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS)
+            buttons |= st.Gamepad.wButtons;
     return buttons;
 }
 
@@ -160,12 +166,14 @@ static unsigned Random()
 // "SSAI/Debug Cheats/AI Full Power Bar" (0xD72534), read by every AI player update (0x51AC16).
 static BYTE* const kAiFullPowerBar = (BYTE*)G(0x00D72534);
 
-static void AiBoost(BYTE* logic, BYTE* player0, BYTE* body0, float dt)
+// locals: the local players (Seats), whose cars come first and are never boosted as AI cars
+static void AiBoost(BYTE* logic, BYTE* player0, BYTE* body0, int locals, float dt)
 {
     if (g_cfg.aiBoostChaos) *kAiFullPowerBar = 1;
     int count = *(int*)(logic + 0x18);
     int humans = *(int*)(logic + 0x58);
     if (humans < 1 || humans >= count) humans = 1;
+    if (humans < locals) humans = locals;  // +0x58 holds 8 in an 8-car split screen race as well
     const AiBoostLevel& lv = kAiLevels[g_cfg.aiBoostLevel - 1];
     for (int i = humans; i < count && i < 16; i++) {
         AiBoostState& a = s_ai[i];
@@ -267,6 +275,134 @@ static int LocalIndex(BYTE* logic)
     return best;
 }
 
+// The local players and their pads. Single screen: one, this player's car (LocalIndex), every pad and the keys.
+// Split screen: the front end's race setup [0xD6EE78] (0x453300 returns it, +0x9C the screen count) holds each
+// of the two local players' car (+0xD0, two ints) and controller (+0xD8, two ints). The split screen start
+// (0x47EDD0) sets them through 0x78E3E0 / 0x78E240. Player input i (cPlayerInput, +0x14 = i) drives car i with
+// the controller 0x78E4C0 finds for it. That controller is the game's own number, not the XInput slot (in a test
+// the second pad was controller 0), so which pad drives which car is learnt from the game's reaction (LearnPads).
+// The keys go to the local car no learnt pad drives, else to the first. Steam build only: the address is not in
+// build_ru.inc, the other builds keep the extras on player 1 in split screen.
+struct Seat {
+    int car;  // place in the player and car lists
+    int pad;  // XInput slot, kAllPads, or -1 (not learnt yet: no pad extras)
+};
+
+static const BYTE* const kRaceSetup = (const BYTE*)0x00D6EE78;
+
+// The two local cars' steering (vehicle +0x500, which 0xAB8BD0 writes from the car's controller every frame,
+// with the stick's sign) against the XInput sticks. Only frames in which exactly one pad's stick is pushed
+// (the others centred) count: a car that steers the same way as that stick scores for the pad, a car that does
+// not steer or steers the other way loses. A car the game drives itself (after the finish, while it is put back
+// on the track) steers on its own and does not follow the stick, so it does not build up a score. A pad drives
+// the car it has a clear lead for; an assignment changes only when another pad leads it by far. With two pads
+// and one of them assigned, the other pad drives the other car. Learnt anew for every race (new cars).
+static struct {
+    BYTE* veh[2];
+    int padOf[2];
+    int score[XUSER_MAX_COUNT][2];
+} s_learn;
+
+static int Clamp100(int v) { return v > 100 ? 100 : v < -100 ? -100 : v; }
+
+static void LearnPads(BYTE* logic, Seat* seats)
+{
+    BYTE* v[2];
+    for (int k = 0; k < 2; k++) v[k] = Vehicle(Player(logic, seats[k].car), seats[k].car);
+    if (!v[0] || !v[1] || IsBadReadPtr(v[0] + 0x500, 4) || IsBadReadPtr(v[1] + 0x500, 4)) return;
+    if (v[0] != s_learn.veh[0] || v[1] != s_learn.veh[1]) {
+        memset(&s_learn, 0, sizeof(s_learn));
+        s_learn.veh[0] = v[0];
+        s_learn.veh[1] = v[1];
+        s_learn.padOf[0] = s_learn.padOf[1] = -1;
+    }
+    int pushed = -1, connected = 0;
+    float lx = 0;
+    bool conn[XUSER_MAX_COUNT] = {};
+    XINPUT_STATE st;
+    for (int i = 0; i < XUSER_MAX_COUNT && PadsWrapped(); i++) {
+        if (!PadSlotConnected(i) || pXInputGetState(i, &st) != ERROR_SUCCESS) continue;
+        conn[i] = true;
+        connected++;
+        int x = st.Gamepad.sThumbLX;
+        if (x > 9830 || x < -9830) {  // 0.3
+            pushed = pushed == -1 ? i : -2;  // -2: more than one pad steers
+            lx = x / 32767.0f;
+        } else if (x > 3277 || x < -3277) {
+            pushed = -2;  // not centred: not a clean frame
+        }
+    }
+    if (pushed >= 0) {
+        for (int k = 0; k < 2; k++) {
+            float steer = *(const float*)(v[k] + 0x500);
+            bool follows = fabsf(steer) > 0.2f && (steer > 0) == (lx > 0);
+            s_learn.score[pushed][k] = Clamp100(s_learn.score[pushed][k] + (follows ? 1 : -1));
+        }
+    }
+    for (int k = 0; k < 2; k++) {
+        int best = -1, bestScore = 0, second = 0;
+        for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+            int sc = s_learn.score[i][k];
+            if (best < 0 || sc > bestScore) {
+                second = best < 0 ? -100 : bestScore;
+                best = i;
+                bestScore = sc;
+            } else if (sc > second) {
+                second = sc;
+            }
+        }
+        int cur = s_learn.padOf[k];
+        if (bestScore < 20 || bestScore - second < 15 || best == cur) continue;
+        if (cur >= 0 && bestScore < s_learn.score[cur][k] + 30) continue;  // hysteresis: a clear lead only
+        // the pad drives only one car: the car it leads more for keeps it
+        if (s_learn.padOf[1 - k] == best && s_learn.score[best][1 - k] >= bestScore) continue;
+        if (s_learn.padOf[1 - k] == best) s_learn.padOf[1 - k] = -1;
+        s_learn.padOf[k] = best;
+        Log("split screen: pad %d steers player %d's car (car %d, score %d)", best, k + 1, seats[k].car, bestScore);
+    }
+    // two pads, one assigned: the other one drives the other car (unless its steering says otherwise)
+    for (int k = 0; k < 2 && connected == 2; k++) {
+        if (s_learn.padOf[k] < 0 || s_learn.padOf[1 - k] >= 0) continue;
+        for (int i = 0; i < XUSER_MAX_COUNT; i++)
+            if (conn[i] && i != s_learn.padOf[k] && s_learn.score[i][1 - k] > -20) {
+                s_learn.padOf[1 - k] = i;
+                Log("split screen: so pad %d is player %d's (car %d)", i, 2 - k, seats[1 - k].car);
+            }
+    }
+    seats[0].pad = s_learn.padOf[0];
+    seats[1].pad = s_learn.padOf[1];
+}
+
+static int Seats(BYTE* logic, int me, Seat* seats)
+{
+    seats[0].car = me;
+    seats[0].pad = kAllPads;
+    if (CurrentBuild() != BUILD_STEAM || IsBadReadPtr(kRaceSetup, 0xE0)) return 1;
+    // the screen count, not cGameLogic +0x58: that holds the player count in split screen too (8 of 8)
+    int count = *(int*)(logic + 0x18);
+    if (*(const int*)(kRaceSetup + 0x9C) != 2 || count < 2) return 1;
+    for (int k = 0; k < 2; k++) {
+        int car = *(const int*)(kRaceSetup + 0xD0 + 4 * k);
+        seats[k].car = car >= 0 && car < count ? car : k;
+        seats[k].pad = -1;
+    }
+    static int logged[4] = { -9, -9, -9, -9 };
+    int now[4] = { seats[0].car, seats[1].car, *(const int*)(kRaceSetup + 0xD8), *(const int*)(kRaceSetup + 0xDC) };
+    if (memcmp(logged, now, sizeof(now))) {
+        memcpy(logged, now, sizeof(now));
+        Log("split screen: player 1 car %d, player 2 car %d (game controllers %d / %d); each pad's car is learnt "
+            "from the steering", now[0], now[1], now[2], now[3]);
+    }
+    LearnPads(logic, seats);
+    return 2;
+}
+
+// Which local player the keys belong to: the one no learnt pad drives, else the first
+static int KeysSeat(const Seat* seats, int n)
+{
+    return n == 2 && seats[0].pad >= 0 && seats[1].pad < 0 ? 1 : 0;
+}
+
 // ---------------------------------------------------------------- handbrake
 //
 // The game has no handbrake: its input stream reads a handbrake action, but the copy into the car
@@ -305,9 +441,9 @@ static void YawLearn(BYTE* vehicle, BYTE* body)
         s_yawSign = sgn;
     }
 }
-static bool s_driftSet;     // mode 1: the timer is ours
-
-static void Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, float dt)
+// One local player's car, with the pad it is driven with (Seat::pad) and its own drift flag (mode 1: the timer
+// is ours). Mode 2: returns the XInput slots whose brake is to be pressed (bit per slot).
+static BYTE Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, int pad, bool& driftSet, float dt)
 {
     float forward = 0;
     if (body) forward = Dot((float*)(body + 0x1A0), (float*)(body + 0x100));
@@ -316,14 +452,14 @@ static void Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, float dt)
         XINPUT_STATE st;
         if (forward > 8.0f && g_cfg.handbrakeButton)
             for (DWORD i = 0; i < XUSER_MAX_COUNT && PadsWrapped(); i++)
-                if (PadSlotConnected(i) && pXInputGetState(i, &st) == ERROR_SUCCESS &&
-                    (st.Gamepad.wButtons & g_cfg.handbrakeButton))
+                if ((pad == kAllPads || pad == (int)i) && PadSlotConnected(i) &&
+                    pXInputGetState(i, &st) == ERROR_SUCCESS && (st.Gamepad.wButtons & g_cfg.handbrakeButton))
                     slots |= 1 << i;
-        if (forward > 8.0f && (buttons & KEY_HANDBRAKE)) slots |= 1;  // the keyboard: the first pad
-        s_brakeSlots = slots;
-        return;
+        // the keyboard: the first pad, in split screen player 1's (none when player 1 drives without a pad)
+        if (forward > 8.0f && (buttons & KEY_HANDBRAKE)) slots |= pad == kAllPads ? 1 : pad >= 0 ? 1 << pad : 0;
+        return slots;
     }
-    if (!vehicle || IsBadWritePtr(vehicle + 0x64C, 4)) return;
+    if (!vehicle || IsBadWritePtr(vehicle + 0x64C, 4)) return 0;
     float* timer = (float*)(vehicle + 0x64C);
     bool held = (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE)) != 0;
     if (!held && body && forward > 10.0f) YawLearn(vehicle, body);
@@ -375,12 +511,13 @@ static void Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, float dt)
             Log("handbrake: yaw axis %s, steering sign %+d, steer %.2f", up < 0 ? "not learnt yet (drive a few curves)" : up ? "+0xF0" : "+0xE0",
                 s_yawSign, steer);
         }
-        if (!s_driftSet) Log("handbrake: forced drift on (%.0f km/h)", forward * 3.6f);
-        s_driftSet = true;
-    } else if (s_driftSet) {
+        if (!driftSet) Log("handbrake: forced drift on (%.0f km/h)", forward * 3.6f);
+        driftSet = true;
+    } else if (driftSet) {
         if (*timer <= 0.1f) *timer = -1.0f;
-        s_driftSet = false;
+        driftSet = false;
     }
+    return 0;
 }
 
 // The pad as the game sees it in a race (dinput_wrap.cpp, every poll): the buttons the boost and the
@@ -403,69 +540,95 @@ void RacePad(int slot, XINPUT_GAMEPAD* pad)
         pad->bLeftTrigger = 255;
 }
 
+// what each local player's extras remember from frame to frame
+struct SeatState {
+    WORD lastButtons;
+    float lastPos[3];
+    bool driftSet;  // handbrake mode 1: the drift timer is ours
+    bool wasBoost, wasBrake;
+    int boostLogs, brakeLogs;
+};
+static SeatState s_seat[2];
+
 void BoostTick()
 {
     static DWORD lastTick;
-    static WORD lastButtons;
-    static float lastPos[3];
     DWORD now = GetTickCount();
     float dt = lastTick ? (now - lastTick) / 1000.0f : 0.0f;
     lastTick = now;
     if (dt > 0.1f) dt = 0.1f;
 
     // the photo mode drives the camera with the pad, Shift and Ctrl: no boost or power bar meanwhile
-    WORD buttons = CameraBlocksPad() ? 0 : PadButtons() | KeyButtons();
-    WORD pressed = buttons & ~lastButtons;
-    lastButtons = buttons;
-    bool boosting = false;
+    bool blocked = CameraBlocksPad();
+    WORD keys = blocked ? 0 : KeyButtons();
+    bool blurBoost = false;  // the boost's motion blur: single screen only (one blur for the whole screen)
+    BYTE brakeSlots = 0;
 
     __try {
         BYTE* logic = GameLogic();
-        int me = logic ? LocalIndex(logic) : 0;
-        BYTE* player = logic ? Player(logic, me) : NULL;
-        if (player) {
+        Seat seats[2] = { { 0, kAllPads }, { 1, -1 } };
+        int n = logic ? Seats(logic, LocalIndex(logic), seats) : 1;
+        int keysSeat = KeysSeat(seats, n);
+        BYTE *player0 = NULL, *body0 = NULL;
+        for (int k = 0; k < n; k++) {
+            SeatState& st = s_seat[k];
+            WORD buttons = blocked ? 0 : PadButtons(seats[k].pad) | (k == keysSeat ? keys : 0);
+            WORD pressed = buttons & ~st.lastButtons;
+            st.lastButtons = buttons;
+            int car = seats[k].car;
+            BYTE* player = logic ? Player(logic, car) : NULL;
+            if (!player) continue;
             const WORD fill = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
             if (g_cfg.powerFill && (buttons & fill) == fill && (pressed & fill)) {
                 if (float* power = PowerValue(player)) {
                     *power = 100.0f;
-                    Log("power bar filled");
+                    if (n > 1) Log("power bar filled (player %d)", k + 1);
+                    else Log("power bar filled");
                 }
             }
-            BYTE* body = Chassis(player, me);
+            BYTE* body = Chassis(player, car);
+            bool boosting = false;
             if (body && g_cfg.boost) {
                 float* pos = (float*)(body + 0x110);
-                bool moved = pos[0] != lastPos[0] || pos[1] != lastPos[1] || pos[2] != lastPos[2];
-                memcpy(lastPos, pos, sizeof(lastPos));
+                bool moved = pos[0] != st.lastPos[0] || pos[1] != st.lastPos[1] || pos[2] != st.lastPos[2];
+                memcpy(st.lastPos, pos, sizeof(st.lastPos));
                 if ((buttons & (g_cfg.boostButton | KEY_BOOST)) && moved) boosting = Push(body, g_cfg.boostAcceleration, dt);
             }
-            if (g_cfg.handbrake) Handbrake(Vehicle(player, me), body, buttons, dt);
-            if (g_cfg.aiBoost && (g_cfg.patchMask & PATCH_AIBOOST)) AiBoost(logic, player, body, dt);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        boosting = false;
-    }
+            if (g_cfg.handbrake) brakeSlots |= Handbrake(Vehicle(player, car), body, buttons, seats[k].pad, st.driftSet, dt);
+            if (k == 0) {
+                player0 = player;
+                body0 = body;
+                blurBoost = n == 1 && boosting;
+            }
 
-    // Log=1: every start and end of a boost or handbrake pull with what held it (pad buttons, keys), so a
-    // stuck key or pad shows (a remote desktop may leave Shift held down); the first 40 of each
-    if (g_cfg.log) {
-        static bool wasBoost, wasBrake;
-        static int boostLogs, brakeLogs;
-        bool brake = g_cfg.handbrake && (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE));
-        if (boosting != wasBoost && boostLogs < 40) {
-            boostLogs++;
-            Log("boost %s (pad buttons %04X, boost key %s)", boosting ? "starts" : "ends", PadButtons(),
-                (buttons & KEY_BOOST) ? "held" : "up");
+            // Log=1: every start and end of a boost or handbrake pull with what held it (pad buttons, keys), so a
+            // stuck key or pad shows (a remote desktop may leave Shift held down); the first 40 of each per player
+            if (g_cfg.log) {
+                bool brake = g_cfg.handbrake && (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE));
+                char who[16] = "";
+                if (n > 1) sprintf_s(who, "player %d, ", k + 1);
+                if (boosting != st.wasBoost && st.boostLogs < 40) {
+                    st.boostLogs++;
+                    Log("boost %s (%spad buttons %04X, boost key %s)", boosting ? "starts" : "ends", who,
+                        PadButtons(seats[k].pad), (buttons & KEY_BOOST) ? "held" : "up");
+                }
+                if (brake != st.wasBrake && st.brakeLogs < 40) {
+                    st.brakeLogs++;
+                    Log("handbrake %s (%spad buttons %04X, handbrake key %s)", brake ? "pulled" : "released", who,
+                        PadButtons(seats[k].pad), (buttons & KEY_HANDBRAKE) ? "held" : "up");
+                }
+                st.wasBoost = boosting;
+                st.wasBrake = brake;
+            }
         }
-        if (brake != wasBrake && brakeLogs < 40) {
-            brakeLogs++;
-            Log("handbrake %s (pad buttons %04X, handbrake key %s)", brake ? "pulled" : "released", PadButtons(),
-                (buttons & KEY_HANDBRAKE) ? "held" : "up");
-        }
-        wasBoost = boosting;
-        wasBrake = brake;
+        if (player0 && g_cfg.aiBoost && (g_cfg.patchMask & PATCH_AIBOOST)) AiBoost(logic, player0, body0, n, dt);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        blurBoost = false;
     }
+    s_brakeSlots = brakeSlots;
 
     // blur reaches full strength in 0.25 s and fades out over 0.5 s
+    bool boosting = blurBoost;
     if (boosting) s_boostBlend = s_boostBlend + dt * 4.0f > 1.0f ? 1.0f : s_boostBlend + dt * 4.0f;
     else s_boostBlend = s_boostBlend - dt * 2.0f < 0.0f ? 0.0f : s_boostBlend - dt * 2.0f;
 }
