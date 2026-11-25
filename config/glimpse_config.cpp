@@ -1208,14 +1208,6 @@ static std::string SystemExe(const char* name)
     return FileExists(root + "\\System32\\" + name) ? root + "\\System32\\" + name : "";
 }
 
-// D3DCompiler_41.dll of the DirectX End-User Runtime (June 2010), which the DLC tracks' shaders need (build_all.py
-// d3dcompiler_ok checks it again with the bitness of its Python)
-static bool D3DCompilerThere()
-{
-    std::string root = EnvVar("SystemRoot");
-    return (IsWow64() && FileExists(root + "\\Sysnative\\D3DCompiler_41.dll")) || FileExists(root + "\\System32\\D3DCompiler_41.dll");
-}
-
 // ---------------------------------------------------------------- DLC: the DLC tools (one download per release)
 //
 // The contract with the release (the same as tools\dlc\setup_deps.ps1 and build_all.py keep): everything here.
@@ -1269,6 +1261,19 @@ static Python FindPython()
     p.exe = FindPy();
     p.bundled = false;
     return p;
+}
+
+// D3DCompiler_41.dll of the DirectX End-User Runtime (June 2010), which the DLC tracks' shaders need. build_all.py
+// (d3dcompiler_ok) loads it from System32 with the bitness of its Python: the DLC tools' Python is 64 bit, so on 64 bit
+// Windows that is the 64 bit DLL (Sysnative from this 32 bit program, whose System32 is SysWOW64); with the py launcher,
+// whose Python may be either, both. The runtime installs both.
+static bool D3DCompilerThere()
+{
+    std::string root = EnvVar("SystemRoot");
+    const bool own = FileExists(root + "\\System32\\D3DCompiler_41.dll");  // this program's bitness
+    if (!IsWow64()) return own;
+    const bool dll64 = FileExists(root + "\\Sysnative\\D3DCompiler_41.dll");
+    return dll64 && (own || FindPython().bundled);
 }
 
 // vgmstream-cli / ffmpeg where build_all.py's find_exe looks: PATH, then the DLC tools folder

@@ -396,6 +396,14 @@ void DlcInstall()
     try {  // while the DLL loads: nothing may leave this
         Install();
     } catch (...) {
+        // as the failures inside Install: nothing of the overlays stays in (the name redirect may be in already, and
+        // the kernel32 slots too when only the overlay lists at Install's end ran out of memory)
+        IoUninstall();
+        s_altCount = 0;
+        s_resident = NULL;
+        s_trackMerged = false;
+        s_overlays.clear();
+        s_trackOverlays.clear();
         Log("DLC: overlays not used (out of memory or a broken index)");
     }
 }

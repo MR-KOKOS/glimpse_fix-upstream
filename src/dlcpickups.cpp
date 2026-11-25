@@ -568,6 +568,15 @@ static void RaceName(BYTE* res, char* out, size_t n)
     sprintf_s(out, n, "%s/%s", track, sub);
 }
 
+// the start time ApplyBonus gives a Deadline race whose pack start time is base (dlcrivals.cpp measures the rivals'
+// clock used against it): + DeadlineBonus in whole seconds with Pickups=0, nothing for a pack that carries it already
+float DeadlineStartFor(float base)
+{
+    if (!BonusWanted() || !(base > 0.0f && base <= 100.0f)) return base;
+    const float v = base + floorf(g_cfg.deadlineBonus + 0.5f);  // whole seconds: the time left is shown from (int)start
+    return v > 3600.0f ? 3600.0f : v;
+}
+
 // out: player 1's countdown output when the reset has already copied the value (else NULL)
 static void ApplyBonus(float* out)
 {
@@ -581,8 +590,7 @@ static void ApplyBonus(float* out)
         s_bonusOldPackLogged = true;
         return;
     }
-    float v = base + floorf(g_cfg.deadlineBonus + 0.5f);  // whole seconds: the time left is shown from (int)start
-    if (v > 3600.0f) v = 3600.0f;
+    const float v = DeadlineStartFor(base);
     *kInitialCountdown = v;
     s_bonusWritten = v;
     strcpy_s(s_bonusRace, race);
@@ -765,12 +773,15 @@ static void __fastcall Hook_ObjectivesEnter(void* self, void*)
 static void __fastcall Hook_RaceEndEnter(void* self, void*)
 {
     KindForDeadline("race end screen");
-    RivalsRaceEnd((BYTE*)self);  // the time text as the time left
+    // the time text as the time left. self is cRaceEnd + 4 (this vtable's COL offset): the game's enter goes back to
+    // the object with lea edi, [esi-4] (0x808622), and 0x807730 / 0x8082D0 use +0x808 and +0x814 from there
+    RivalsRaceEnd((BYTE*)self - 4);
     s_origRaceEndEnter(self);
 }
 
 // a finished Deadline race on one screen, offline, with the Time Trial kind: the results show the time left of
-// *start (dlcrivals.cpp, screen enters). Finished: player 1's cEndGame output +9 (0x79A210 builds the rows then)
+// *start (dlcrivals.cpp, screen enters). Finished: player 1's cEndGame output +8, set by 0x442590 when the race ends
+// (finish or the clock run out) and cleared by the reset 0x442520 (+9 is set for one update only: 0x442DB8 clears it)
 bool DeadlineResultsNow(float* start)
 {
     __try {
@@ -782,7 +793,7 @@ bool DeadlineResultsNow(float* start)
         DWORD id = *kEndGameId;
         BYTE* eg = player && id < 64 ? Ptr(player, 0xA4 + id * 4) : NULL;
         BYTE* o = Is(eg, kEndGameVt) ? Ptr(eg, 0x2C) : NULL;
-        if (!Is(o, kEndGameOutVt) || !o[9]) return false;
+        if (!Is(o, kEndGameOutVt) || !o[8]) return false;
         *start = s_startValue;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {

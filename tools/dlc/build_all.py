@@ -188,7 +188,7 @@ WORK_MARKER = 'glimpse_dlc_work.txt'
 # what may lie in a work folder without the marker: the settings program's logs and status files (it makes the
 # folder and starts the build there), the lock of build_all.py / install_dlc.py, Explorer's folder files
 WORK_FOREIGN_OK = ('build.log', 'install.log', 'build_status.txt', 'install_status.txt', 'build_status.txt.tmp',
-                   'install_status.txt.tmp', 'build.lock', 'desktop.ini', 'thumbs.db')
+                   'install_status.txt.tmp', 'download.log', 'deps.log', 'build.lock', 'desktop.ini', 'thumbs.db')
 
 
 def claim_work(work, write):

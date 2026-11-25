@@ -49,6 +49,7 @@
 
 bool DlcOverlayRead(const char* path, std::vector<unsigned char>* out);  // dlcfs.cpp
 bool DeadlineResultsNow(float* start);  // dlcpickups.cpp: a finished Deadline race on one screen, offline, kind 1
+float DeadlineStartFor(float base);     // dlcpickups.cpp: the race's start time for the pack's (+ DeadlineBonus)
 
 // ---------------------------------------------------------------- game addresses (Steam build)
 static BYTE* const* const kRaceInfo = (BYTE* const*)0x00D719F8;
@@ -302,15 +303,18 @@ void RivalsObjectives(BYTE* info)
             for (int i = 0; i < s_rivalCount; i++)
                 if (!strcmp(nm, names[i])) return;
         }
+        // the clock used against the race's own start time (with Pickups=0 the pack's + DeadlineBonus), so that the
+        // results, which show every row's time left from that start, show each rival's <Rival>Time as it is
+        const float start = DeadlineStartFor(s_countdown);
         for (int i = 0; i < s_rivalCount; i++) {
             // as TU4: (float)(Countdown - <Rival>Time) * 100.0, truncated, hundredths
-            const float used = s_countdown - s_rivals[i].time;
+            const float used = start - s_rivals[i].time;
             const __int64 v = used > 0.0f ? (__int64)((double)used * 100.0) : 0;
             kInfoAdd(info, names[i], 1, 0, (DWORD)v, (DWORD)(v >> 32));
         }
         kInfoSort(info + kEntries, 0, kSortHigh, kInfoCompare, info + kEntries);
-        Log("DLC modes: Deadline rivals: %d added to the race's times (%s/%s, countdown %.1f s), %lu entries", s_rivalCount,
-                track, sub, s_countdown, *(const DWORD*)(info + kInfoCount));
+        Log("DLC modes: Deadline rivals: %d added to the race's times (%s/%s, countdown %.1f s, start %.1f s), %lu entries",
+            s_rivalCount, track, sub, s_countdown, start, *(const DWORD*)(info + kInfoCount));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         SkipOnce(3, "reading the race info failed, no rivals");
     }

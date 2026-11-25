@@ -389,19 +389,16 @@ function Do-D3DCompiler($python) {
     if (Test-Path -LiteralPath $need) { Ok 'D3DCompiler_41' $need; return }
     Miss 'D3DCompiler_41' 'DirectX End-User Runtime (June 2010), from Microsoft'
     if (-not $Install) { return }
-    if (Has-Winget) {
-        Say '    installing the DirectX End-User Runtime with winget (it asks for admin rights)'
-        winget install --id Microsoft.DirectX --source winget --accept-package-agreements --accept-source-agreements | Out-Host
-    } else {
-        $exe = Join-Path $TempDir 'dxwebsetup.exe'
-        Get-File $DirectXWeb $exe
-        $sig = Get-AuthenticodeSignature -FilePath $exe
-        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
-            Say '    the DirectX installer is not signed by Microsoft; not started' 'Red'; return
-        }
-        Say '    starting Microsoft''s DirectX web installer (it asks for admin rights; untick the Bing bar offer if shown)'
-        Start-Process -FilePath $exe -Wait
+    # always Microsoft's web installer: winget's Microsoft.DirectX package lists the Store framework
+    # (Microsoft.DirectXRuntime, MSIX) ahead of dxwebsetup.exe and picks it, which leaves System32 without the DLL
+    $exe = Join-Path $TempDir 'dxwebsetup.exe'
+    Get-File $DirectXWeb $exe
+    $sig = Get-AuthenticodeSignature -FilePath $exe
+    if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+        Say '    the DirectX installer is not signed by Microsoft; not started' 'Red'; return
     }
+    Say '    starting Microsoft''s DirectX web installer (it asks for admin rights; untick the Bing bar offer if shown)'
+    Start-Process -FilePath $exe -Wait
     if (Test-Path -LiteralPath $need) { Say "    installed: $need" 'Cyan' } else { Say "    still missing: $need" 'Red' }
 }
 
