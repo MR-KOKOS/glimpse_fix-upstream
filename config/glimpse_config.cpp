@@ -30,6 +30,7 @@
 #include <string>
 #include <vector>
 #include "../src/ini_percent.h"
+#include "../src/hud_resolution.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
@@ -103,6 +104,8 @@ static Option kOptions[] = {
     { "Graphics", "HDRPeakBrightness", RANGE, "  Peak brightness", "The display's peak brightness in nits (see the display's data or the Windows HDR calibration). The brightest lights go up to this.", "1000", 0, 400, 4000, 50, 0 },
     { "Graphics", "HDRPaperWhite", RANGE, "  Paper white", "Brightness of the game's white (menus, HUD, a white wall in daylight) in nits. Higher = the whole picture brighter.", "200", 0, 80, 500, 10, 0 },
     { "Graphics", "FixPowerplayIconSize", BOOL_OPT, "Power play icons at console size", "The PC port draws the power play icons and route markers too big above 1280 pixels width (3x at 4K).", "1" },
+    { "Graphics", "HudResolution", CHOICE, "3D HUD resolution", "Sharper HUD behind the car (lap, position, power bar). Auto: double size up to 1080p, quadruple above and in split screen. Original size keeps the game's texture but fixes the split-screen text colors. Off leaves the HUD as the game draws it. Steam build 385319 only (not the Russian depot).", "0",
+      "0|Auto (recommended);1|Original size;2|Double;4|Quadruple;-1|Off (as the game)" },
     // World
     { "World", "StreamPoolMB", CHOICE, "Streaming pool", "Memory for the track's textures and props. Bigger keeps them sharp instead of blurry or grey. Needs SplitSecond.exe with the LAA flag (setlaa.exe).", "512", "0|Stock (57 MB);256|256 MB;512|512 MB;768|768 MB" },
     { "World", "LodDistanceScale", RANGE, "Draw distance", "Multiplier for LOD, streaming, particle, debris and power play distances.", "2.0", 0, 0.5, 8, 0.1, 1 },
@@ -687,6 +690,7 @@ static void LoadControl(Option& o)
             SetWindowTextA(o.ctrl, t.c_str());
         } else if (o.kind == CHOICE) {
             auto items = Choices(o);
+            if (!strcmp(o.key, "HudResolution")) v = std::to_string(ParseHudResolution(v.c_str()));
             int sel = -1;
             for (int i = 0; i < (int)items.size() && sel < 0; i++)
                 if (!_stricmp(items[i].first.c_str(), v.c_str()) || SameNumber(v, items[i].first)) sel = i;
@@ -3118,11 +3122,11 @@ struct Preset {
 };
 static const Preset kPresets[kPresetCount] = {
     { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off (Pick laps too; the lap count you picked is kept for when you switch it on again).", "" },
-    { "Original game", "The game as released: 30 fps, no SMAA, linear filtering, the stock streaming pool, distances, pop-in, car detail, icon size and audio, all effects on, the PC's car glass, shared triggers, no ultrawide fix or cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as released: 30 fps, no SMAA, linear filtering, the stock streaming pool, distances, pop-in, car detail, icon size and audio, all effects on, the PC's car glass, shared triggers, no ultrawide fix or cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;HudResolution=-1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
-      "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
+      "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;HudResolution=-1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",
-      "FrameRate=60;QualityCap=0;TextureDetail=3;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
+      "FrameRate=60;QualityCap=0;TextureDetail=3;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;HudResolution=-1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Chaos", "Recommended plus everything unlocked, the boost, the power bar fill and the AI boost in chaos mode.", "UnlockAll=1;Boost=1;PowerBarFill=1;AIBoost=1;AIBoostChaos=1" },
 };
 
@@ -3150,6 +3154,10 @@ static bool PresetMatches(const Preset& p)
     for (const Option& o : kOptions) {
         if (!InPreset(p, o)) continue;
         std::string want = PresetValue(p, o), have = GetValue(o);
+        if (!strcmp(o.key, "HudResolution")) {
+            if (ParseHudResolution(want.c_str()) == ParseHudResolution(have.c_str())) continue;
+            return false;
+        }
         if (!_stricmp(want.c_str(), have.c_str())) continue;
         if (!strcmp(o.key, "OpponentEngineVolume")) {
             int defVal = atoi(o.def);

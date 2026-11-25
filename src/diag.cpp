@@ -197,15 +197,48 @@ struct SlotHook {
 static SlotHook s_slotHooks[32];
 static int s_slotHookCount;
 
-static void PatchVtable(void** vt, int index, void* hook, void** orig)
+static bool InRuntime(void* p);
+static const char* ModuleOf(const void* p, char* buf, DWORD n);
+
+static CRITICAL_SECTION s_hookLock;  // vtable writes vs the per-frame slot check (CheckD3DHooks)
+
+static bool PatchVtable(void** vt, int index, void* hook, void** orig)
 {
-    if (*orig) return;
-    *orig = vt[index];
+    if (!vt || !hook || !orig) return false;
+    EnterCriticalSection(&s_hookLock);  // the slot is read and written in one step with the per-frame check
+    void* prev = vt[index];
+    if (prev == hook) {  // already ours (another CreateDevice on the same vtable)
+        LeaveCriticalSection(&s_hookLock);
+        return *orig != NULL;
+    }
+    if (*orig && !InRuntime(prev)) {  // hooked before, now another module's: left to it, as before
+        char buf[MAX_PATH];
+        Log("Direct3D: slot %d taken by %s, left to it", index, ModuleOf(prev, buf, sizeof(buf)));
+        LeaveCriticalSection(&s_hookLock);
+        return true;
+    }
     DWORD old;
-    VirtualProtect(&vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &old);
-    vt[index] = hook;
-    VirtualProtect(&vt[index], sizeof(void*), old, &old);
-    if (index != 16 && index != 17 && s_slotHookCount < 32) s_slotHooks[s_slotHookCount++] = { index, hook, orig };
+    bool ok = VirtualProtect(&vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &old) != FALSE;
+    if (ok) {
+        void* before = *orig;
+        *orig = prev;
+        ok = InterlockedCompareExchangePointer(&vt[index], hook, prev) == prev;
+        if (!ok) *orig = before;
+        VirtualProtect(&vt[index], sizeof(void*), old, &old);
+    }
+    if (ok && index != 16 && index != 17) {
+        bool found = false;
+        for (int i = 0; i < s_slotHookCount; i++) {
+            if (s_slotHooks[i].index == index) {
+                s_slotHooks[i] = { index, hook, orig };
+                found = true;
+                break;
+            }
+        }
+        if (!found && s_slotHookCount < 32) s_slotHooks[s_slotHookCount++] = { index, hook, orig };
+    }
+    LeaveCriticalSection(&s_hookLock);
+    return ok;
 }
 
 // ---------------------------------------------------------------- capture and log
@@ -1274,10 +1307,473 @@ static bool ScaleShadowRect(LONG& x0, LONG& y0, LONG& x1, LONG& y1)
     return true;
 }
 
+// ---------------------------------------------------------------- 3D HUD resolution (HudResolution)
+
+// Single-player draws the lap and position text and power bar into HUD_pass at 512x288. Split screen
+// uses HUD_pass at 256x128 for the power bar and draws the text directly into the scene.
+// Scale the color and depth together, with their viewport/scissor/clear rects. The glyph atlas is
+// upgraded even when the HUD target stays at 1x, so split screen's full-size text gets the same colors as single player.
+// HudResolution=0 (auto) picks 2x up to 1080p effective 16:9 height (avoids bilinear minification shimmer on
+// the 1-mip texture at 720p) and 4x above 1080p (1440p, ultrawide, 4K), plus 4x (1024x512) in split screen.
+static bool s_hudReady;                  // exe verified and GFxMovieRoot::SetViewport hook active
+static bool s_hudScaling;                // a size above 1x is wanted and all required D3D hooks are installed
+static bool s_hudAllocFailed;            // transient scaled target allocation failure (cleared on Reset)
+static bool s_hudFontCacheFailed;        // permanent font-cache ABI/vtable/fault failure (not cleared on Reset)
+static bool s_hudRt;                     // render target 0 is a tagged scaled HUD colour target
+static volatile LONG s_hudRtDirty;       // slot 37 repatched: refresh s_hudRt from the device on the render thread
+static UINT s_hudBaseW, s_hudBaseH;      // stock dimensions (512x288 single player, 256x128 split screen)
+static UINT s_hudSurfFactor = 1;         // active factor of bound HUD colour target (2 or 4)
+static UINT s_hudMaxTexW, s_hudMaxTexH;  // device caps from CreateDevice
+static UINT s_hudScrW, s_hudScrH;        // back buffer size (for HudResolution=0 auto)
+static IDirect3DSurface9* s_hudPendingDepth;  // pre-allocated scaled hud_depth staged with hud_color
+static UINT s_hudPendingW, s_hudPendingH, s_hudPendingFactor;
+static D3DFORMAT s_hudPendingFmt;
+static D3DMULTISAMPLE_TYPE s_hudPendingMs;
+static DWORD s_hudPendingQ;
+static BOOL s_hudPendingDiscard;
+
+// private-data tag attached to each scaled HUD_pass/hud_color level-0 surface so identity matches D3D lifetime
+// {6A2C7E1B-9F34-4B8E-A1D2-7C5E8F9034B2}
+static const GUID kHudSurfGuid = { 0x6a2c7e1b, 0x9f34, 0x4b8e, { 0xa1, 0xd2, 0x7c, 0x5e, 0x8f, 0x90, 0x34, 0xb2 } };
+static const DWORD kHudTagMagic = 0x48554454u;  // "HUDT"
+struct HudSurfTag { DWORD magic; UINT baseW, baseH, factor; };
+
+struct HudGViewport { int bufW, bufH, left, top, w, h, scL, scT, scW, scH; float scale, aspect; unsigned flags; };
+typedef void(__thiscall* HudGfxSetViewport_t)(void*, const HudGViewport*);
+static HudGfxSetViewport_t s_origHudGfxSetViewport;
+static bool s_hudUiHooked;
+
+static void HudReleasePendingDepth()
+{
+    if (s_hudPendingDepth) {
+        s_hudPendingDepth->Release();
+        s_hudPendingDepth = NULL;
+    }
+    s_hudPendingW = s_hudPendingH = 0;
+    s_hudPendingFactor = 1;
+    s_hudPendingFmt = D3DFMT_UNKNOWN;
+    s_hudPendingMs = D3DMULTISAMPLE_NONE;
+    s_hudPendingQ = 0;
+    s_hudPendingDiscard = FALSE;
+}
+
+static bool HudSize(UINT w, UINT h)
+{
+    return (w == 512 && h == 288) || (w == 256 && h == 128);
+}
+
+static bool HudAtlasDims(UINT& texW, UINT& texH)
+{
+    if ((s_hudMaxTexW && s_hudMaxTexW < 1024u) || (s_hudMaxTexH && s_hudMaxTexH < 1024u)) return false;
+    texW = (s_hudMaxTexW && s_hudMaxTexW < 2048u) ? 1024u : 2048u;
+    texH = (s_hudMaxTexH && s_hudMaxTexH < 2048u) ? 1024u : 2048u;
+    return true;
+}
+
+static void HudReadScreenSize(IDirect3DDevice9* dev, const D3DPRESENT_PARAMETERS* pp, HWND focus)
+{
+    UINT w = 0, h = 0;
+    if (dev) {
+        IDirect3DSurface9* bb = NULL;
+        D3DSURFACE_DESC d;
+        if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
+            if (SUCCEEDED(bb->GetDesc(&d))) {
+                w = d.Width;
+                h = d.Height;
+            }
+            bb->Release();
+        }
+    }
+    if ((!w || !h) && pp) {
+        w = pp->BackBufferWidth;
+        h = pp->BackBufferHeight;
+    }
+    if ((!w || !h) && dev) {
+        D3DDEVICE_CREATION_PARAMETERS cp = {};
+        dev->GetCreationParameters(&cp);
+        HWND wnd = pp && pp->hDeviceWindow ? pp->hDeviceWindow : (focus ? focus : cp.hFocusWindow);
+        RECT r;
+        if (wnd && GetClientRect(wnd, &r)) {
+            w = (UINT)(r.right - r.left);
+            h = (UINT)(r.bottom - r.top);
+        }
+    }
+    if (w && h) {
+        s_hudScrW = w;
+        s_hudScrH = h;
+    }
+}
+
+static UINT HudFactorFor(UINT baseW, UINT baseH)
+{
+    UINT tw = 0, th = 0;
+    if (!s_hudScaling || s_hudAllocFailed || s_hudFontCacheFailed || !HudAtlasDims(tw, th)) return 1;
+    UINT f;
+    if (g_cfg.hudResolution == 0) {
+        if (baseW == 256 && baseH == 128) {
+            f = 4;  // split-screen power bar: 256x128 -> 1024x512
+        } else {
+            UINT hEff = 0;
+            if (s_hudScrW && s_hudScrH) {
+                bool wide = s_hudScrW * 9 > s_hudScrH * 16 + 9;
+                hEff = (wide && g_cfg.ultrawideFix >= 1) ? s_hudScrH : (s_hudScrW * 9 + 8) / 16;
+            }
+            f = hEff > 1080 ? 4 : 2;
+        }
+    } else {
+        f = (UINT)g_cfg.hudResolution;
+    }
+    if (s_hudMaxTexW && s_hudMaxTexH)
+        while (f > 1 && (baseW * f > s_hudMaxTexW || baseH * f > s_hudMaxTexH)) f /= 2;
+    return f;
+}
+
+typedef void(__fastcall* GfxRelease_t)(void*, void*);
+
+static GfxRelease_t HudValidReleaseFn(void* fc)
+{
+    void** rel = *(void***)((BYTE*)fc + 8);
+    if (rel == (void**)0x00D49224 && rel[1] == (void*)0x008E9B50) return (GfxRelease_t)rel[1];
+    if (rel == (void**)0x00D4921C && rel[1] == (void*)0x008E9990) return (GfxRelease_t)rel[1];
+    if (rel == (void**)0x00D49214 && rel[1] == (void*)0x007D8120) return (GfxRelease_t)rel[1];
+    return NULL;
+}
+
+// The PC build initializes GFxFontCacheManager via GfxInit (0x4D67B0) in its 1024x1024x1 MaxSlotHeight=28
+// branch in-game (and 2048x1024x1 MaxSlotHeight=48 in the front end) even at 1440p+, so 2x (1024x576)
+// caps 34-40 px digits at 28 px and 4x (2048x1152) exceeds the 28x2=56 px raster ceiling, falling back to
+// vector-tessellated glyphs whose PC renderer path swaps red and blue. Running from GFxMovieRoot::SetViewport
+// (render thread, strictly after GfxInit completes and mutually exclusive with GfxShutdown) avoids racing
+// GfxInit/GfxShutdown. Calling InvalidateAll (0x8EDE80) before SetTextureConfig (0x8EBD60) clears live
+// GFxBatchPackages cleanly, and raising MaxSlotHeight to 128 (2048x2048x2 A8 atlas clamped to device caps)
+// plus DialsInfo's MaxRasterScale (0xD1CCC4) to 4.0 keeps rear-bumper HUD glyphs native 1:1 in the bitmap
+// cache for consistent colors and glow at any target multiplier.
+static bool HudEnsureFontCacheInner(bool inHudPass, bool* hardFail)
+{
+    UINT texW = 0, texH = 0;
+    if (!HudAtlasDims(texW, texH)) {
+        *hardFail = true;
+        return false;
+    }
+    void* loader = *(void**)0x00D65FF0;
+    if (!loader) return false;
+    void** loaderVt = *(void***)loader;
+    if (loaderVt != (void**)0x00BC9560 || loaderVt[0] != (void*)0x008F0B30 || loaderVt[3] != (void*)0x00538120) {
+        *hardFail = true;
+        return false;
+    }
+    typedef void**(__thiscall* GetFontCache_t)(void*, void**);
+    typedef void(__thiscall* InvalidateAll_t)(void*);
+    typedef void(__thiscall* SetTexCfg_t)(void*, const UINT*);
+    void* fc = NULL;
+    GfxRelease_t relFn = NULL;
+    bool ok = false;
+    __try {
+        ((GetFontCache_t)0x00413840)(loader, &fc);
+        if (!fc) __leave;
+        relFn = HudValidReleaseFn(fc);
+        if (*(void**)fc != (void*)0x00C3B0F8 || !relFn) {
+            *hardFail = true;
+            __leave;
+        }
+        void* impl = *(void**)((BYTE*)fc + 0x4C);
+        const UINT* cur = (const UINT*)((const BYTE*)fc + 0x14);
+        if (!impl || cur[0] < 512 || cur[1] < 512 || cur[3] == 0 || cur[5] != 256 || cur[6] != 512) {
+            *hardFail = true;
+            __leave;
+        }
+        if (cur[3] < 128) {
+            UINT oldW = cur[0], oldH = cur[1], oldN = cur[2], oldSlot = cur[3];
+            UINT cfg[7] = { texW, texH, 2, 128, 2, 256, 512 };
+            ((InvalidateAll_t)0x008EDE80)(impl);
+            ((SetTexCfg_t)0x008EBD60)(fc, cfg);
+            if (cur[3] != 128) {
+                *hardFail = true;
+                __leave;
+            }
+            static int logged;
+            if (logged++ < 8)
+                Log("3D HUD: font cache upgraded %ux%ux%u slot %u -> %ux%ux%u slot %u, MaxRasterScale 4.0",
+                    oldW, oldH, oldN, oldSlot, cfg[0], cfg[1], cfg[2], cfg[3]);
+        }
+        float* maxScale = (float*)0x00D1CCC4;
+        if (*(DWORD*)maxScale == 0x40000000u || *(DWORD*)maxScale == 0x40800000u) *maxScale = 4.0f;
+        // only bump live fc+0x34 if DialsInfo just loaded stock 2.0f (0x40000000) and will restore it after draw
+        if (inHudPass && *(DWORD*)((BYTE*)fc + 0x34) == 0x40000000u) *(float*)((BYTE*)fc + 0x34) = 4.0f;
+        ok = true;
+    } __finally {
+        if (fc && relFn) relFn(fc, NULL);
+    }
+    return ok;
+}
+
+static bool HudEnsureFontCache(bool inHudPass)
+{
+    if (!s_hudReady || s_hudFontCacheFailed) return false;
+    bool hardFail = false;
+    bool ok = false;
+    __try {
+        ok = HudEnsureFontCacheInner(inHudPass, &hardFail);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        hardFail = true;
+        ok = false;
+    }
+    if (hardFail) {
+        s_hudFontCacheFailed = true;
+        static int logged;
+        if (logged++ < 4) Log("3D HUD: font cache upgrade failed or mismatched, stock size from now on");
+    }
+    return ok;
+}
+
+static bool ScaledHud(IDirect3DSurface9* s, HudSurfTag* out)
+{
+    if (!s || !s_hudScaling) return false;
+    HudSurfTag tag = {};
+    DWORD sz = sizeof(tag);
+    if (FAILED(s->GetPrivateData(kHudSurfGuid, &tag, &sz)) || sz != sizeof(tag) || tag.magic != kHudTagMagic) return false;
+    if (tag.factor <= 1 || !HudSize(tag.baseW, tag.baseH)) return false;
+    if (out) *out = tag;
+    return true;
+}
+
+static void HudUpdateRt(IDirect3DSurface9* surf)
+{
+    HudSurfTag tag = {};
+    if (ScaledHud(surf, &tag)) {
+        s_hudRt = true;
+        s_hudBaseW = tag.baseW;
+        s_hudBaseH = tag.baseH;
+        s_hudSurfFactor = tag.factor;
+    } else {
+        s_hudRt = false;
+        s_hudBaseW = s_hudBaseH = 0;
+        s_hudSurfFactor = 1;
+    }
+    InterlockedExchange(&s_hudRtDirty, 0);
+}
+
+static void HudRefreshRt(IDirect3DDevice9* dev)
+{
+    if (!s_hudScaling || !dev || !InterlockedExchange(&s_hudRtDirty, 0)) return;
+    IDirect3DSurface9* cur = NULL;
+    if (SUCCEEDED(dev->GetRenderTarget(0, &cur))) {
+        HudUpdateRt(cur);
+        if (cur) cur->Release();
+    } else {
+        HudUpdateRt(NULL);
+    }
+}
+
+static void __fastcall Hook_HudGfxSetViewport(void* self, void*, const HudGViewport* vp)
+{
+    HudRefreshRt(s_device);
+    if (s_hudReady && !s_hudFontCacheFailed) HudEnsureFontCache(s_hudRt);
+    if (vp && s_hudRt && s_hudSurfFactor > 1 && vp->bufW == (int)s_hudBaseW && vp->bufH == (int)s_hudBaseH) {
+        int f = (int)s_hudSurfFactor;
+        HudGViewport v = *vp;
+        v.bufW *= f;
+        v.bufH *= f;
+        v.left *= f;
+        v.top *= f;
+        v.w *= f;
+        v.h *= f;
+        v.scL *= f;
+        v.scT *= f;
+        v.scW *= f;
+        v.scH *= f;
+        s_origHudGfxSetViewport(self, &v);
+        return;
+    }
+    s_origHudGfxSetViewport(self, vp);
+}
+
+static void* HudExpectedVpSlot()
+{
+    void** const vpSlot = (void**)(0x00C41CF4 + 20 * 4);
+    void* cur = *vpSlot;
+    if (cur == (void*)0x0098CDF0) return cur;
+    const void* uw = UltrawideSetViewportHook();
+    if (uw && cur == uw) return cur;
+    if (s_hudUiHooked && s_origHudGfxSetViewport && cur == (void*)Hook_HudGfxSetViewport) return cur;
+    return NULL;
+}
+
+static bool HudCheckExe()
+{
+    if (CurrentBuild() != BUILD_STEAM) {
+        Log("3D HUD resolution: made for Steam build 385319 only (%s), left at stock", BuildName());
+        return false;
+    }
+    if (GetModuleHandleA(NULL) != (HMODULE)0x00400000) {
+        Log("3D HUD resolution: unexpected executable image base, left at stock");
+        return false;
+    }
+    bool ok = false;
+    __try {
+        void** const loaderVt = (void**)0x00BC9560;
+        void** const fcVt = (void**)0x00C3B0F8;
+        DWORD maxScaleBits = *(const DWORD*)0x00D1CCC4;
+        if (!memcmp((void*)0x00510A97, "\x8B\x50\x5C\xFF\xD2", 5) &&
+            !memcmp((void*)0x00510AD3, "\x8B\x52\x74\xEB\x10", 5) &&
+            !memcmp((void*)0x00510AE5, "\x8B\x52\x70\x50\xFF\xD2", 6) &&
+            !memcmp((void*)0x009FBCCB, "\xE8\xC0\x4C\xB1\xFF", 5) &&
+            !memcmp((void*)0x009FBCD4, "\x8B\x8C\x24\xDC\x00\x00\x00", 7) &&
+            !memcmp((void*)0x009FBBB6, "\xE8\xD5\x4D\xB1\xFF", 5) &&
+            !memcmp((void*)0x009FBBBF, "\x8B\x8C\x24\xDC\x00\x00\x00", 7) &&
+            !memcmp((void*)0x00413840, "\x51\x8B\x01\x8B\x50\x0C\x6A\x11", 8) &&
+            !memcmp((void*)0x008EBD60, "\x8B\x44\x24\x04\x53\x56\x57\x8B\xD9\x8B\xF0\x8D\x7B\x14\xB9\x07\x00\x00\x00\xF3\xA5", 21) &&
+            !memcmp((void*)0x008EDE80, "\x55\x56\x57\x8B\xF9\x8B\x77\x34\x8D\x6F\x30", 11) &&
+            !memcmp((void*)0x00564AEB, "\x8B\x0D\xF0\x5F\xD6\x00\xE8\x4A\xED\xEA\xFF\x8B\x10\xF3\x0F\x10\x05\xC4\xCC\xD1\x00", 21) &&
+            loaderVt[0] == (void*)0x008F0B30 && loaderVt[3] == (void*)0x00538120 &&
+            !memcmp((void*)0x00538120, "\x8B\x01\x8B\x10\xFF\xD2\x85\xC0\x74\x09", 10) &&
+            fcVt[0] == (void*)0x008F09B0 &&
+            (maxScaleBits == 0x40000000u || maxScaleBits == 0x40800000u) &&
+            HudExpectedVpSlot() != NULL &&
+            !memcmp((void*)0x0098CDF0, "\x83\xEC\x24\x53\x8B\xD9\x8B\x4B\x48", 9)) {
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    if (!ok) Log("3D HUD resolution: render target or Scaleform signatures did not match, left at stock");
+    return ok;
+}
+
+// after UltrawideDeviceCreated, so ultrawide's check of GFxMovieRoot::SetViewport sees the game's function first
+static bool HudPrepareDevice(IDirect3DDevice9* dev, const D3DPRESENT_PARAMETERS* pp, HWND focus)
+{
+    HudReleasePendingDepth();
+    s_hudReady = false;
+    s_hudScaling = false;
+    s_hudAllocFailed = false;
+    s_hudFontCacheFailed = false;
+    s_hudRt = false;
+    InterlockedExchange(&s_hudRtDirty, 0);
+    s_hudBaseW = s_hudBaseH = 0;
+    s_hudSurfFactor = 1;
+    s_hudMaxTexW = s_hudMaxTexH = 0;
+    if (g_cfg.hudResolution < 0 || !(g_cfg.patchMask & PATCH_HUD)) return false;
+    if (!HudCheckExe()) return false;
+    D3DCAPS9 caps;
+    if (SUCCEEDED(dev->GetDeviceCaps(&caps))) {
+        s_hudMaxTexW = caps.MaxTextureWidth;
+        s_hudMaxTexH = caps.MaxTextureHeight;
+    }
+    UINT tw = 0, th = 0;
+    if (!HudAtlasDims(tw, th)) {
+        Log("3D HUD resolution: device max texture %ux%u cannot fit upgraded font atlas, left at stock",
+            s_hudMaxTexW, s_hudMaxTexH);
+        return false;
+    }
+    HudReadScreenSize(dev, pp, focus);
+    return true;
+}
+
+static void HudActivate(bool scaleTarget)
+{
+    void** const vpSlot = (void**)(0x00C41CF4 + 20 * 4);
+    void* expected = HudExpectedVpSlot();
+    if (!expected) {
+        Log("3D HUD resolution: GFxMovieRoot::SetViewport slot changed unexpectedly, left at stock");
+        return;
+    }
+    if (expected != (void*)Hook_HudGfxSetViewport) {
+        if (!SwapSlotChecked(vpSlot, expected, (void*)Hook_HudGfxSetViewport, (void**)&s_origHudGfxSetViewport)) {
+            Log("3D HUD resolution: could not hook GFxMovieRoot::SetViewport, left at stock");
+            return;
+        }
+        s_hudUiHooked = true;
+    }
+    s_hudReady = true;
+    s_hudScaling = scaleTarget;
+    if (!s_hudScaling) {
+        if (g_cfg.hudResolution != 1)
+            Log("3D HUD resolution: required Direct3D vtable hooks failed");
+        Log("3D HUD resolution: native target sizes, font cache upgrade enabled");
+        return;
+    }
+    UINT sp = HudFactorFor(512, 288), ss = HudFactorFor(256, 128);
+    if (g_cfg.hudResolution > 1 && sp != (UINT)g_cfg.hudResolution)
+        Log("3D HUD resolution: %ux is beyond this device's largest texture, %ux instead", g_cfg.hudResolution, sp);
+    Log("3D HUD resolution: %s (%ux%u single player, %ux%u split screen; screen %ux%u)",
+        g_cfg.hudResolution == 0 ? "auto" : (g_cfg.hudResolution == 4 ? "4x" : "2x"),
+        512u * sp, 288u * sp, 256u * ss, 128u * ss, s_hudScrW, s_hudScrH);
+}
+
+static void HudDeviceLost()
+{
+    HudReleasePendingDepth();
+    s_hudRt = false;
+    InterlockedExchange(&s_hudRtDirty, 0);
+    s_hudBaseW = s_hudBaseH = 0;
+    s_hudSurfFactor = 1;
+}
+
+static void HudDeviceReset(IDirect3DDevice9* dev, const D3DPRESENT_PARAMETERS* pp)
+{
+    if (!s_hudScaling) return;
+    s_hudAllocFailed = false;
+    HudReadScreenSize(dev, pp, NULL);
+    if (g_cfg.hudResolution == 0 && !s_hudFontCacheFailed) {
+        UINT sp = HudFactorFor(512, 288), ss = HudFactorFor(256, 128);
+        Log("3D HUD resolution: auto after reset -> %ux%u single player, %ux%u split screen (screen %ux%u)",
+            512u * sp, 288u * sp, 256u * ss, 128u * ss, s_hudScrW, s_hudScrH);
+    }
+}
+
+// confirms the direct D3D creation came from cRenderTarget's constructor (0x510990) at the exact frame offset
+// for the render-graph target name ("HUD_pass/hud_color" or "HUD_pass/hud_depth"), so screen-relative targets
+// at 1024x576 / 2048x1152 never match
+static bool HudTargetCall(const DWORD* sp, DWORD callSite, int callerWordOffset, DWORD callerSite, const char* expected)
+{
+    const NT_TIB* tib = (const NT_TIB*)NtCurrentTeb();
+    const BYTE* lo = (const BYTE*)tib->StackLimit;
+    const BYTE* hi = (const BYTE*)tib->StackBase;
+    const BYTE* spB = (const BYTE*)sp;
+    if (spB < lo || spB + sizeof(DWORD) > hi || sp[0] != callSite) return false;
+    const DWORD* callerSlot = sp + callerWordOffset;
+    const BYTE* nameSlot = (const BYTE*)(callerSlot + 2) + 0xDC;
+    if ((const BYTE*)(callerSlot + 1) > hi || nameSlot < lo || nameSlot + sizeof(const char*) > hi) return false;
+    if (*callerSlot != callerSite) return false;
+    size_t len = strlen(expected);
+    __try {
+        const char* name = *(const char* const*)nameSlot;
+        if (!name) return false;
+        for (size_t i = 0; i <= len; i++)
+            if (name[i] != expected[i]) return false;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool HudColorRequest(const DWORD* sp, UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool)
+{
+    return HudFactorFor(w, h) > 1 && HudSize(w, h) && levels == 1 && usage == D3DUSAGE_RENDERTARGET &&
+           fmt == D3DFMT_A8R8G8B8 && pool == D3DPOOL_DEFAULT &&
+           HudTargetCall(sp, 0x00510A9Cu, 19, 0x009FBCD0u, "HUD_pass/hud_color");
+}
+
+static bool HudDepthRequest(const DWORD* sp, UINT w, UINT h, D3DMULTISAMPLE_TYPE ms)
+{
+    return s_hudScaling && HudSize(w, h) && ms == D3DMULTISAMPLE_NONE &&
+           HudTargetCall(sp, 0x00510AEBu, 18, 0x009FBBBBu, "HUD_pass/hud_depth");
+}
+
+// exact full-target rect in the game's base units while hud_color is bound; Scaleform's BeginDisplay
+// sets its own already-scaled viewport and sub-rects in scaled units, so those stay untouched
+static bool ScaleHudRect(LONG& x0, LONG& y0, LONG& x1, LONG& y1)
+{
+    if (!s_hudRt || x0 != 0 || y0 != 0 || x1 != (LONG)s_hudBaseW || y1 != (LONG)s_hudBaseH) return false;
+    LONG f = (LONG)s_hudSurfFactor;
+    x1 *= f;
+    y1 *= f;
+    return true;
+}
+
 static HRESULT STDMETHODCALLTYPE Hook_SetRenderTarget(IDirect3DDevice9* dev, DWORD index, IDirect3DSurface9* surf)
 {
-    if (index == 0) FitQuadOffset(surf);
-    if (index == 0 && s_shadowFactor > 1) s_shadowRt = ScaledShadow(surf);
     if (s_dumping && s_pass < 120) {
         IDirect3DSurface9* cur = NULL;
         dev->GetRenderTarget(index, &cur);
@@ -1295,7 +1791,13 @@ static HRESULT STDMETHODCALLTYPE Hook_SetRenderTarget(IDirect3DDevice9* dev, DWO
             }
         }
     }
-    return s_origSetRenderTarget(dev, index, surf);
+    HRESULT hr = s_origSetRenderTarget(dev, index, surf);
+    if (SUCCEEDED(hr) && index == 0) {
+        FitQuadOffset(surf);
+        if (s_shadowFactor > 1) s_shadowRt = ScaledShadow(surf);
+        if (s_hudScaling) HudUpdateRt(surf);
+    }
+    return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE Hook_StretchRect(IDirect3DDevice9* dev, IDirect3DSurface9* src, const RECT* sr, IDirect3DSurface9* dst,
@@ -1507,6 +2009,7 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateTexture(IDirect3DDevice9* dev, UINT 
                                                     D3DPOOL pool, IDirect3DTexture9** out, HANDLE* shared)
 {
     HRESULT hr;
+    const DWORD* sp = (const DWORD*)_AddressOfReturnAddress();
     if (ShadowAtlasRequest(w, h, levels, usage, fmt, pool)) {
         UINT f = s_shadowFactor;
         hr = s_origCreateTexture(dev, w * f, h * f, levels, usage, fmt, pool, out, shared);
@@ -1519,6 +2022,53 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateTexture(IDirect3DDevice9* dev, UINT 
                 Log("shadow map: %ux%u (format %u) could not be made (%08lx), the game's size from now on", w * f, h * f, fmt, hr);
         } else if (logged++ < 4) {
             Log("shadow map: %ux%u instead of %ux%u (format %u)", w * f, h * f, w, h, fmt);
+        }
+    } else if (out && s_origCreateDepthStencil && HudColorRequest(sp, w, h, levels, usage, fmt, pool)) {
+        HudReleasePendingDepth();
+        UINT f = HudFactorFor(w, h);
+        IDirect3DTexture9* tex = NULL;
+        IDirect3DSurface9* level = NULL;
+        IDirect3DSurface9* depth = NULL;
+        const char* stage = "colour target";
+        hr = s_origCreateTexture(dev, w * f, h * f, levels, usage, fmt, pool, &tex, shared);
+        if (SUCCEEDED(hr) && tex) {
+            stage = "level-0 surface";
+            hr = tex->GetSurfaceLevel(0, &level);
+        }
+        if (SUCCEEDED(hr) && level) {
+            stage = "surface tag";
+            HudSurfTag tag = { kHudTagMagic, w, h, f };
+            hr = level->SetPrivateData(kHudSurfGuid, &tag, sizeof(tag), 0);
+        }
+        if (SUCCEEDED(hr)) {
+            stage = "depth surface";
+            hr = s_origCreateDepthStencil(dev, w * f, h * f, D3DFMT_D24S8, D3DMULTISAMPLE_NONE, 0, FALSE, &depth, NULL);
+        }
+        static int logged;
+        if (FAILED(hr) || !tex || !level || !depth) {
+            HRESULT failHr = FAILED(hr) ? hr : E_FAIL;
+            if (depth) depth->Release();
+            if (level) level->Release();
+            if (tex) tex->Release();
+            s_hudAllocFailed = true;
+            hr = s_origCreateTexture(dev, w, h, levels, usage, fmt, pool, out, shared);
+            if (logged++ < 4)
+                Log("3D HUD: %ux%u %s failed (%08lx), stock %ux%u (%08lx)", w * f, h * f, stage, failHr, w, h, hr);
+        } else {
+            void* surfPtr = level;
+            level->Release();
+            s_hudPendingDepth = depth;
+            s_hudPendingW = w;
+            s_hudPendingH = h;
+            s_hudPendingFactor = f;
+            s_hudPendingFmt = D3DFMT_D24S8;
+            s_hudPendingMs = D3DMULTISAMPLE_NONE;
+            s_hudPendingQ = 0;
+            s_hudPendingDiscard = FALSE;
+            *out = tex;
+            hr = D3D_OK;
+            if (logged++ < 4)
+                Log("3D HUD: colour target %ux%u instead of %ux%u (surface %p)", w * f, h * f, w, h, surfPtr);
         }
     } else {
         hr = s_origCreateTexture(dev, w, h, levels, usage, fmt, pool, out, shared);
@@ -1585,8 +2135,47 @@ static HRESULT STDMETHODCALLTYPE Hook_CreateRenderTarget(IDirect3DDevice9* dev, 
 static HRESULT STDMETHODCALLTYPE Hook_CreateDepthStencil(IDirect3DDevice9* dev, UINT w, UINT h, D3DFORMAT fmt, D3DMULTISAMPLE_TYPE ms,
                                                          DWORD q, BOOL discard, IDirect3DSurface9** out, HANDLE* shared)
 {
-    HRESULT hr = s_origCreateDepthStencil(dev, w, h, fmt, ms, q, discard, out, shared);
-    LogSurfaceCreate("CreateDepthStencilSurface", w, h, fmt, ms, hr, out, _ReturnAddress());
+    HRESULT hr;
+    const DWORD* sp = (const DWORD*)_AddressOfReturnAddress();
+    if (out && HudDepthRequest(sp, w, h, ms)) {
+        static int logged;
+        if (s_hudPendingDepth && w == s_hudPendingW && h == s_hudPendingH && fmt == s_hudPendingFmt &&
+            ms == s_hudPendingMs && q == s_hudPendingQ && discard == s_hudPendingDiscard) {
+            UINT f = s_hudPendingFactor;
+            *out = s_hudPendingDepth;
+            s_hudPendingDepth = NULL;
+            s_hudPendingW = s_hudPendingH = 0;
+            s_hudPendingFactor = 1;
+            hr = D3D_OK;
+            if (logged++ < 4)
+                Log("3D HUD: depth surface %ux%u instead of %ux%u (format %u)", w * f, h * f, w, h, fmt);
+        } else if (s_hudPendingDepth && w == s_hudPendingW && h == s_hudPendingH) {
+            // other parameters than staged: the colour target is already scaled, so the depth must stay scaled.
+            // The staged D24S8 surface is kept as the fallback until the requested one exists.
+            UINT f = s_hudPendingFactor;
+            hr = s_origCreateDepthStencil(dev, w * f, h * f, fmt, ms, q, discard, out, shared);
+            if (FAILED(hr)) {
+                HRESULT failHr = hr;
+                *out = s_hudPendingDepth;
+                s_hudPendingDepth = NULL;
+                HudReleasePendingDepth();
+                hr = D3D_OK;
+                if (logged++ < 4)
+                    Log("3D HUD: %ux%u depth surface (format %u) failed (%08lx), staged D24S8 %ux%u instead",
+                        w * f, h * f, fmt, failHr, w * f, h * f);
+            } else {
+                HudReleasePendingDepth();
+                if (logged++ < 4)
+                    Log("3D HUD: depth surface %ux%u instead of %ux%u (format %u)", w * f, h * f, w, h, fmt);
+            }
+        } else {
+            HudReleasePendingDepth();
+            hr = s_origCreateDepthStencil(dev, w, h, fmt, ms, q, discard, out, shared);
+        }
+    } else {
+        hr = s_origCreateDepthStencil(dev, w, h, fmt, ms, q, discard, out, shared);
+    }
+    if (g_cfg.log) LogSurfaceCreate("CreateDepthStencilSurface", w, h, fmt, ms, hr, out, _ReturnAddress());
     return hr;
 }
 
@@ -1594,10 +2183,11 @@ static bool FrameLog() { return s_dumping && s_frameLogs < 6000 && (s_frameLogs+
 
 static HRESULT STDMETHODCALLTYPE Hook_SetViewport(IDirect3DDevice9* dev, const D3DVIEWPORT9* vp)
 {
+    HudRefreshRt(dev);
     D3DVIEWPORT9 scaled;
-    if (vp && s_shadowRt) {
+    if (vp && (s_shadowRt || s_hudRt)) {
         LONG x0 = (LONG)vp->X, y0 = (LONG)vp->Y, x1 = (LONG)(vp->X + vp->Width), y1 = (LONG)(vp->Y + vp->Height);
-        if (ScaleShadowRect(x0, y0, x1, y1)) {
+        if (ScaleShadowRect(x0, y0, x1, y1) || ScaleHudRect(x0, y0, x1, y1)) {
             scaled = *vp;
             scaled.X = (DWORD)x0, scaled.Y = (DWORD)y0, scaled.Width = (DWORD)(x1 - x0), scaled.Height = (DWORD)(y1 - y0);
             vp = &scaled;
@@ -1615,10 +2205,13 @@ static HRESULT STDMETHODCALLTYPE Hook_SetViewport(IDirect3DDevice9* dev, const D
 
 static HRESULT STDMETHODCALLTYPE Hook_SetScissorRect(IDirect3DDevice9* dev, const RECT* r)
 {
+    HudRefreshRt(dev);
     RECT scaled;
-    if (r && s_shadowRt) {
+    if (r && (s_shadowRt || s_hudRt)) {
         scaled = *r;
-        if (ScaleShadowRect(scaled.left, scaled.top, scaled.right, scaled.bottom)) r = &scaled;
+        if (ScaleShadowRect(scaled.left, scaled.top, scaled.right, scaled.bottom) ||
+            ScaleHudRect(scaled.left, scaled.top, scaled.right, scaled.bottom))
+            r = &scaled;
     }
     static RECT last;
     if (r && s_dumping && (!s_scissorLogged || memcmp(r, &last, sizeof(last))) && FrameLog()) {
@@ -1643,12 +2236,14 @@ static HRESULT STDMETHODCALLTYPE Hook_SetDepthStencil(IDirect3DDevice9* dev, IDi
 static HRESULT STDMETHODCALLTYPE Hook_Clear(IDirect3DDevice9* dev, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z,
                                             DWORD stencil)
 {
+    HudRefreshRt(dev);
     D3DRECT scaled[16];
-    if (s_shadowRt && count && rects && count <= 16) {
+    if ((s_shadowRt || s_hudRt) && count && rects && count <= 16) {
         bool all = true;
         for (DWORD i = 0; i < count && all; i++) {
             scaled[i] = rects[i];
-            all = ScaleShadowRect(scaled[i].x1, scaled[i].y1, scaled[i].x2, scaled[i].y2);
+            all = ScaleShadowRect(scaled[i].x1, scaled[i].y1, scaled[i].x2, scaled[i].y2) ||
+                  ScaleHudRect(scaled[i].x1, scaled[i].y1, scaled[i].x2, scaled[i].y2);
         }
         if (all) rects = scaled;
     }
@@ -1862,7 +2457,6 @@ static __declspec(thread) int s_presentDepth, s_resetDepth;
 // The slots are checked on the game's thread (CheckD3DHooks) and after a Reset on the render thread; one
 // lock keeps the two apart, and while the runtime's Reset runs (and may rewrite slots) no check starts.
 // The lock is never held across the runtime's Reset: that may wait for the game's window thread.
-static CRITICAL_SECTION s_hookLock;
 static volatile LONG s_inReset;
 static void CheckSlotsLocked();
 
@@ -1878,11 +2472,13 @@ static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PA
     HdrDeviceLost();
     UltrawideDeviceLost();
     PickupsDeviceLost();
+    HudDeviceLost();
     HdrPresentParams(NULL, 0, NULL, pp);  // keeps the device windowed for the HDR swap chain
     HRESULT hr = s_origReset(dev, pp);
     ForgetStages();
     GlassDeviceReset();  // no pixel shader set now; the shaders and their tags outlive a Reset
     s_shadowRt = false;
+    HudDeviceLost();
     EnterCriticalSection(&s_hookLock);
     CheckSlotsLocked();  // the runtime may have written its functions back
     LeaveCriticalSection(&s_hookLock);
@@ -1893,6 +2489,7 @@ static HRESULT STDMETHODCALLTYPE Hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PA
         OverlayDeviceReset();
         HdrDeviceReset(dev);
         if (g_cfg.ultrawideFix == 2) UltrawideDeviceReset(dev, pp);
+        HudDeviceReset(dev, pp);
     }
     s_resetDepth--;
     return hr;
@@ -1914,7 +2511,7 @@ static const char* ModuleOf(const void* p, char* buf, DWORD n)
 static bool SetSlot(int index, void* expected, void* value)
 {
     DWORD old;
-    VirtualProtect(&s_vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &old);
+    if (!VirtualProtect(&s_vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return false;
     bool done = InterlockedCompareExchangePointer(&s_vt[index], value, expected) == expected;
     VirtualProtect(&s_vt[index], sizeof(void*), old, &old);
     return done;
@@ -1956,7 +2553,10 @@ static void RepatchSlots()
         }
         *h.orig = cur;  // before the slot changes, so a call meanwhile goes on to the runtime's function
         if (!SetSlot(h.index, cur, h.hook)) continue;  // changed meanwhile: the next check
-        if (h.index == 37) s_shadowRt = false;  // render targets were set past the hook meanwhile
+        if (h.index == 37) {  // render targets were set past the hook meanwhile
+            s_shadowRt = false;
+            InterlockedExchange(&s_hudRtDirty, 1);
+        }
         InterlockedIncrement(&s_repatched);
         if (logged++ < 20) Log("Direct3D: slot %d holds the runtime's function again, our hook goes in front of it", h.index);
     }
@@ -2093,15 +2693,18 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         bool pickups = PickupsWanted();  // [DLC] Pickups=1 with the mode pack merged (dlcpickups.cpp)
         if (g_cfg.log || g_cfg.frameRate == 60 || g_cfg.steamLan || g_cfg.hdr || ultrawide || g_cfg.cutsceneSkip ||
             g_cfg.smaa || pickups) {
-            PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent);
-            s_d3dPresent = s_origPresent;  // the device's own, for nested calls (CheckD3DHooks)
+            // the device's own only: s_origPresent may be an overlay that chains back to Diag_Present
+            if (PatchVtable(vt, 17, (void*)Diag_Present, (void**)&s_origPresent) &&
+                (!s_d3dPresent || InRuntime((void*)s_origPresent)))
+                s_d3dPresent = s_origPresent;  // the device's own, for nested calls (CheckD3DHooks)
         }
         if (g_cfg.steamLan || g_cfg.hdr || ultrawide || g_cfg.cutsceneSkip || g_cfg.smaa || g_cfg.anisotropy > 1 ||
             g_cfg.textureDetail > 0 || g_cfg.shadowResolution > 1 || g_cfg.glassFix || pickups) {
             // the overlay's font, the SMAA and HDR targets, the ultrawide surfaces and aspect, the samplers,
             // the glass fix's pixel shader
-            PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);
-            s_d3dReset = s_origReset;
+            if (PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset) &&
+                (!s_d3dReset || InRuntime((void*)s_origReset)))
+                s_d3dReset = s_origReset;
         }
         HdrDeviceCreated(*out);
         SmaaDeviceCreated(*out);
@@ -2111,22 +2714,37 @@ static HRESULT STDMETHODCALLTYPE Diag_CreateDevice(IDirect3D9* d3d, UINT adapter
         s_device = *out;
         if (g_cfg.ultrawideFix == 2) UltrawideDeviceCreated(*out, pp, focus);
         HdrInstallUiHook();
+        bool hudWant = HudPrepareDevice(*out, pp, focus);
+        bool hudScale = hudWant && g_cfg.hudResolution != 1;
+        bool hudOk16 = false;
+        if (hudScale) {
+            hudOk16 = PatchVtable(vt, 16, (void*)Hook_Reset, (void**)&s_origReset);
+            if (hudOk16 && (!s_d3dReset || InRuntime((void*)s_origReset))) s_d3dReset = s_origReset;
+        }
         if (g_cfg.anisotropy > 1 || g_cfg.textureDetail > 0) {
             PatchVtable(vt, 65, (void*)Hook_SetTexture, (void**)&s_origSetTexture);
             if (g_cfg.anisotropy > 1) Log("anisotropic filtering %dx", g_cfg.anisotropy);
             if (g_cfg.textureDetail > 0) Log("texture detail: the top %d mip levels skipped", g_cfg.textureDetail);
         }
         PatchVtable(vt, 69, (void*)Hook_SetSamplerState, (void**)&s_origSetSamplerState);  // filtering, edge clamp
-        PatchVtable(vt, 37, (void*)Hook_SetRenderTarget, (void**)&s_origSetRenderTarget);  // quad offset, frame dump
-        if (g_cfg.log || g_cfg.shadowResolution > 1) {  // the shadow map's size, and the survey (Log=1)
+        bool ok37 = PatchVtable(vt, 37, (void*)Hook_SetRenderTarget, (void**)&s_origSetRenderTarget);  // quad offset, frame dump
+        if (g_cfg.log || g_cfg.shadowResolution > 1 || hudScale) {  // shadow maps, 3D HUD, and survey (Log=1)
             SurveyInit();
             ShadowFactorFor(*out);
-            PatchVtable(vt, 23, (void*)Hook_CreateTexture, (void**)&s_origCreateTexture);
-            PatchVtable(vt, 43, (void*)Hook_Clear, (void**)&s_origClear);
-            PatchVtable(vt, 47, (void*)Hook_SetViewport, (void**)&s_origSetViewport);
-            PatchVtable(vt, 75, (void*)Hook_SetScissorRect, (void**)&s_origSetScissorRect);
+            bool ok23 = PatchVtable(vt, 23, (void*)Hook_CreateTexture, (void**)&s_origCreateTexture);
+            bool ok43 = PatchVtable(vt, 43, (void*)Hook_Clear, (void**)&s_origClear);
+            bool ok47 = PatchVtable(vt, 47, (void*)Hook_SetViewport, (void**)&s_origSetViewport);
+            bool ok75 = PatchVtable(vt, 75, (void*)Hook_SetScissorRect, (void**)&s_origSetScissorRect);
+            bool ok29 = hudScale && PatchVtable(vt, 29, (void*)Hook_CreateDepthStencil, (void**)&s_origCreateDepthStencil);
+            // PatchVtable also succeeds when another module keeps a slot; scaling needs every hook in place
+            hudScale = hudScale && hudOk16 && ok37 && ok23 && ok29 && ok43 && ok47 && ok75 &&
+                       vt[16] == (void*)Hook_Reset && vt[23] == (void*)Hook_CreateTexture &&
+                       vt[29] == (void*)Hook_CreateDepthStencil && vt[37] == (void*)Hook_SetRenderTarget &&
+                       vt[43] == (void*)Hook_Clear && vt[47] == (void*)Hook_SetViewport &&
+                       vt[75] == (void*)Hook_SetScissorRect;
             if (s_shadowFactor > 1) Log("shadow maps: %ux resolution", s_shadowFactor);
         }
+        if (hudWant) HudActivate(hudScale);
         if (g_cfg.log || g_cfg.glassFix) {  // the frame dump's draw lines; the glass fix's blend change
             PatchVtable(vt, 81, (void*)Hook_DrawPrimitive, (void**)&s_origDrawPrimitive);
             PatchVtable(vt, 82, (void*)Hook_DrawIndexedPrimitive, (void**)&s_origDrawIndexedPrimitive);

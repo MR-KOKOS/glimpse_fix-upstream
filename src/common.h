@@ -53,6 +53,8 @@ struct Config {
     int   qualityCap;        // highest graphics quality level the game may use (3 = any, 0 = Low only)
     bool  shadows;           // false: nothing casts a shadow (the game's own debug switch)
     int   shadowResolution;  // 1 = the game's 1024 per sun shadow cascade, 2 or 4 = that many times as wide and high
+    int   hudResolution;     // -1 = off, 0 = auto (2x up to 1080p, 4x above; 4x split screen), 1 = stock size with the
+                             // upgraded font cache, 2 or 4 = that factor
     bool  dlcOverlays;       // experimental: the archives in glimpse_dlc are laid over data\resident.ark
     bool  dlcTracks;         // experimental: the converted DLC track Quarry gets a track index (dlcfs.cpp)
     bool  dlcTracksOnline;   // also with SteamLAN=1: every player must have the same tracks
@@ -118,7 +120,7 @@ enum PatchBits {
     /* 0x100: was RenderScale, removed */ PATCH_PADNAMES = 0x200, PATCH_LOD = 0x400, PATCH_D3D = 0x800,
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
-    PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000, PATCH_LAPS = 0x1000000,
+    PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000, PATCH_LAPS = 0x1000000, PATCH_HUD = 0x2000000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -237,6 +239,8 @@ void UltrawideDeviceReset(IDirect3DDevice9* dev, _D3DPRESENT_PARAMETERS_* pp);  
 bool UltrawideBinkHook(const void* fn);         // fn is one of its Bink import hooks
 bool ReadMovieName(void* movie, char* out, size_t size);  // Steam GFxMovieDefImpl
 bool SwapSlot(void** slot, void* hook, void** orig);
+bool SwapSlotChecked(void** slot, void* expected, void* hook, void** orig);
+const void* UltrawideSetViewportHook();
 bool IntroSkipBinkHook(const void* fn);         // game.cpp: fn is one of the intro skip's Bink import hooks
 
 // camera.cpp

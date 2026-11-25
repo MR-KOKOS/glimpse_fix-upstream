@@ -37,6 +37,7 @@ The file is split into sections. INIs from older versions with everything under 
 | `LensFlare` | 1 | 0 = no sun, light or screen space lens flares. |
 | `ParticleFlare` | 1 | 0 = no flares from sparks, explosions and lights. |
 | `FixPowerplayIconSize` | 1 | Powerplay icons and route change markers at console size at every resolution. 0 = stock. |
+| `HudResolution` | 0 | Chase-camera HUD texture size. It holds text and the power bar in single-player and only the power bar in split screen. `-1` keeps original rendering. `1` keeps the original texture size and corrects the split-screen text colors (single-player text already used the correct path). `2` doubles the texture dimensions and `4` quadruples them. `0` (Auto) uses 2× up to 1080p effective 16:9 height and 4× above that or in split screen. On wider screens Auto uses the actual height with `UltrawideFix=1` or `2`. Steam build 385319 only (not the Russian depot). |
 | `HDR` | 0 | 1 = HDR10 output for an HDR display (HDR switched on in the Windows display settings); the game runs in a borderless window. |
 | `HDRPeakBrightness` | 1000 | The display's peak brightness in nits (400–10000), as the Windows HDR Calibration app finds it. The highlights of the game's HDR image go up to this. |
 | `HDRPaperWhite` | 200 | Brightness of the game's white in nits (80–500). |
