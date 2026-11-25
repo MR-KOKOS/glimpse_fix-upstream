@@ -67,6 +67,9 @@ struct Config {
     bool  glassFix;          // car glass: no sun specular from the glass's opacity (G-buffer alpha as on the Xbox, glass.cpp)
     bool  raceEndTiming;     // show Continue when the finish card can accept it
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
+    int   laps;              // laps per race, 0 = as the game
+    bool  lapSelect;         // the track select's difficulty button picks the laps
+    bool  uiLog;             // research: the game's calls into its Scaleform menus ([Debug] UiLog, with Log=1)
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's
     int   unlockDecals;      // achievement decals: 0 off, 1 all, 2 only the online ones and the Pure decal (saved)
@@ -114,7 +117,7 @@ enum PatchBits {
     /* 0x100: was RenderScale, removed */ PATCH_PADNAMES = 0x200, PATCH_LOD = 0x400, PATCH_D3D = 0x800,
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
-    PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000,
+    PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000, PATCH_LAPS = 0x1000000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -359,6 +362,24 @@ void FixGameDspEffects();      // at DLL load: ducking meters and voice placemen
 void HookSoundBanks();         // with the import hooks: System::setFileSystem (lifecycle init + optional bank fix)
 bool AudioSystemInitHooked();  // true once System::setFileSystem was wrapped so sound-system resets are tracked
 void HookVoiceDspCreation();   // after HookSoundBanks: voice units made with a working read callback
+bool MenuHookReady();
+void InstallMenuHook(bool forLaps = false);
+void RemoveLapMenuHook();         // the game's Scaleform Invoke / SetVariable calls (lap choice; UiLog=1: logged)
+bool MenuHookInstalled();       // the Scaleform slots are ours
+bool UiSetText(void* movie, const char* path, const char* text);  // SetVariable past the hook
+bool LapMenuInstalled();
+void InstallLapMenu();        // LapSelect=1: Tab / pad Y pick the laps on the track select
+void* PromptBarMovieNow();     // game.cpp: the prompt bar movie the game holds now
+bool FrameHookInstalled();    // without wrapped pads: the per-frame extras run from the input update
+void LapMenuInvoke(void* movie, const char* path, const GFxValue* args, unsigned count);
+bool LapMenuInvokeArgs(void* movie, const char* path, const GFxValue* args, unsigned count, GFxValue* out);  // the finish card's line
+const char* LapMenuLabel(void* movie, const char* path, const GFxValue* value);  // our label for the game's, or NULL
+void LapMenuButtonTextSet(void* movie, const char* path, const char* text, bool substituted, bool ok);  // after a button text write
+bool LapMenuButtonX(void* movie, const char* path, double* x);  // the button's place kept while our label changes
+void LapMenuTick();           // every frame: a label held back while the prompt bar slides in
+bool QuickPlayModeListReady();
+bool HookQuickPlayModeList();  // dlcmode.cpp: the quick play mode list's item update (DLC modes, lap choice)
+void LapMenuModeHighlighted(const BYTE* screen, const char* gameMode);  // from that hook: the highlighted mode's GameMode name
 void HookReverbLog();          // Log=1, with the import hooks: every System::setReverbProperties call
 void AudioSystemEnsureCurrent(void* system, const char* why);  // audio thread: reset cached state on FMOD::System* change
 void AudioFixNoteGroupVolume(void* group, float stockVol, float appliedVol);  // audio thread: Log=1 ducking move check

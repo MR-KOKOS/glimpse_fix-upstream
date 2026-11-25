@@ -105,6 +105,7 @@ static void LoadConfig()
 
     // [Debug] first, so the log is open for everything below
     g_cfg.log = IniBool("Debug", "Log", false);
+    g_cfg.uiLog = g_cfg.log && IniBool("Debug", "UiLog", false);
     g_cfg.dumpTextures = IniBool("Debug", "DumpTextures", false);
     g_cfg.testFeed = IniBool("Debug", "TestFeed", false);
     if (g_cfg.log) {
@@ -248,6 +249,9 @@ static void LoadConfig()
     // [Gameplay]
     g_cfg.raceEndTiming = IniBool("Gameplay", "RaceEndTiming", false);
     g_cfg.unlockAll = IniBool("Gameplay", "UnlockAll", false);
+    g_cfg.laps = IniInt("Gameplay", "Laps", 0);
+    if (g_cfg.laps < 0 || g_cfg.laps > 16) g_cfg.laps = 0;
+    g_cfg.lapSelect = IniBool("Gameplay", "LapSelect", false);
     g_cfg.bonusContent = IniBool("Gameplay", "BonusContent", false);
     g_cfg.unlockDecals = IniInt("Gameplay", "UnlockDecals", 0);
     g_cfg.wreckTime = IniFloat("Gameplay", "WreckTime", 0.0f, 0.0f, 120.0f);
@@ -330,7 +334,7 @@ static FARPROC Real(const char* name)
 // game reads every controller itself, and the per-frame extras leave the pad to it (keys only)
 bool PadsWrapped()
 {
-    return g_cfg.virtualPads > 0 && pXInputGetState;
+    return g_cfg.virtualPads > 0 && pXInputGetState && pXInputSetState;
 }
 
 extern "C" HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer)

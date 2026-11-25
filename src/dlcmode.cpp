@@ -59,6 +59,7 @@ static const int kNumDlcModes = sizeof(kDlcModes) / sizeof(kDlcModes[0]);
 static bool s_modePresent[kNumDlcModes];
 static int s_modeMovieId[kNumDlcModes];
 static QpModeItemUpdate_t s_origModeItemUpdate;
+static bool s_dlcModesOn;  // DlcInstallModes found a mode to change (the hook may be there for the lap choice alone)
 static bool s_modeUnlockLogged[kNumDlcModes];
 
 static int DlcModeOf(const char* name)
@@ -103,9 +104,33 @@ static void UpdateModeRecords(const BYTE* self, int index, DWORD selected, DWORD
     }
 }
 
+// Match the game's selected-byte and owning-screen phase test (0x4867D1).
+static const BYTE* HighlightedMode(const BYTE* self, int index, char* out, size_t n)
+{
+    out[0] = 0;
+    __try {
+        const BYTE* list = *(const BYTE* const*)(self + 4);
+        const BYTE* screen = list ? *(const BYTE* const*)(list + 0x14) : NULL;
+        if (!screen || *(const DWORD*)(screen + 0x240) != 0) return NULL;
+        if (index >= 0 && index < 64 && index < *(const int*)(list + 8)) {
+            const BYTE* mode = *(const BYTE* const*)(*(BYTE* const*)(list + 0xC) + index * 12);
+            const char* name = mode ? *(const char* const*)(mode + 0xC) : NULL;
+            if (name) strncpy_s(out, n, name, _TRUNCATE);
+        }
+        return screen;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return NULL;
+    }
+}
+
 static void __fastcall Hook_ModeItemUpdate(void* self, void*, int index, DWORD selected, DWORD widget)
 {
-    UpdateModeRecords((const BYTE*)self, index, selected, widget);
+    if (s_dlcModesOn) UpdateModeRecords((const BYTE*)self, index, selected, widget);
+    if ((BYTE)selected && LapMenuInstalled()) {
+        char name[64];
+        const BYTE* screen = HighlightedMode((const BYTE*)self, index, name, sizeof name);
+        if (screen) LapMenuModeHighlighted(screen, name);
+    }
     s_origModeItemUpdate(self, index, selected, widget);
 }
 
@@ -116,6 +141,36 @@ static bool ModeListClassMatches()
     if (col[0] != 0) return false;
     const char* name = (const char*)(col[3] + 8);  // TypeDescriptor {vftable, spare, name[]}
     return !IsBadStringPtrA(name, sizeof(kModeItemClass)) && !strcmp(name, kModeItemClass);
+}
+
+// The slot swap, shared by the DLC modes and the lap choice: once, after the list's class and update are checked
+bool QuickPlayModeListReady()
+{
+    if (s_origModeItemUpdate) return true;
+    if (CurrentBuild() != BUILD_STEAM) return false;
+    __try {
+        if ((DWORD)kModeItemUpdateSlot[-2] != kModeItemCol || !ModeListClassMatches() ||
+            (DWORD)kModeItemUpdateSlot[0] != kModeItemUpdate ||
+            memcmp((const void*)kModeItemUpdate, "\x6A\xFF\x68\x85\x3D\xB3\x00", 7))
+            return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
+bool HookQuickPlayModeList()
+{
+    if (s_origModeItemUpdate) return true;
+    if (!QuickPlayModeListReady()) return false;
+    DWORD old;
+    if (!VirtualProtect(kModeItemUpdateSlot, 4, PAGE_READWRITE, &old)) return false;
+    // the original is stored before the slot points at the hook (as iohook.cpp's Swap does)
+    s_origModeItemUpdate = (QpModeItemUpdate_t)*kModeItemUpdateSlot;
+    InterlockedExchangePointer(kModeItemUpdateSlot, (void*)Hook_ModeItemUpdate);
+    VirtualProtect(kModeItemUpdateSlot, 4, old, &old);
+    Log("quick play mode list hooked (vtable 0xBB2360 slot 1)");
+    return true;
 }
 
 void DlcInstallModes()
@@ -136,14 +191,8 @@ void DlcInstallModes()
             "nothing changed", kDlcModes[0].params, kDlcModes[1].params);
         return;
     }
-    __try {
-        if ((DWORD)kModeItemUpdateSlot[-2] != kModeItemCol || !ModeListClassMatches() ||
-            (DWORD)kModeItemUpdateSlot[0] != kModeItemUpdate ||
-            memcmp((const void*)kModeItemUpdate, "\x6A\xFF\x68\x85\x3D\xB3\x00", 7)) {
-            Log("DLC modes: quick play mode list not as expected, Deadline stays locked there unless UnlockAll=1");
-            return;
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    if (!HookQuickPlayModeList()) {
+        Log("DLC modes: quick play mode list not as expected, Deadline stays locked there unless UnlockAll=1");
         return;
     }
     // the modes' own movies, when their files are there (data, or glimpse_dlc\<dir>\data through the redirect)
@@ -158,14 +207,9 @@ void DlcInstallModes()
         s_modeMovieId[i] = DlcQpAddModeMovie(kDlcModes[i].movie);
         Log("DLC modes: %s shows %s (movie id %d)", kDlcModes[i].shown, kDlcModes[i].movie, s_modeMovieId[i]);
     }
-    DWORD old;
-    if (!VirtualProtect(kModeItemUpdateSlot, 4, PAGE_READWRITE, &old)) return;
-    // the original is stored before the slot points at the hook (as iohook.cpp's Swap does)
-    s_origModeItemUpdate = (QpModeItemUpdate_t)*kModeItemUpdateSlot;
-    InterlockedExchangePointer(kModeItemUpdateSlot, (void*)Hook_ModeItemUpdate);
-    VirtualProtect(kModeItemUpdateSlot, 4, old, &old);
+    s_dlcModesOn = true;
     for (int i = 0; i < kNumDlcModes; i++)
         if (s_modePresent[i])
-            Log("DLC modes: quick play mode list hooked (vtable 0xBB2360 slot 1), %s (%s)%s", kDlcModes[i].shown,
+            Log("DLC modes: quick play mode list changed for %s (%s)%s", kDlcModes[i].shown,
                 kDlcModes[i].name, kDlcModes[i].unlock ? " will be selectable" : " is never locked (split screen)");
 }

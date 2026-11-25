@@ -402,6 +402,58 @@ car select already does it right (alpha ZERO / blend factor, factor 0).
   the shake from explosions and power plays, both against motion sickness.
 * **HUD key:** switches the power bar and the info bar off and on during a race.
 
+### Laps
+
+`LapSelect=1` changes the resolved difficulty action on offline Quick Play Race's track select.
+The input manager resolves action `0x21` into byte 3 of the UI action packet (0x4D628E).
+`cNewQuickPlay::OnInput` (vtable 0xBAFD34, slot 11, 0x47A170) takes that action only when the
+stock difficulty check (0x479C70) and locked-track check (0x4866A0) permit it. The game's
+bindings work with keyboard, virtual pads, and native DirectInput. Other screens and locked tracks keep their stock input.
+
+The Scaleform movie hooks (vtable 0xC41CF4, slots 18 and 11) observe the prompt bar's
+`TEXT_CHOOSE_TRACK` title and the highlighted track. The difficulty button reads
+"LAPS (DEFAULT d): n". Its position stays where it settled during the slide-in. The default
+comes from `GameLogic/Tracks/<location>/Params/RaceSetupOverlay_<subtrack>.params` through
+the game's open and close functions (0x403010 and 0x403080). The ArkLoader read and size
+slots point to 0x5739A0 and 0x573A00. The WinFileLoader equivalents are 0x572850 and
+0x5727B0. The game keeps its own lap count when the default is unreadable.
+
+The main menu identifies Quick Play by `TEXT_QUICKPLAY`. The Quick Play mode list
+(vtable 0xBB2360, slot 1, 0x4867B0) provides the internal name `QuickRace`.
+The observer takes selected rows only while their owning screen is in mode-select phase
+(`+0x240 == 0`). Moving to car select commits a track and requested count. Main menu,
+mode select, and a new track selection clear that request.
+
+`cLaps::Reset` (vtable 0xBA8DE8, slot 2, 0x43FF40, `__thiscall(context)`) checks the active setup for the same
+track, Quick Race mode, one player viewport, and offline non-Season play. It reads the game's
+default at 0x43FFA5 or the override byte/count at 0x43FFAF–0x43FFBD. When the requested
+value differs from the live stock count, the hook sets the override byte (0xD6B6B5) and
+count (0xD090CC) for that call, then restores both. A setup that consumed changed laps is
+tracked through results. Restart can use the same committed choice, and Deadline's
+separate timer slot 4 remains independent. `LapSelect=0` leaves all counts to the game.
+
+The stock results update (0x802AF0, vtable 0xC1F83C, slot 3) advances the movie, checks
+ready rows, then calls 0x802870. The writer builds `<track>_<sub>_<mode>` from the setup,
+normalizes it at 0x530D40 and calls 0x795B60. The store checks the live leaderboard catalogue at
+0x788C40 before writing the time or holder. Autosave starts within the same stock call.
+Before using changed laps, the mod checks the normalized replacement key ending in
+`_LapSelect` against that catalogue. The tagged results update repeats the check and
+substitutes `LapSelect.params` at setup +0x988 for that call, then restores the original.
+The stock store rejects the verified missing key. The finish card replaces the stock
+`TEXT_NEW_PERSONAL_BEST` message with "NO RECORD: LAPS CHANGED" for that race.
+
+LapSelect writes the Quick Play input slot at 0xBAFD60 and the lap reset slot at 0xBA8DF0,
+in addition to the mode list (0xBB2364), results update (0xC1F848), and Scaleform slots
+(Invoke at 0xC41D3C and SetVariable at 0xC41D20). Build, patch bit, dependencies and slot
+signatures are checked before LapSelect activates.
+An installation failure rolls back its slots. UiLog and DLC modes can keep their
+independently installed wrappers.
+
+The game writes `Laps` under `Local\GlimpseFixIni` and retries a pending choice if the
+lock or write fails. The config tool shares the mutex for reading, editing, and replacing
+the INI, including backup restore. Restore Backup keeps the current lap choice. Preset undo
+restores the earlier count only while Original game's saved zero is present.
+
 ### Cutscenes
 
 `CutsceneSkip` makes the season's cutscenes ("Coming up", "Next time", the end sequence), the demo
@@ -584,7 +636,11 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   player update, chase and bumper camera update, with the photo mode the other camera classes'
   update, the respot logic's update with the photo mode or `WreckTime`, the Scaleform movie's
   `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with
-  `UltrawideFix=2`, its `Invoke` with `SteamLAN=1`, `VolumeMeter` slot 9 at `0xC1E028` with `Ducking=1`,
+  `UltrawideFix=2`, its `Invoke` with `SteamLAN=1`, its `Invoke` and `SetVariable` with
+  `LapSelect=1` or `UiLog=1`, the Quick Play mode list's item update (`0xBB2364`) with
+  `LapSelect=1` or the DLC modes, Quick Play input (`0xBAFD60`), lap reset (`0xBA8DF0`)
+  and race results update (`0xC1F848`) with `LapSelect=1`,
+  `VolumeMeter` slot 9 at `0xC1E028` with `Ducking=1`,
   and `VoiceDSP` slot 9 at `0xC32824` with `SoundPlacement=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
   `Event::start` with `OpponentEngines=1` (default), `PhotoMode=1` or `Log=1`, `ChannelGroup::setVolume`
@@ -595,7 +651,8 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   read-only strings and constants (prompt bar icon paths, route marker size),
 * the Direct3D device's vtable, and calls into the game's own functions (dictionary lookup,
   Scaleform `Invoke`/`SetVariable` for the prompt bar, `SetVisible` for the photo mode's overlays,
-  the depth of field blur setup) from the input poll and hooked passes, plus audio calls: the
+  the depth of field blur setup) from the input poll and hooked passes. LapSelect uses the file,
+  difficulty, track and leaderboard functions listed under Laps. Audio calls include the
   `VoiceDSP` read callback `0x8A5470` from FMOD's mixer thread with `SoundPlacement=1`; the game's
   file callbacks from FMOD's threads with `SoundBankFix=1`; and on the audio thread the stock message
   43/51 handlers `0x835340`/`0x835620` (51 also with `SoundPlacement=1`), `FileExists` `0x402300`,
@@ -773,7 +830,7 @@ the Russian build's place from `src/build_ru.inc`.
 | `0x00D64E6C` | HasPureSave (decal id 47); decal table `0x00D6FABC` (id, title), 48 entries |
 | `0x00B9B43C` | Import table: FMOD `Event::start` |
 | `0x00BAA9DC` | 16/9 aspect constant (.rdata) of every camera: FOV conversion `0xA59A51`, aspect getter `0x794390`, frustum size `0x451680`, tripod cameras `0xAAB02D` |
-| `0x00C41CF4` | `GFxMovieRoot` vtable: slot 20 `SetViewport` (`0x98CDF0`, viewport at +0x38), 31 `Display` (`0x987E60`); +0x28 movie definition (vtable `0xC3D5CC`), +0x80 scale mode, +0x88 visible frame |
+| `0x00C41CF4` | `GFxMovieRoot` vtable: slot 11 `SetVariable` (`0x991010`), 18 `Invoke` (`0x98D2E0`), 20 `SetViewport` (`0x98CDF0`, viewport at +0x38), 31 `Display` (`0x987E60`); +0x28 movie definition (vtable `0xC3D5CC`), +0x80 scale mode, +0x88 visible frame |
 | `0x00BC93DC` | Scaleform renderer vtable: slots 7 `SetMatrix`, 14 `SetVertexData`, 17 `DrawIndexedTriList`, 18 `DrawLineStrip`, 26–28 mask begin/end/disable |
 | `0x00D66000` | Viewport manager: +0 screen viewports (1 = one player), +8 forced viewport (−1 = none) |
 | `0x00D36F54` | Tweakable "LetterBox/LetterBox Amount" (0.118) |

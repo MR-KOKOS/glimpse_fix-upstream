@@ -65,7 +65,8 @@ Uninstall: delete the three files and rename `SplitSecond.exe.orig` back.
 
 `glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic, a help line for the
 option under the mouse, every change saved at once. The *Presets* page has *Recommended*, *Original
-game*, *Potato*, *Peeled potato* and *Chaos*, and *Back to your settings*. Every key:
+game*, *Potato*, *Peeled potato* and *Chaos*, and *Back to your settings*. Presets switch *Pick laps on the track select* off;
+only *Original game* also resets the lap count picked in the game. Every key:
 [INI reference](docs/INI.md).
 
 ## Your own Xbox DLC (experimental)
