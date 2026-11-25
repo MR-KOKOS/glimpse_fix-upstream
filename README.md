@@ -24,7 +24,7 @@ that adds what the port never had, with a settings program instead of hand-editi
   detail.
 * **Image:** SMAA anti-aliasing with a sharp HUD, console-size power play icons, motion blur matched to
   60 fps, anisotropic filtering; vignette, gradient, bloom and flares switchable; car glass as on the
-  Xbox 360.
+  Xbox 360; UI texture load stutter fix.
 * **Sound as on the console:** opponents' engines are audible again, matched to each car, and
   adjustable in volume; dynamic mixer ducking, 3D voice placement, sound bank offset fixes and the
   Xbox 360's reverb presets.

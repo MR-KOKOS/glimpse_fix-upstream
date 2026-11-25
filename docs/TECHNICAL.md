@@ -209,6 +209,22 @@ shadows` (0xD716EC), which every pass that draws into the shadow maps checks.
 * **Texture detail:** `TextureDetail=1..3` raises the sampler state `MAXMIPLEVEL` on the same samplers,
   so mipmapped textures are drawn at half, a quarter or an eighth of their size; textures without mip
   levels (text, most of the HUD) are not affected.
+* **Texture load stutter (`TextureLoadFix`):** the game's texture loader (`Crayon2::cTextureDataLoadHandler`
+  at `0x005069F0`, helper `0x00511880`, thunk `0x00755D54`) loads every texture through the import
+  `d3dx9_42.dll!D3DXCreateTextureFromFileInMemory` (`0x00B9B3DC` on the Steam build). That helper
+  passes `MipLevels = D3DX_DEFAULT` and `MipFilter = D3DX_DEFAULT`, so whenever a DDS file ships
+  without mip levels — which is true of the 2D menu, HUD and post-race UI sprite sheets in
+  `resident.ark` (for example the 22-texture and 7-texture post-race packs loaded right before
+  `RaceEnd.gfx`, including `1024x1024` DXT1/DXT4 atlases) — `d3dx9_42.dll` calls `D3DXFilterTexture`
+  on the render thread to CPU-decompress, filter and recompress a full 9–11 level mip chain, stalling
+  transitions for ~250 ms at race end and over a second across boot, menu and race load. All streamed
+  3D world textures already carry full mip chains. `TextureLoadFix=1` wraps the
+  `D3DXCreateTextureFromFileInMemory` import slot (located dynamically by name via `FindImport`, no
+  game code or hardcoded addresses; tested on the Steam build): when the source buffer is a plain 2D
+  DDS header with at most 1 mip level (`dwMipMapCount <= 1`, not a cubemap/volume or DX10 header), it
+  calls `D3DXCreateTextureFromFileInMemoryEx` with `MipLevels = 1`, `MipFilter = D3DX_FILTER_NONE`
+  and `D3DPOOL_MANAGED`, falling back to the original import on failure. Pre-mipped and non-DDS
+  textures pass straight through.
 * **Graphics quality limit:** the game sets its quality level (0xD0F7E8) only through one function
   (0x471530), which clamps it to the range of the level's tweakable (the object at `[0xD0F7EC]`,
   maximum at +0xC). `QualityCap` lowers that maximum before the device is made and every frame; the
@@ -837,6 +853,7 @@ the Russian build's place from `src/build_ru.inc`.
 | `0x00D1DB68`, `0x00D1DB78`, `0x00D1DB88` | 3D player tag name width, icon width, icon offset x (per viewport width) |
 | `0x00D714D0` | Split screen HUDs: `[+0xCC+4i]` player HUD, +0x12C power bar, +0x128 info bar → +8 dial → +0x78 quad corners at +0x2C |
 | `0x00B9B388` | Import table: `BinkClose` |
+| `0x00B9B3DC` | Import table: `d3dx9_42.dll!D3DXCreateTextureFromFileInMemory` (thunk `0x00755D54`, sole caller `0x00511880` from `Crayon2::cTextureDataLoadHandler` `0x005069F0`) |
 | `0x008674F0` | FMOD init: DirectSound, `setSpeakerMode(5POINT1)` |
 
 Actions: `0x29` throttle, `0x2A` brake, `0x1D`–`0x2C` the 16 console buttons, `0x03`–`0x06` menu

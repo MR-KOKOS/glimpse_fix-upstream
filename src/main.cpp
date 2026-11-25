@@ -190,6 +190,7 @@ static void LoadConfig()
     g_cfg.textureDetail = IniInt("Graphics", "TextureDetail", 0);
     if (g_cfg.textureDetail < 0 || g_cfg.textureDetail > 3) g_cfg.textureDetail = 0;
     g_cfg.glassFix = IniBool("Graphics", "GlassFix", true);
+    g_cfg.textureLoadFix = IniBool("Graphics", "TextureLoadFix", true);
     g_cfg.opponentEngines = IniBool("Audio", "OpponentEngines", true);
     g_cfg.consoleReverb = IniBool("Audio", "ConsoleReverb", true);
     g_cfg.ducking = IniBool("Audio", "Ducking", true);

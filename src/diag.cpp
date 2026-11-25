@@ -17,6 +17,100 @@ static CreateDevice_t s_origCreateDevice;
 static Present_t s_origPresent;
 static BYTE s_create9Prologue[5];
 
+// ---------------------------------------------------------------- single-mip DDS load fix (TextureLoadFix=1)
+
+// The game loads every texture through d3dx9_42.dll!D3DXCreateTextureFromFileInMemory, which passes
+// MipLevels=D3DX_DEFAULT and MipFilter=D3DX_DEFAULT. Whenever a 2D UI/HUD/post-race DDS ships with no
+// mip levels, D3DX decompresses, filters and recompresses a full mipmap chain on the CPU, stalling
+// transitions by hundreds of milliseconds. Single-level 2D DDS textures are redirected to
+// D3DXCreateTextureFromFileInMemoryEx with MipLevels=1 and D3DX_FILTER_NONE; pre-mipped 3D textures
+// and all other formats pass through untouched.
+typedef HRESULT(WINAPI* D3DXCreateTextureFromFileInMemory_t)(
+    IDirect3DDevice9*, LPCVOID, UINT, IDirect3DTexture9**);
+typedef HRESULT(WINAPI* D3DXCreateTextureFromFileInMemoryEx_t)(
+    IDirect3DDevice9*, LPCVOID, UINT, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL,
+    DWORD, DWORD, D3DCOLOR, void*, PALETTEENTRY*, IDirect3DTexture9**);
+
+static D3DXCreateTextureFromFileInMemory_t s_origD3DXCreateTex;
+static D3DXCreateTextureFromFileInMemoryEx_t s_d3dxCreateTexEx;
+static bool s_texLoadHooked;
+static volatile LONG s_texLoadFast, s_texLoadPass, s_texLoadFallback;
+
+static bool IsSingleMip2dDds(const void* data, UINT size)
+{
+    if (!data || size < 128u) return false;
+    DWORD h[32];
+    __try {
+        memcpy(h, data, sizeof(h));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    if (h[0] != 0x20534444u || h[1] != 124u) return false;  // "DDS ", DDS_HEADER::dwSize
+    DWORD height = h[3];
+    DWORD width = h[4];
+    DWORD mipCount = h[7];   // DDS_HEADER::dwMipMapCount
+    DWORD pfSize = h[19];    // DDS_PIXELFORMAT::dwSize (offset 76)
+    DWORD pfFlags = h[20];   // DDS_PIXELFORMAT::dwFlags (offset 80)
+    DWORD fourCC = h[21];    // DDS_PIXELFORMAT::dwFourCC (offset 84)
+    DWORD caps = h[27];      // DDS_HEADER::dwCaps (offset 108)
+    DWORD caps2 = h[28];     // DDS_HEADER::dwCaps2 (offset 112)
+    if (pfSize != 32u || !width || !height || (width == 1u && height == 1u)) return false;
+    if ((pfFlags & 4u) && fourCC == MAKEFOURCC('D', 'X', '1', '0')) return false;
+    if (caps2 & (0x200u | 0x200000u)) return false;  // cubemap or volume texture
+    // Conservative check: ignore DDSD_MIPMAPCOUNT so any header reporting >1 mip passes through to stock.
+    if (mipCount > 1u || ((caps & 0x400000u) && mipCount == 0u)) return false;
+    return true;
+}
+
+static HRESULT WINAPI Hook_D3DXCreateTextureFromFileInMemory(
+    IDirect3DDevice9* dev, LPCVOID srcData, UINT srcDataSize, IDirect3DTexture9** outTex)
+{
+    if (dev && outTex && IsSingleMip2dDds(srcData, srcDataSize)) {
+        HRESULT hr = s_d3dxCreateTexEx(dev, srcData, srcDataSize,
+                                       0xFFFFFFFFu /* D3DX_DEFAULT */, 0xFFFFFFFFu /* D3DX_DEFAULT */,
+                                       1u /* MipLevels */, 0u /* Usage */, D3DFMT_UNKNOWN, D3DPOOL_MANAGED,
+                                       0xFFFFFFFFu /* D3DX_DEFAULT */, 1u /* D3DX_FILTER_NONE */,
+                                       0u /* ColorKey */, NULL, NULL, outTex);
+        if (SUCCEEDED(hr)) {
+            InterlockedIncrement(&s_texLoadFast);
+            return hr;
+        }
+        LONG n = InterlockedIncrement(&s_texLoadFallback);
+        if (n <= 8)
+            Log("texture load fix: single-mip create failed (%08lx, size %u), falling back to stock", hr, srcDataSize);
+        return s_origD3DXCreateTex(dev, srcData, srcDataSize, outTex);
+    }
+    InterlockedIncrement(&s_texLoadPass);
+    return s_origD3DXCreateTex(dev, srcData, srcDataSize, outTex);
+}
+
+void InstallTextureLoadFix()
+{
+    if (s_texLoadHooked) return;
+    HMODULE d3dx = GetModuleHandleA("d3dx9_42.dll");
+    D3DXCreateTextureFromFileInMemoryEx_t createEx =
+        d3dx ? (D3DXCreateTextureFromFileInMemoryEx_t)GetProcAddress(d3dx, "D3DXCreateTextureFromFileInMemoryEx") : NULL;
+    if (!createEx) {
+        Log("texture load fix: d3dx9_42.dll D3DXCreateTextureFromFileInMemoryEx not found, left as the game's");
+        return;
+    }
+    void** slot = FindImport("d3dx9_42.dll", "D3DXCreateTextureFromFileInMemory");
+    if (!slot || !*slot) {
+        Log("texture load fix: D3DXCreateTextureFromFileInMemory import not found, left as the game's");
+        return;
+    }
+    s_origD3DXCreateTex = (D3DXCreateTextureFromFileInMemory_t)*slot;
+    s_d3dxCreateTexEx = createEx;
+    if (!WriteSlot(slot, (void*)Hook_D3DXCreateTextureFromFileInMemory)) {
+        s_origD3DXCreateTex = NULL;
+        s_d3dxCreateTexEx = NULL;
+        Log("texture load fix: D3DXCreateTextureFromFileInMemory import could not be written, left as the game's");
+        return;
+    }
+    s_texLoadHooked = true;
+    Log("texture load fix: D3DXCreateTextureFromFileInMemory import wrapped (%p)", (void*)slot);
+}
+
 // ---------------------------------------------------------------- anisotropic filtering
 
 // MINFILTER LINEAR becomes ANISOTROPIC on pixel samplers that hold a mipmapped texture which is not
@@ -2067,6 +2161,13 @@ static HRESULT STDMETHODCALLTYPE Diag_Present(IDirect3DDevice9* dev, const RECT*
                 InterlockedExchange(&s_repatched, 0),
                 vt == s_vt ? "as hooked" : "another one", ModuleOf(vt[82], a, sizeof(a)), ModuleOf(vt[65], b, sizeof(b)));
             if (g_cfg.glassFix) Log("glass fix: %ld glass draws changed in 10 s", GlassTakeChangedDraws());
+            if (s_texLoadHooked) {
+                LONG fast = InterlockedExchange(&s_texLoadFast, 0);
+                LONG pass = InterlockedExchange(&s_texLoadPass, 0);
+                LONG fb = InterlockedExchange(&s_texLoadFallback, 0);
+                if (fast || pass || fb)
+                    Log("texture load fix: %ld single-mip fast, %ld passthrough, %ld fallback in 10 s", fast, pass, fb);
+            }
         }
     }
     g_lastPresent = GetTickCount();

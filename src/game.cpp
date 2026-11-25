@@ -1272,6 +1272,7 @@ void ApplyGamePatches()
     if (mask & PATCH_CAMERA) PatchCamera();
     if (mask & PATCH_CAMERA) PatchDepthOfField();
     if (mask & PATCH_RACEEND) InstallRaceEndTiming();
+    if (g_cfg.textureLoadFix && (mask & PATCH_TEXLOAD)) InstallTextureLoadFix();
     if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
     CheckOpponentEngineBanks();
     HookSoundBanks();
