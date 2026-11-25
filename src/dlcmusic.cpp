@@ -334,7 +334,6 @@ static void ResetForNewSoundSystem()
     s_usedWithoutMusic = -1;
     s_audioThread = 0;
     s_menuTried = false;               // the new sound system has no DLCMenu bank: loaded again at the next Deadline race
-    AudioDiagProjectsChanged();
     Log("DLC music: the sound system was made anew: state dropped (was %s%s%s)", wasSwapped ? "swapped" : "not swapped",
         wasOut ? ", Music/Music out" : "", wasOff ? ", off" : "");
 }
