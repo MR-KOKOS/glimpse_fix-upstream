@@ -330,7 +330,7 @@ static FARPROC Real(const char* name)
 // game reads every controller itself, and the per-frame extras leave the pad to it (keys only)
 bool PadsWrapped()
 {
-    return g_cfg.virtualPads > 0 && pXInputGetState;
+    return g_cfg.virtualPads > 0 && pXInputGetState && pXInputSetState;
 }
 
 extern "C" HRESULT WINAPI Proxy_DirectInput8Create(HINSTANCE inst, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer)
