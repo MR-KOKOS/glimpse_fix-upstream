@@ -370,11 +370,16 @@ car select already does it right (alpha ZERO / blend factor, factor 0).
   its horizontal field of view from one 16/9 constant (`0x00BAA9DC`); the screen's real aspect there
   gives every camera the 16:9 picture height: menus, power plays, crash cameras, split screen. The
   Scaleform movies get a centred 16:9 viewport, so menus, HUD, cards and result screens keep their
-  proportions; their full-width bands and backgrounds are stretched to the screen edges (renderer
-  hooks, a table of shapes the automatic rule gets wrong), the loading screen is zoomed with black
-  sides, the split screen HUD is drawn once per half. Bink cinematics keep their aspect with black
-  sides, the 3D player tags their proportions, the pause and intro letterbox is off, and the last
-  pixel column (wrong in the stock game above 16:9) is copied from its neighbour. Tested at 32:9
+  proportions. The renderer hooks extend full-width bands and backgrounds to the screen edges,
+  including Season car unlocks, decal unlocks and rewards. The matching depth-1 reveal strip mask
+  and its screen-wide content extend across the display. Deeper masks and separate root masks for
+  art such as track previews and mode icons retain their authored bounds. `UltrawideBlackBackdrop=1`
+  fills the dimmed scenery above and below the unlock and reward banners with solid black.
+  The loading screen is zoomed with black sides, and the split screen HUD is drawn once per half.
+  Bink cinematics keep their aspect with black sides, and 3D player tags keep their proportions.
+  Pause and intro letterbox bars are disabled above 16:9 and restored when switching back to 16:9
+  or narrower. The last pixel column (wrong in the stock game above 16:9) is copied from its
+  neighbour. Tested at 32:9
   (5120x1440, 3840x1080), 24:9 (3840x1440), 21:9 (3440x1440, 2560x1080) and 16:9 (unchanged).
   Steam build only; elsewhere it falls back to 1.
 * **Zoom keys:** hold a key to zoom the race camera closer or wider, another one resets it.

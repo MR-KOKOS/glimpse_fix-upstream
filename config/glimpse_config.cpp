@@ -115,6 +115,7 @@ static Option kOptions[] = {
     // Camera
     { "Camera", "FOV", RANGE, "Field of view", "Race cameras (chase and bumper) as a factor of the game's own; the game still widens the view with speed.", "1.0", 0, 0.5, 2, 0.05, 2 },
     { "Camera", "UltrawideFix", CHOICE, "Ultrawide fix", "Screens wider than 16:9. Race cameras: they keep the picture height of 16:9 instead of losing the top and bottom. Full (experimental): every camera does, and menus, HUD and result screens are shown at 16:9 in the centre.", "1", "0|Off;1|Race cameras;2|Full (experimental)" },
+    { "Camera", "UltrawideBlackBackdrop", CHOICE, "  Unlock screen backdrop", "Car unlock, decal unlock and season reward screens in full ultrawide mode. As the game: keeps the stock black bars and the dimmed 3D track strips above and below the centre banner. Solid black: extends the top and bottom black bars to meet the banner, hiding the 3D strips while keeping text, icons and reveal art at their original proportions.", "0", "0|As the game (dimmed 3D strips);1|Solid black (full height)" },
     { "Camera", "CameraShake", RANGE, "Camera shake", "How much the race cameras (chase and bumper) shake on bumps and hits. Lower values smooth their rotation and help against motion sickness; turns follow a little later.", "1.0", 0, 0, 1, 0.05, 2 },
     { "Camera", "ExplosionShakeOff", BOOL_OPT, "No explosion shake", "On: the camera no longer shakes when explosions, collapsing buildings and power plays go off nearby.", "0" },
     { "Camera", "ZoomKeys", BOOL_OPT, "Zoom keys", "Zoom the race camera while a key is held.", "0" },
@@ -569,11 +570,21 @@ static bool IsOn(const char* key)
     return o && s_toggle[IndexOf(*o)];
 }
 
+static bool ChoiceIs(const char* key, const char* val)
+{
+    Option* o = Find(key);
+    if (!o) return false;
+    int sel = s_choice[IndexOf(*o)];
+    auto items = Choices(*o);
+    return sel >= 0 && sel < (int)items.size() && items[sel].first == val;
+}
+
 static void UpdateEnables()
 {
     bool bloom = IsOn("Bloom"), boost = IsOn("Boost"), ai = IsOn("AIBoost"), chaos = IsOn("AIBoostChaos");
     bool zoom = IsOn("ZoomKeys"), photo = IsOn("PhotoMode");
     struct { const char* key; bool on; } rules[] = {
+        { "UltrawideBlackBackdrop", ChoiceIs("UltrawideFix", "2") },
         { "BloomStrength", bloom }, { "BloomTone", bloom }, { "BloomCurve", bloom },
         { "BoostMotionBlur", boost }, { "BoostKey", boost }, { "BoostButton", boost },
         { "HandbrakeButton", IsOn("Handbrake") }, { "HandbrakeKey", IsOn("Handbrake") }, { "HandbrakeMode", IsOn("Handbrake") }, { "HandbrakeStrength", IsOn("Handbrake") }, { "HandbrakeDrift", IsOn("Handbrake") }, { "PowerBarFillKey", IsOn("PowerBarFill") },

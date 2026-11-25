@@ -59,6 +59,7 @@ The file is split into sections. INIs from older versions with everything under 
 |---|---|---|
 | `FOV` | 1.0 | Field of view of the race cameras as a factor of the game's own (0.3–2.5). |
 | `UltrawideFix` | 1 | Screens wider than 16:9: 1 = the race cameras keep the picture height of 16:9, 2 = experimental full ultrawide (all cameras, menus and HUD at 16:9 in the centre), 0 = stock. |
+| `UltrawideBlackBackdrop` | 0 | Car unlock, decal unlock and season reward screens in `UltrawideFix=2`: 0 = as the game (stock black bars with dimmed 3D track strips above and below the banner), 1 = solid black (full height: extends the top and bottom black bars to meet the banner, keeping text, icons and reveal art at their original proportions). |
 | `ZoomKeys` | 0 | 1 = zoom the race camera while `ZoomInKey` / `ZoomOutKey` is held, `ZoomResetKey` back to `FOV`. |
 | `ZoomInKey`, `ZoomOutKey`, `ZoomResetKey` | 0x31, 0x32, 0x33 | Virtual key codes (1, 2, 3 on the top row). |
 | `PhotoMode` | 0 | 1 = photo mode with `PhotoModeKey` or the pad's Back button during a race. With `VirtualPads=0` keys only (see `VirtualPads`). |

@@ -99,15 +99,18 @@ static const char kPillarbox[] = "FE_LoadingScreen.gfx";       // zoomed, black 
 static const char kZoomOnly[] = "FE_PauseMenu_NEW.gfx";        // zoomed, the 3D scene stays at the sides
 static const char kEdgeLine[] = "FE_PauseMenu_NEW.gfx";        // its frame line repeated at the left edge
 static const char kExtend[] =  // centred, full-width shapes stretched to the screen edges
-    "FE_vehicleSelect.gfx;FE_InGameEventSelect2.gfx;IG_GameModeInstructions.gfx;EventObjectives.gfx;RaceEnd.gfx;"
-    "RaceResults.gfx;RaceStats.gfx";
+    "FE_vehicleSelect.gfx;VehicleSelect.gfx;FE_InGameEpisodeSelect.gfx;FE_InGameEventSelect2.gfx;"
+    "IG_GameModeInstructions.gfx;EventObjectives.gfx;RaceEnd.gfx;RaceResults.gfx;RaceStats.gfx;"
+    "CarUnlock_*;DecalUnlock.gfx;Rewards.gfx";
+static const char kExtendMask1[] =  // kExtend movies whose root reveal strip mask is extended (depth-1 masked shapes auto-extend)
+    "CarUnlock_*;DecalUnlock.gfx;Rewards.gfx";
 static const char kSplitHud[] = "Hud.gfx;DialsInfo.gfx;DialsPower.gfx;TimerOverlay.gfx";  // split screen: per half
 static const float kPillarZoom = 1.35f;  // pushes the loading screen's own top and bottom bars off screen
 static const float kEdgeOffset = -63;    // pause frame line: x from the stage's left edge, stage units
 
 enum {
     M_KEEP = 1, M_PILLAR = 2, M_ZOOM = 4, M_EDGELINE = 8, M_EXTEND = 0x10, M_SPLITHUD = 0x20,
-    M_DIALPOWER = 0x40, M_DIALINFO = 0x80, M_LOGGED = 0x100,
+    M_DIALPOWER = 0x40, M_DIALINFO = 0x80, M_LOGGED = 0x100, M_EXTEND_MASK1 = 0x200,
 };
 
 static const char* BaseName(const char* path)
@@ -118,13 +121,18 @@ static const char* BaseName(const char* path)
     return base;
 }
 
+static bool MatchPattern(const char* pat, size_t plen, const char* name)
+{
+    if (plen > 0 && pat[plen - 1] == '*') return !_strnicmp(pat, name, plen - 1);
+    return strlen(name) == plen && !_strnicmp(pat, name, plen);
+}
+
 static bool InList(const char* list, const char* base)
 {
-    size_t n = strlen(base);
     for (const char* t = list; *t;) {
         const char* e = strchr(t, ';');
         size_t len = e ? (size_t)(e - t) : strlen(t);
-        if (len == n && !_strnicmp(t, base, n)) return true;
+        if (MatchPattern(t, len, base)) return true;
         t += len + (e ? 1 : 0);
     }
     return false;
@@ -169,6 +177,7 @@ static MovieInfo* Movie(void* movie)
     if (InList(kZoomOnly, m.name)) m.flags |= M_ZOOM;
     if (InList(kEdgeLine, m.name)) m.flags |= M_EDGELINE;
     if (InList(kExtend, m.name)) m.flags |= M_EXTEND;
+    if (InList(kExtendMask1, m.name)) m.flags |= M_EXTEND_MASK1;
     if (InList(kSplitHud, m.name)) m.flags |= M_SPLITHUD;
     if (!_stricmp(m.name, "DialsPower.gfx")) m.flags |= M_DIALPOWER;
     if (!_stricmp(m.name, "DialsInfo.gfx")) m.flags |= M_DIALINFO;
@@ -381,13 +390,18 @@ static float s_rMat[6];
 static const BYTE* s_rVerts;
 static int s_rVertCount, s_rVertFmt;
 static const char* s_extendName;  // set while a kExtend movie is in Display
+static bool s_extendMask1;        // set while a kExtendMask1 movie is in Display
+static bool s_rootMaskExtended;   // true only while the active depth-1 mask itself was extended by a P_MASK rule
 static bool s_mirrorNow;          // set while the pause menu is in Display
 static int s_maskPhase;           // 0 none, 1 submitting mask shapes, 2 drawing masked content
+static int s_maskSubmitMode;      // BeginSubmitMask mode, meaningful during mask submission
+static int s_maskDepth;           // nested stencil mask depth (mirrors GRenderer+0x170)
 static float s_stageL, s_stageR, s_stageH, s_visL, s_visR, s_visT, s_visB;  // renderer units
 
 // Shapes that the automatic rules get wrong, by their bounds in 16:9 stage px at 1440p (x 0..2560 = the centred
 // stage, y 0..1440; the same on every screen size) within 8 px. kAny matches any value (animated edges).
-// Phase: masks and masked content are left as authored unless a rule names them. First match wins.
+// Phase: masks and masked content are left as authored unless a rule names them (or kExtendMask1 depth-1 content).
+// First match wins.
 enum { P_ANY = -1, P_PLAIN, P_MASK, P_MASKED };
 enum { R_RIGHT, R_BOTH, R_PIN, R_PLACE };  // PIN keeps the width at the nearer screen edge; PLACE: px from the right
 static const float kAny = 1e9f;
@@ -425,6 +439,11 @@ static const Rule kRules[] = {
     { "FE_vehicleSelect.gfx", -1496, 36, 2628, 348, P_MASK, R_BOTH },
     { "FE_vehicleSelect.gfx", -1, 134, 2560, 239, P_MASKED, R_BOTH },
     { "FE_vehicleSelect.gfx", -1, 242, 2560, 299, P_MASKED, R_BOTH },
+    // season unlocks & rewards: root reveal strip clip mask spans the screen; its depth-1 masked shapes auto-extend
+    // while deeper nested masks (track/mode thumbnails and decal icons) stay as authored
+    { "CarUnlock_*", -128, 412, 2641, 1022, P_MASK, R_BOTH },
+    { "DecalUnlock.gfx", -6, 416, 2566, 1026, P_MASK, R_BOTH },
+    { "Rewards.gfx", 0, 406, 2571, 1016, P_MASK, R_BOTH },
 };
 
 static bool Near(float v, float rule) { return rule == kAny || fabsf(v - rule) <= 8; }
@@ -432,8 +451,8 @@ static bool Near(float v, float rule) { return rule == kAny || fabsf(v - rule) <
 static const Rule* FindRule(float x0, float y0, float x1, float y1)
 {
     for (const Rule& r : kRules)
-        if (!_stricmp(r.movie, s_extendName) && (r.phase == P_ANY || r.phase == s_maskPhase) && Near(x0, r.x0) &&
-            Near(y0, r.y0) && Near(x1, r.x1) && Near(y1, r.y1))
+        if (MatchPattern(r.movie, strlen(r.movie), s_extendName) && (r.phase == P_ANY || r.phase == s_maskPhase) &&
+            Near(x0, r.x0) && Near(y0, r.y0) && Near(x1, r.x1) && Near(y1, r.y1))
             return &r;
     return NULL;
 }
@@ -478,13 +497,16 @@ static bool VertBounds(int first, int n, float& minx, float& maxx, float& miny, 
 // widened to the left by e px and the x mapping compensated so everything lands on the same pixels.
 static bool BeginEdgeCopy(float* m, D3DVIEWPORT9& saved, DWORD& sc)
 {
-    if (!s_dev || s_edgeVpW <= 0 || FAILED(s_dev->GetViewport(&saved))) return false;
+    float sw = s_stageR - s_stageL;
+    if (sw <= 0 || !s_dev || s_edgeVpW <= 0 || FAILED(s_dev->GetViewport(&saved))) return false;
     s_dev->GetRenderState(D3DRS_SCISSORTESTENABLE, &sc);
     s_dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-    DWORD e = saved.X < 128 ? saved.X : 128;
+    float k = s_edgeVpW / sw;
+    DWORD want = (DWORD)(fabsf(kEdgeOffset) * k + 32.0f);
+    if (want < 128) want = 128;
+    DWORD e = saved.X < want ? saved.X : want;
     if (!e) return true;
     float X = (float)saved.X, W = (float)saved.Width, Xn = X - e, Wn = W + e, r = W / Wn;
-    float k = s_edgeVpW / (s_stageR - s_stageL);
     float c = s_stageL - s_stageL * r + (s_edgeVpL * r + X - Xn * r - s_edgeVpL) / k;
     m[0] *= r;
     m[1] *= r;
@@ -544,10 +566,14 @@ static void __fastcall Hook_RDrawTri(void* r, void*, int base, int minIdx, int c
     float s = 1440.0f / (s_scrH > 0 ? s_scrH : 1440);
     const Rule* rule = FindRule((minx - s_stageL) * kx * s, (miny - s_visT) * ky * s, (maxx - s_stageL) * kx * s,
                                 (maxy - s_visT) * ky * s);
-    if (!rule && s_maskPhase) {  // masks and masked content stay as authored
+    if (!rule && s_maskPhase && !(s_maskPhase == 2 && s_maskDepth == 1 && s_extendMask1 && s_rootMaskExtended)) {
+        // masks and masked content stay as authored (except depth-1 content under an extended root strip mask)
         s_rDrawTri(r, base, minIdx, count, start, tris);
         return;
     }
+    // Mode 2 can already report depth 1 while submitting the geometry that removes a child mask.
+    if (s_maskPhase == P_MASK && s_maskSubmitMode == 0 && rule && rule->phase == P_MASK && rule->act == R_BOTH)
+        s_rootMaskExtended = true;
     // stage edges map to the screen edges: shapes reaching past a stage edge keep their overshoot beyond the
     // screen edge, shapes wholly outside the stage move with it, thin lines and square sprites (glows) stay
     float sw = s_stageR - s_stageL, tol = sw * 0.01f, mL = s_stageL - s_visL, mR = s_visR - s_stageR;
@@ -583,17 +609,30 @@ static void __fastcall Hook_RDrawTri(void* r, void*, int base, int minIdx, int c
         s_rDrawTri(r, base, minIdx, count, start, tris);
         return;
     }
-    // a shape's anti-aliased fringe fades over its outermost pixel: one pushed exactly to a screen edge would
-    // leave a 1 px line there, so edges near a screen edge go 2 px beyond it (also top and bottom, within 3 px:
-    // the letterbox bars are authored 1 px inside the stage)
+    // A shape's anti-aliased fringe can leave a 1 px line, so snap nearby edges 2 px past the screen.
+    // The top/bottom tolerance is deliberately 5 px at 1440p for all kExtend movies' shapes that reach
+    // a screen side. It scales with screen height and catches bars and fills that sit 4 px inside the stage.
     float ny0 = 0, sy = 1;
     if (s_scrW > 0 && s_scrH > 0) {
         float ux = (s_visR - s_visL) / s_scrW, uy = (s_visB - s_visT) / s_scrH;
-        if (nl != minx && nl > s_visL - 2 * ux && nl <= s_visL + ux) nl = s_visL - 2 * ux;
-        if (nr != maxx && nr < s_visR + 2 * ux && nr >= s_visR - ux) nr = s_visR + 2 * ux;
+        float u1440 = (s_visB - s_visT) / 1440.0f;
+        float xTol = u1440 > ux ? u1440 : ux;
+        float yTol = 5.0f * (u1440 > uy ? u1440 : uy);
+        if (nl != minx && nl > s_visL - 2 * ux && nl <= s_visL + xTol) nl = s_visL - 2 * ux;
+        if (nr != maxx && nr < s_visR + 2 * ux && nr >= s_visR - xTol) nr = s_visR + 2 * ux;
         float nt = miny, nb = maxy;
-        if (miny > s_visT - 2 * uy && miny <= s_visT + 3 * uy) nt = s_visT - 2 * uy;
-        if (maxy < s_visB + 2 * uy && maxy >= s_visB - 3 * uy) nb = s_visB + 2 * uy;
+        if (miny > s_visT - 2 * uy && miny <= s_visT + yTol) nt = s_visT - 2 * uy;
+        if (maxy < s_visB + 2 * uy && maxy >= s_visB - yTol) nb = s_visB + 2 * uy;
+        // opt-in full-height solid black backdrop on CarUnlock_*, DecalUnlock.gfx and Rewards.gfx:
+        // extend their own top/bottom black letterbox bars vertically to meet the centre reveal strip
+        if (g_cfg.ultrawideBlackBackdrop && s_extendMask1 && s_maskPhase == 0 && nl <= s_visL && nr >= s_visR) {
+            float y0p = (miny - s_visT) * ky * s, y1p = (maxy - s_visT) * ky * s;
+            float meetT = 414.0f, meetB = 1020.0f;  // CarUnlock_* (strip 412..1022)
+            if (!_stricmp(s_extendName, "DecalUnlock.gfx")) { meetT = 418.0f; meetB = 1024.0f; }
+            else if (!_stricmp(s_extendName, "Rewards.gfx")) { meetT = 408.0f; meetB = 1014.0f; }
+            if (y0p <= 8.0f && y1p >= 70.0f && y1p <= 220.0f) nb = s_visT + (s_visB - s_visT) * (meetT / 1440.0f);
+            if (y0p >= 1220.0f && y0p <= 1370.0f && y1p >= 1432.0f) nt = s_visT + (s_visB - s_visT) * (meetB / 1440.0f);
+        }
         if ((nl <= s_visL || nr >= s_visR) && (nt != miny || nb != maxy) && maxy > miny) {
             sy = (nb - nt) / (maxy - miny);
             ny0 = nt - sy * miny;
@@ -623,9 +662,17 @@ static void __fastcall Hook_RDrawLine(void* r, void*, int base, int lines)
     MirrorLine(minx, maxx, miny, maxy, DrawLines, &l, r);
 }
 
-static void __fastcall Hook_RBeginMask(void* r, void*, int a) { s_maskPhase = 1; s_rBeginMask(r, a); }
-static void __fastcall Hook_REndMask(void* r, void*) { s_maskPhase = 2; s_rEndMask(r); }
-static void __fastcall Hook_RDisableMask(void* r, void*) { s_maskPhase = 0; s_rDisableMask(r); }
+static void __fastcall Hook_RBeginMask(void* r, void*, int a)
+{
+    if (a == 0) { s_maskDepth = 1; s_rootMaskExtended = false; }
+    else if (a == 1) s_maskDepth++;
+    else if (a == 2 && s_maskDepth > 0) s_maskDepth--;
+    s_maskSubmitMode = a;
+    s_maskPhase = 1;
+    s_rBeginMask(r, a);
+}
+static void __fastcall Hook_REndMask(void* r, void*) { s_maskPhase = s_maskDepth > 0 ? 2 : 0; s_rEndMask(r); }
+static void __fastcall Hook_RDisableMask(void* r, void*) { s_maskDepth = 0; s_maskPhase = 0; s_rootMaskExtended = false; s_rDisableMask(r); }
 
 static void __fastcall Hook_Display(void* self, void*)
 {
@@ -638,6 +685,7 @@ static void __fastcall Hook_Display(void* self, void*)
         // pause menu: its frame line at the panel's right edge is drawn again at the stage's left edge, in the
         // movie's own pass, so it fades, appears and hides exactly like the original
         s_stageL = cx - sw / 2; s_stageR = cx + sw / 2; s_stageH = vis[3] - vis[1];
+        s_maskDepth = 0; s_maskPhase = 0;
         s_mirrorNow = true;
         s_origDisplay(self);
         s_mirrorNow = false;
@@ -646,9 +694,13 @@ static void __fastcall Hook_Display(void* self, void*)
     if (s_rDrawTri && (m->flags & M_EXTEND) && vis[2] - vis[0] > sw * 1.01f) {
         s_visL = vis[0]; s_visR = vis[2]; s_visT = vis[1]; s_visB = vis[3];
         s_stageL = cx - sw / 2; s_stageR = cx + sw / 2;
+        s_maskDepth = 0; s_maskPhase = 0; s_rootMaskExtended = false;
         s_extendName = m->name;
+        s_extendMask1 = (m->flags & M_EXTEND_MASK1) != 0;
         s_origDisplay(self);
         s_extendName = NULL;
+        s_extendMask1 = false;
+        s_rootMaskExtended = false;
         return;
     }
     if ((m->flags & M_DIALPOWER) && LocalPlayers() >= 2) {
@@ -717,16 +769,18 @@ static void InstallUiHooks()
 // ---------------------------------------------------------------- engine values
 
 // tweakable "LetterBox/LetterBox Amount" (0.118): the share of the screen height blacked out at top and bottom
-// in pause, race intro and cinematics. Off: on wider screens the bars would cut the picture further.
-static void LetterboxOff()
+// in pause, race intro and cinematics. Off only above 16:9 so 16:9 and narrower screens keep the stock bars.
+static void SetLetterbox(bool off)
 {
+    static const DWORD kStockLb = 0x3DF1A9FC;  // 0.118f
+    static int s_ok = -1;
     float* amount = (float*)0x00D36F54;
-    if (!Readable(amount, 4) || *(DWORD*)amount != 0x3DF1A9FC ||
-        memcmp((void*)0x00B7D7D2, "\x68\x54\x6F\xD3\x00\x68\x78\x21\xC1\x00", 10)) {
-        Log("ultrawide: letterbox tweakable not recognised, left as is");
-        return;
+    if (s_ok < 0) {
+        s_ok = Readable(amount, 4) && *(DWORD*)amount == kStockLb &&
+               !memcmp((void*)0x00B7D7D2, "\x68\x54\x6F\xD3\x00\x68\x78\x21\xC1\x00", 10) ? 1 : 0;
+        if (!s_ok) Log("ultrawide: letterbox tweakable not recognised, left as is");
     }
-    *amount = 0.0f;
+    if (s_ok) *amount = off ? 0.0f : *(const float*)&kStockLb;
 }
 
 // 3D player tags (split screen "PLAYER 2" above the other car): sized as tweakable / viewport width (Name
@@ -920,7 +974,7 @@ void UltrawidePresent(IDirect3DDevice9* dev)
         D3DSURFACE_DESC sd;
         bb->GetDesc(&sd);
         LONG W = (LONG)sd.Width, H = (LONG)sd.Height;
-        if (f - s_pillarFrame <= 2 && s_pillarWidth > 0) {
+        if (W * 9 > H * 16 + 9 && f - s_pillarFrame <= 2 && s_pillarWidth > 0) {
             // UI viewports may refer to the 2x supersampling target (Very High); mapped to the back buffer
             float sx = s_uiBufW > 0 ? (float)W / s_uiBufW : 1.0f;
             ClearSides(dev, bb, (LONG)(s_pillarLeft * sx + 0.5f), (LONG)((s_pillarLeft + s_pillarWidth) * sx + 0.5f), W, H);
@@ -978,6 +1032,7 @@ static void Apply(UINT w, UINT h, HWND wnd)
     float aspect = (float)w / h, target = aspect > stock + 0.001f ? aspect : stock;
     WriteAspect(target);
     ScaleTags(stock / target);
+    SetLetterbox(target > stock);
     Log("ultrawide: %ux%u, aspect %.4f%s", w, h, aspect, target > stock ? ", Hor+ with the UI at 16:9" : " (stock)");
 }
 
@@ -1012,9 +1067,9 @@ void UltrawideDeviceCreated(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp, HW
             return;
         }
         Log("ultrawide: experimental full ultrawide (UltrawideFix=2)");
+        if (g_cfg.ultrawideBlackBackdrop) Log("ultrawide: full-height black unlock backdrop enabled");
         InstallUiHooks();
         InstallBinkHooks(dev);
-        LetterboxOff();
     }
     if (s_state < 0) return;
     if (s_dev && dev != s_dev) DropSurfaces();  // a new device: the old one's surfaces go with it
