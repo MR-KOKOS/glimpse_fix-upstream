@@ -246,16 +246,116 @@ car select already does it right (alpha ZERO / blend factor, factor 0).
 ### Audio
 
 * **Opponents' engines:** every opponent's engine is a sound bank of its own, loaded into one of seven
-  slots that the audio system makes with the Xbox 360's size (about 100 KB). The PC's banks are larger,
-  the loader refuses them and the opponents race without an engine sound. The slot size is plain data
-  in the exe and is raised to 256 KB before the audio system starts (`OpponentEngines`). Pointed out by
-  the [Back on Air](https://github.com/xenophobentx/back-on-air) project (an inspiration only; no code
-  was taken) and checked against this build.
+  `CPUCar` slots. Four PC release faults are fixed under `OpponentEngines`:
+  1. *Bank slot size* (known Steam builds): the audio system sizes each slot for the Xbox 360 (104857
+     bytes), while PC MP2 banks are 145–203 KB, so the loader refuses them. The slot size is plain data
+     in the exe (`0xD3DBC0`) and is raised to 256 KB at DLL load. Pointed out by the
+     [Back on Air](https://github.com/xenophobentx/back-on-air) project (an inspiration only; no code
+     was taken) and checked against this build.
+  2. *Event capacity* (Steam build): `AudioInit` (`0x7F0D65`) caps the `EventMgr` table
+     (`[0xD91C50]`, vtable `0xC2B3D4`) and the event-object pool (`0xD4390C`) at 511.
+     Dry Docks needs `506 + N_unique` registrations and Downtown Central needs `505 + N_unique`,
+     where `N_unique` is the number of loaded opponent banks. The stock `RegisterEvent` (`0x867CD0`)
+     drops excess events. With only the table grown, the first spill into the locked pool returned a
+     null event object and crashed at `0x52FAE9`.
+     On the audio thread, before raising the table to 2048, reserve 2048 objects with the stock grow
+     routine (`0x5081D0`) in the persistent `"LLAudio2"` heap (`0xAF4D00`/`0xAF48F0`).
+     Reserve with allocator flag bit 0 at `0xD4391C` cleared, then restore it. Verify the pool layout,
+     allocator vtable `0xBA29B0`, allocation slot target `0x410D00` and active-heap ID 2 before the call.
+     The pool and table use the game's allocator pair (`0x530290`/`0x5302D0`). The game's pool
+     teardown (`0x86F1D0` → `0x86E880` → `0x512B30`) frees the extra chunk with the normal chunks.
+     A failed reserve leaves the table capped at 511. In the Steam lab with seven distinct banks,
+     Dry Docks reached 513/2048 and Downtown Central reached 512/2048. Readback showed the same
+     counts in the object pool and FMOD reported all seven opponent engines playing on both tracks.
+  3. *Multi-race slot cleanup* (Steam build): at race end message 51 (`0x835620` -> `0x7F3400`) unloads
+     `CPUCar` (`0x865980` -> `0x86DD00`), releasing each FMOD project without moving its record from the
+     group's `used` list (`+0x128`) back to `free` (`+0x118`). In later races any repeated model matches
+     the stale record, gets marked kept (`+0x641`), skips reload and plays silent. Unloaded records (not
+     present in FMOD `EventSystem::getProject`) are moved back to `free` after message 51 and before
+     message 43, leaving live projects intact across race restarts.
+  4. *Car-to-engine matching* (Steam build): message 43 (`0x835340` -> `0x7F30C0`) carries every racer's
+     actual `AudioFile` from `VehicleDatabase.xml`, yet ignores it for CPU racers and picks randomly from
+     a 22-entry table (`0xD3E428`, which even includes missing `Truck_07`). All 27 base-game `AudioFile`
+     entries (covering 84/84 base cars) and 3/3 Elite DLC cars map to the 30 shipped
+     `Vehicles/CPU/<name>` banks in `resident.ark`, and every CPU `.fev` sets `maxPlaybacks = 7`, so
+     duplicate opponents share one loaded bank slot and play independently. Message 43 is wrapped (audio
+     message table `0xD8B500` slot
+     43) to run the stock handler with CPU entries hidden (keeping racer count, split-screen mix and
+     player Tonic synths untouched), then queue each unique opponent bank (`0x7F2FA0`) and assign its
+     `<model>/Tonic/<model>` event (`0x8359A0`); Tutorial (`+0x0F`) and Survival/Nemesis (`+0x0D`) keep
+     the stock path's seven fixed banks. The 4 Deadline DLC cars carry no CPU `.fev` on PC or Xbox 360,
+     but their `.tonic`/`.tonic2` binaries are 100 % byte-identical (every grain and sound) to base cars
+     and map by `AudioFile` to those exact base CPU banks (`Hypercar_20` -> `Hypercar_04`, `Muscle_20` ->
+     `Muscle_14`, `Truck_20` -> `Truck_08`, `Truck_21` -> `Truck_06`; neither Deadline nor High Octane
+     DLC cars appear in base `AIDriversDatabase.params`, so both DLC paths apply only outside normal
+     Season, Elite and championship grids, such as custom rosters, a forced Demolition boss or Steam LAN).
+     The 4 High Octane DLC supercars (models `Supercar_17..20`, `AudioFile` `Supercar_20`, `Supercar_21`,
+     `Supercar_24`, `Supercar_26`) carry bespoke Tonic grain recordings with no CPU bank on PC or Xbox
+     360. LAN drivers without a local screen also enter message 43 as CPU entries (`0x4AB180`).
+     The resolver checks for an exact bank first, then checks the Deadline donors and the four High Octane
+     stand-ins. It otherwise chooses the first available bank in stock table order with the same `AudioFile`
+     prefix through the first underscore, or the first available stock bank overall. The log includes
+     the requested name, chosen bank and fallback reason. See
+     [High Octane opponent audio](HIGH_OCTANE_AUDIO.md) for the mappings and a future bank conversion.
+  Their events are in the FMOD category `CPUEngine` (the player's engine is in `PlayerEngine`). The
+  game's mixer sets that category's channel group level itself (presets, fades, ducking) through the exe's
+  import of `ChannelGroup::setVolume`; `OpponentEngineVolume` wraps that import (found by name in the
+  import table) and multiplies the levels set on the `CPUEngine` group (passing levels unchanged at 100 %),
+  which is found from the category tree of an event that starts and cleared on FMOD project swaps while
+  retaining the last unscaled level for the same group. The setting is a percentage (0..200, one parser
+  for the start and the live re-read). FMOD caps a group's level at 1.0 (`ChannelGroupI::setVolume`); in
+  the logged races the mixer's level for `CPUEngine` peaked at about 0.17, so 200 % has room. The INI is
+  read on the game thread, which only stores the value; FMOD is called where the game calls it (the
+  wrapper, and the next `Event::start`, which applies a change and finds the group again if the sound
+  system was made anew).
+* **The game's own DSP effects (`Ducking`, `SoundPlacement`):** the audio code wraps every effect in an
+  object whose virtual attach (vtable slot 9) is called with the channel group the effect belongs on.
+  FMOD's own effects call `ChannelGroup::addDSP` there (0x864CE0); in the PC build the game's plugin
+  effects only return their DSP (`mov eax,[ecx+off]; ret 4`), so none of them hears a sample. Two get a
+  real attach through their vtable entry (`.rdata`, checked against the RTTI class name and the stub's
+  bytes, set at DLL load; Steam build only), the game's code is untouched. The missing connection was
+  described by Back on Air; this is a separate implementation.
+  * `Ducking`: the mixer (`DynamicMixer.xml`, the same on PC and Xbox 360) ducks groups while others are
+    loud: collisions duck music (−2 dB) and both engines (−5 dB); power plays duck opponents' engines and
+    surfaces (−12 dB), player engine and collisions (−6 dB); HUD ducks music (−3 dB); speech mutes music,
+    swooshes and particles (−60 dB) and ducks engines, collisions, power plays, surfaces and HUD (−18 dB)
+    and ambience (−12 dB). Every side chain listens to a `VolumeMeter` in slot 7 of its group (vtable
+    0xC1E028), attached when the game builds the group (0x86C4C3). With `Log=1` each attach and volume
+    moves of 1 dB or more (including silence crossings) of a meter's group are logged (at most every
+    250 ms per group, up to 3000 lines).
+  * `SoundPlacement`: positional sounds, the opponents' engines among them, get a `VoiceDSP` unit (vtable
+    0xC32824) that writes the event's stereo signal to the six 5.1 speakers with levels the game computes
+    every update from the listener. Unattached, all seven opponent engines play at one level everywhere.
+    The unit's read callback (0x8A5470) always processes 256 frames (the console mixer's block) and writes
+    six channels; FMOD on PC asks for 1024. The exe's import of `System::createDSP` is wrapped and, for
+    that description only, FMOD gets a copy whose read callback runs the game's in 256-frame blocks
+    through a 5.1 buffer (sampling only channels 0 and 1, matching the stock `0x8A8520` deinterleave
+    where `0x8A5F20` sets all six speaker levels to 1.0). Because the Steam build always initializes
+    FMOD in 5.1 (`0x8674F0`), on stereo speakers or headphones Windows/DirectSound folds the placed
+    5.1 output down; `VoiceRead`'s `< 6`-channel ITU-R BS.775 fold-down is a defensive guard for
+    non-5.1 mixers and does not execute on the Steam build. Units come
+    from a pool and stay attached when their voice ends while the event's channel group goes to the next
+    voice, so a unit attached to a group takes the group's previous unit off. Units made before the wrap
+    (none were seen) stay unattached and are logged once.
+* **Sound bank offsets (`SoundBankFix`):** every PC sound bank (FSB4, all MPEG) starts each sound's data on a
+  32-byte boundary and its header's data size counts the padding. fmodex.dll 4.28 finds a sound by adding
+  up the compressed lengths of the sounds before it without the padding, so it starts reading early by the
+  padding of every sound before it: in `music.fsb` all 149 sounds begin with an MPEG frame sync at the padded
+  offset, and the result screen tracks (sounds 132 to 142) are read 1970 to 2124 bytes early, inside the
+  track before them (CONFIRMED in the file; the effect was first described by Back on Air). The exe's import
+  of `System::setFileSystem` is wrapped, and so are the game's file callbacks: when a `.fsb` opens, its header
+  is read through the game's reader and, only for exactly this layout (FSB4, every sound MPEG, the sample headers
+  filling their block up to at most 31 bytes of padding, the padded lengths adding up to the data size and the
+  packed ones not), each compressed length is rounded up to 32
+  as FMOD reads the header. The file on disk and the sound data are not changed.
 * **Reverb:** in the PC release six of the seven reverb presets (halls, tunnels, under bridges, the
   menu) hold FMOD's stock "Generic" values and the seventh the stock "Bathroom". The Xbox 360
   release's copy of the same event file holds the presets the sound designers set: more reverb and a
   longer decay where it belongs. FMOD's preset lookup in `fmod_event.dll` is wrapped and hands the game
-  the console's values (`ConsoleReverb`), read from the Xbox 360 disc.
+  the console's values (`ConsoleReverb`), read from the Xbox 360 disc. With `Log=1` a by-name preset
+  lookup that FMOD fails is logged with FMOD's result (once per name and result, at most 16 lines). In an
+  airport race no preset was asked for by name (CONFIRMED), so a `HANGER` preset (named in Back on Air's
+  table) has no way in and is not added.
 
 ### Camera
 
@@ -288,7 +388,10 @@ car select already does it right (alpha ZERO / blend factor, factor 0).
   left end = off; not at the lowest graphics quality); with X or Ctrl held, up and down bloom (down
   to off) and left and right exposure; the left stick click or Backspace resets it. No car is put
   back on the track while it is on. Back, B, Esc or the key again returns to the race. The game's
-  sound is paused meanwhile (FMOD's own category pause). Crashes take it over only in part, see the
+  sound is paused meanwhile on the audio thread at the game's next `Event::start` or
+  `ChannelGroup::setVolume` call, pausing each top-level category directly under `master` that has
+  started a sound (and any that starts while paused), while leaving `master` itself unpaused and
+  preserving categories that were already paused. Crashes take it over only in part, see the
   [known limitations](../README.md#known-limitations).
 * **Camera shake:** a slider for the race cameras' shake on bumps and hits, and a separate switch for
   the shake from explosions and power plays, both against motion sickness.
@@ -464,21 +567,36 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
 
 * values in the game's data: tweakables and their records (frame pacing, streaming pool, LOD and
   streaming distances, debug, unlock and lens flare switches, the achievements' debug unlock, the
-  slow motion and HUD render switches of the photo mode, the race cameras' FOV, near plane and smoothed rotation, the explosion shake switch, AI
-  skill limits), loaded HUD
-  parameters, the full screen passes' quad template positions, powerplay distance records, the main
-  loop's accumulator, the power bar, the AI skill and the cars' chassis velocity,
+  slow motion and HUD render switches of the photo mode, the race cameras' FOV, near plane and smoothed
+  rotation, the explosion shake switch, AI skill limits), loaded HUD parameters, the full screen passes'
+  quad template positions, powerplay distance records, the main loop's accumulator, the power bar, the
+  AI skill, the cars' chassis velocity, the opponent engine bank slot size (`0xD3DBC0`), the `EventMgr`
+  event table (`[0xD91C50]`), event-object pool (`0xD4390C`, allocator flags at `0xD4391C`),
+  `CPUCar` sound bank slot lists (`[0xD91C58]`), and audio thread message
+  table entries (slots 43 and 51 at `0xD8B5AC` and `0xD8B5CC` for `OpponentEngines`, slot 51 also for
+  `SoundPlacement`, slots 2 and 9 for `[DLC] Music` / Deadline),
 * swapped vtable slots (motion blur, grading, bloom, depth of field and particle flare passes, AI
   player update, chase and bumper camera update, with the photo mode the other camera classes'
   update, the respot logic's update with the photo mode or `WreckTime`, the Scaleform movie's
-  `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with `UltrawideFix=2` and its `Invoke`
-  with `SteamLAN=1`),
+  `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with
+  `UltrawideFix=2`, its `Invoke` with `SteamLAN=1`, `VolumeMeter` slot 9 at `0xC1E028` with `Ducking=1`,
+  and `VoiceDSP` slot 9 at `0xC32824` with `SoundPlacement=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
-  `Event::start`, and `PeekMessageA` with `VirtualPads=0`), read-only
-  strings and constants (prompt bar icon paths, route marker size),
+  `Event::start` with `OpponentEngines=1` (default), `PhotoMode=1` or `Log=1`, `ChannelGroup::setVolume`
+  with `OpponentEngines=1`, `PhotoMode=1` or `Log=1`, `System::createDSP` with `SoundPlacement=1`,
+  `System::setFileSystem` with `SoundBankFix`, `OpponentEngines`, `Ducking`, `SoundPlacement`,
+  `PhotoMode` or `Log` (for the sound-system generation; file callbacks wrapped only with
+  `SoundBankFix=1`), `System::setReverbProperties` with `Log=1`, and `PeekMessageA` with `VirtualPads=0`),
+  read-only strings and constants (prompt bar icon paths, route marker size),
 * the Direct3D device's vtable, and calls into the game's own functions (dictionary lookup,
   Scaleform `Invoke`/`SetVariable` for the prompt bar, `SetVisible` for the photo mode's overlays,
-  the depth of field blur setup) from the input poll and the hooked passes.
+  the depth of field blur setup) from the input poll and hooked passes, plus audio calls: the
+  `VoiceDSP` read callback `0x8A5470` from FMOD's mixer thread with `SoundPlacement=1`; the game's
+  file callbacks from FMOD's threads with `SoundBankFix=1`; and on the audio thread the stock message
+  43/51 handlers `0x835340`/`0x835620` (51 also with `SoundPlacement=1`), `FileExists` `0x402300`,
+  bank load `0x7F2FA0`, racer engine assignment `0x8359A0`, `"LLAudio2"` heap scope `0xAF4D00`/`0xAF48F0`
+  and the game allocator `0x530290`/`0x5302D0` with `OpponentEngines=1`. The event pool reserve calls
+  `0x5081D0`, which uses its existing allocator virtual slot `0xBA29B4` (target `0x410D00`).
 
 The prompt bar glyphs, the title screen text, the icon size, the 60 fps and the streaming pool were
 first done with code patches and each set off exactly this hang, so they were rebuilt this way.
@@ -595,6 +713,12 @@ part of this repository.
   (works in exclusive fullscreen).
 * `loopback/loopback.cpp` + `wavstat.py` — record the system mix (WASAPI loopback) and measure
   per-channel levels.
+* Opponent-engine listening isolation (local diagnostic recipe, not shipped): to audition `CPUEngine`
+  by ear without the player's engine or music masking silent cars or mismatches, resolve the
+  `PlayerEngine` and `music` channel groups from the root category on the audio thread in
+  `audio_diag.cpp` (`Event::start`), clear both in `AudioDiagProjectsChanged()` and
+  `AudioDiagResetState()`, and pin those two groups to `0.0f` in `Hook_GroupSetVolume` while keeping
+  `CPUEngine` at neutral `100 %`. Keep this strictly out of shipping builds and INI settings.
 
 ### Notes (Steam exe, image base 0x400000)
 

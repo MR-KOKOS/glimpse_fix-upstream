@@ -25,8 +25,9 @@ that adds what the port never had, with a settings program instead of hand-editi
 * **Image:** SMAA anti-aliasing with a sharp HUD, console-size power play icons, motion blur matched to
   60 fps, anisotropic filtering; vignette, gradient, bloom and flares switchable; car glass as on the
   Xbox 360.
-* **Sound as on the console:** the opponents' engines are audible again, with the Xbox 360's reverb
-  presets.
+* **Sound as on the console:** opponents' engines are audible again, matched to each car, and
+  adjustable in volume; dynamic mixer ducking, 3D voice placement, sound bank offset fixes and the
+  Xbox 360's reverb presets.
 * **Ultrawide** and **HDR output** (paper white and highlights up to the display's peak).
 * **Skippable cutscenes:** press twice to skip the season's movies, the end sequence and the boot
   movies.
@@ -115,7 +116,10 @@ redistributes the paid Xbox DLC without a license. Please reproduce problems wit
 * SMAA in split screen: the fix for [#15](https://github.com/frankyfife/glimpse_fix/issues/15) is in,
   not yet confirmed in the game.
 * Audio: the game forces FMOD to DirectSound 5.1; the LFE channel and the pause menu are silent in the
-  game's own mix.
+  game's own mix. High Octane DLC supercars use individual stock engine fallbacks as opponents when
+  a matching bank is unavailable ([details](docs/HIGH_OCTANE_AUDIO.md)). On the Russian Steam depot `Ducking`, `SoundPlacement`,
+  opponent car matching, event table growth and slot cleanup do not apply (only the 256 KB bank slot
+  size, `SoundBankFix`, `ConsoleReverb` and `OpponentEngineVolume` apply there).
 * `TextureDetail` below full also blurs menu and HUD pictures; `ShadowResolution=4` is experimental.
 
 Bug reports: `Log=1` (settings program, *Debug*), then attach `SplitSecondPad.log` to an

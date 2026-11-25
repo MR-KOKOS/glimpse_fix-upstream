@@ -51,6 +51,17 @@ bool CodeMatches(const void* at, const void* expected, size_t n)
     return true;
 }
 
+// one pointer slot (vtable or import entry); false, with nothing written, when the page cannot be made writable
+bool WriteSlot(void** slot, void* value)
+{
+    DWORD old;
+    if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) return false;
+    *slot = value;
+    if (!VirtualProtect(slot, sizeof(void*), old, &old))
+        Log("slot %p written, its page protection could not be put back (error %lu)", (void*)slot, GetLastError());
+    return true;
+}
+
 void WriteMemory(void* at, const void* src, size_t len)
 {
     DWORD old;
@@ -1013,7 +1024,10 @@ void OnInputFrame()
                 *kStreamPoolMB);
         }
     }
-    if (g_cfg.log) AudioDiagTick();
+    if (s_knownBuild) {
+        OpponentEnginesTick();
+        OpponentEngineVolumeTick();
+    }
     // [DLC] Music only with a merged overlay that brings Quarry's level audio (the only level it swaps the music
     // for); otherwise the base game's audio thread is left alone. Decided once: the overlay is merged at DLL load
     // The same two messages load Deadline's sounds (the DLC's DLCMenu bank) when a Deadline race starts
@@ -1238,5 +1252,9 @@ void ApplyGamePatches()
     if (mask & PATCH_RACEEND) InstallRaceEndTiming();
     if (g_cfg.steamLan && (mask & PATCH_ONLINE)) OnlineStart();
     CheckOpponentEngineBanks();
-    if ((g_cfg.log || g_cfg.photoMode) && (mask & PATCH_AUDIODIAG)) InstallAudioDiagnostics();
+    HookSoundBanks();
+    HookVoiceDspCreation();
+    HookReverbLog();
+    if ((g_cfg.log || g_cfg.photoMode || g_cfg.opponentEngines) && (mask & PATCH_AUDIODIAG))
+        InstallAudioDiagnostics();
 }

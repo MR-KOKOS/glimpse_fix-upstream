@@ -1,5 +1,6 @@
 // Split/Second controller fix - dinput8.dll proxy entry points, config and logging
 #include "common.h"
+#include "ini_percent.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <share.h>
@@ -60,6 +61,16 @@ static int IniInt(const char* section, const char* key, int def)
     char buf[32];
     IniString(section, key, "", buf, sizeof(buf));
     return buf[0] ? (int)strtol(buf, NULL, 0) : def;
+}
+
+// a whole number in percent, base 10 ("080" is 80), optionally followed by " %"; anything else (empty, a word,
+// a fraction) is the default; clamped to lo..hi. OpponentEngineVolume is read this way at the start, while the
+// game runs (audio_diag.cpp), and in glimpse_config.exe (ini_percent.h), so all reads agree.
+int IniPercent(const char* section, const char* key, int def, int lo, int hi)
+{
+    char buf[256];
+    IniString(section, key, "", buf, sizeof(buf));
+    return ParsePercentValue(buf, def, lo, hi);
 }
 
 static bool IniBool(const char* section, const char* key, bool def)
@@ -180,6 +191,10 @@ static void LoadConfig()
     g_cfg.glassFix = IniBool("Graphics", "GlassFix", true);
     g_cfg.opponentEngines = IniBool("Audio", "OpponentEngines", true);
     g_cfg.consoleReverb = IniBool("Audio", "ConsoleReverb", true);
+    g_cfg.ducking = IniBool("Audio", "Ducking", true);
+    g_cfg.soundPlacement = IniBool("Audio", "SoundPlacement", true);
+    g_cfg.soundBankFix = IniBool("Audio", "SoundBankFix", true);
+    g_cfg.opponentEngineVolume = IniPercent("Audio", "OpponentEngineVolume", 100, 0, 200);
 
     // [World]
     g_cfg.streamPoolMB = IniInt("World", "StreamPoolMB", 512);
@@ -385,6 +400,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         DlcInstall();  // before the game's first read of resident.ark
         FixOpponentEngineBanks();  // plain data in the exe file, read when the audio system starts
         FixReverbPresets();        // fmod_event.dll is mapped already (an import of the exe)
+        FixGameDspEffects();       // .rdata, read when the game builds its audio groups and voices
         if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2 ||
              g_cfg.dumpTextures || g_cfg.cutsceneSkip || g_cfg.smaa || g_cfg.textureDetail > 0 || g_cfg.qualityCap < 3 ||
              g_cfg.shadowResolution > 1 || g_cfg.glassFix || PickupsWanted()) &&

@@ -3,7 +3,8 @@
 // A plain Win32 program (static CRT, only Windows' own DLLs) with a dark look of its own. It edits the
 // INI next to it, or one picked with the file dialog. Values are changed in place, so comments, order and
 // unknown keys stay as they are; a key that is missing is added to its section. Every change is saved at
-// once: the bloom and exposure values are read by the game every 2 s, everything else at the next start.
+// once: the bloom, exposure and opponents' engine volume values are read by the game every 2 s, everything else
+// at the next start.
 // Before the first change the INI as it was opened is kept as SplitSecondPad.ini.bak.
 #define WIN32_LEAN_AND_MEAN
 #ifndef _CRT_SECURE_NO_WARNINGS
@@ -28,6 +29,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include "../src/ini_percent.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
@@ -150,7 +152,13 @@ static Option kOptions[] = {
     { "Gameplay", "AIBoostStraightOnly", BOOL_OPT, "  AI boosts on straights only", "Off = anywhere while driving forward, also in corners.", "1" },
     { "Gameplay", "AIBoostChaos", BOOL_OPT, "  Chaos mode", "Every AI car boosts all the time, everywhere, with an endless tank, a full power play bar and the highest AI skill. Overrides the three settings above.", "0" },
     // Audio
-    { "Audio", "OpponentEngines", BOOL_OPT, "Opponents' engines", "The opponents' engines can be heard. The PC release loads them into sound bank slots sized for the Xbox 360's smaller banks, where they do not fit.", "1" },
+    { "Audio", "OpponentEngines", BOOL_OPT, "Opponents' engines", "Matches engine sounds to their cars and reloads them between races. "
+      "Cars without a matching sound use an available stock engine. High Octane cars have individual fallbacks. "
+      "Car matching, reload and event capacity fixes are Steam build only (not the Russian depot).", "1" },
+    { "Audio", "OpponentEngineVolume", RANGE, "  Opponents' engine volume (%)", "Volume of the opponents' engines in percent; your own car stays as it is. 70 is about 3 dB quieter, 140 about 3 dB louder. 100 = as the game. Read while the game runs; applies when the next sound starts or the mixer updates the group.", "100", 0, 0, 200, 5, 0 },
+    { "Audio", "Ducking", BOOL_OPT, "Ducking", "Mixer side-chain ducking as designed (DynamicMixer.xml): collisions duck music and engines; power plays duck opponents' engines, surfaces, player engine and collisions; HUD ducks music; speech mutes music/swooshes/particles and ducks engines, collisions, power plays, surfaces, HUD and ambience. Steam build only.", "1" },
+    { "Audio", "SoundPlacement", BOOL_OPT, "Sound placement", "The opponents' engines and other positional sounds get louder and quieter with distance and come from their direction, as the game was made. The PC release plays them at one level on every speaker. Steam build only.", "1" },
+    { "Audio", "SoundBankFix", BOOL_OPT, "Fix sound start offsets", "FMOD on PC starts many sounds a few frames early, inside the sound before: the result screen music opens with a scrap of another track. Each sound starts where its data is.", "1" },
     { "Audio", "ConsoleReverb", BOOL_OPT, "Console reverb", "The reverb presets of the Xbox 360 release (halls, tunnels, under bridges, the menu). The PC release has one stock preset for almost all of them.", "1" },
     // Online
     { "Online", "SteamLAN", BOOL_OPT, "Online over Steam (experimental)", "EXPERIMENTAL: the game's LAN mode with the players of a Steam lobby instead of the local network. Needs steam_api.dll next to the game. Steam friends join through \"Join game\". In a LAN game the host's boost, handbrake and AI settings apply to all; the photo mode is a free camera there, the race goes on. Presets leave this page alone.", "0" },
@@ -158,7 +166,7 @@ static Option kOptions[] = {
     { "Online", "LobbyName", TEXT, "  Lobby name", "Players with the same name meet in one lobby, like a password: pick an unusual one to stay among yourselves. Empty = the public lobby, where everybody with the fix meets. Letters, digits, - and _.", "" },
     // Debug
     { "Debug", "DumpTextures", BOOL_OPT, "Dump textures on the next start", "At the next start the game's textures are written as DDS files to the folder glimpse_textures in the game folder (one folder per archive, each with an index.txt; about 570 MB, roughly 10 seconds). A window shows that the dump is running, then the game closes and this switch goes off again.", "0" },
-    { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports. F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
+    { "Debug", "Log", BOOL_OPT, "Write SplitSecondPad.log", "A log next to the game, for bug reports (with up to 2000 reverb changes). F9 in the game then saves the next frame pass by pass to glimpse_dump, for image errors.", "0" },
     { "Debug", "DumpWatchPS", TEXT, "  Frame dump: watched pixel shaders", "Development: pixel shader hashes as the F9 frame dump's log shows them, separated by commas (tools\\dlc\\shaders\\pshash.py lists those of the game's shaders). For the first 4 draws with one of them, the dump saves every render target right before and after the draw, with the draw's textures and shader constants in the log. Empty = none.", "", ",", 0, 271, 0, 0 },
     // DLC: your own Xbox 360 DLC, converted on this PC (the buttons below the options, see DlcStart)
     { "DLC", "DumpFolder", PATH, "Xbox DLC folder", "Your own Split/Second DLC from an Xbox 360 or Xenia: the folder 425607E7, its subfolder 00000002, or a folder with the package files. It is only read. Set up DLC looks for it by itself (Xenia, Desktop, Downloads, Xbox USB drives); \"...\" lists what it finds. No DLC is downloaded: without your own DLC there is nothing to convert.", "" },
@@ -579,6 +587,7 @@ static void UpdateEnables()
         { "DeadlineBonus", IsOn("Overlays") && IsOn("Modes") && !IsOn("Pickups") },
         { "Tracks", IsOn("Overlays") }, { "TracksOnline", IsOn("Overlays") && IsOn("Tracks") },
         { "Music", IsOn("Overlays") && IsOn("Tracks") },
+        { "OpponentEngineVolume", IsOn("OpponentEngines") },
     };
     for (auto& r : rules) {
         Option* o = Find(r.key);
@@ -623,7 +632,10 @@ static void LoadControls()
             s_custom[IndexOf(o)] = v + " (custom)";
             InvalidateRect(o.ctrl, NULL, TRUE);
         } else {
-            double real = atof(v.c_str()), d = real;
+            double real = !strcmp(o.key, "OpponentEngineVolume")
+                              ? (double)ParsePercentValue(v.c_str(), atoi(o.def), (int)o.lo, (int)o.hi)
+                              : atof(v.c_str());
+            double d = real;
             if (d < o.lo) d = o.lo;
             if (d > o.hi) d = o.hi;
             SendMessageA(o.ctrl, TBM_SETPOS, TRUE, (LPARAM)(int)((d - o.lo) / o.step + 0.5));
@@ -2956,7 +2968,7 @@ static const char* const kPageText[kPageCount] = {
     "Unlocks, cutscenes and boot movies, respot time and the power play bar.",
     "Boost and handbrake for your car, with their buttons and keys.",
     "Boost for the AI cars (experimental).",
-    "The opponents' engines and the console's reverb.",
+    "The opponents' engines and their volume, ducking, sound placement, sound start offsets and the console's reverb.",
     "Online play over Steam (experimental). Presets leave this page alone.",
     "Your own Xbox 360 DLC, converted on this PC (experimental). Presets leave this page alone.",
     "The DLC game mode Deadline, from your converted DLC (experimental). Presets leave this page alone.",
@@ -3005,7 +3017,7 @@ struct Preset {
 };
 static const Preset kPresets[kPresetCount] = {
     { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off.", "" },
-    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, the PC's car glass, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, the PC's car glass, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
       "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",
@@ -3030,6 +3042,13 @@ static bool PresetMatches(const Preset& p)
         if (OutsidePresets(o)) continue;
         std::string want = PresetValue(p, o), have = GetValue(o);
         if (!_stricmp(want.c_str(), have.c_str())) continue;
+        if (!strcmp(o.key, "OpponentEngineVolume")) {
+            int defVal = atoi(o.def);
+            if (ParsePercentValue(want.c_str(), defVal, (int)o.lo, (int)o.hi) ==
+                ParsePercentValue(have.c_str(), defVal, (int)o.lo, (int)o.hi))
+                continue;
+            return false;
+        }
         char* end1;
         char* end2;
         double a = strtod(want.c_str(), &end1), b = strtod(have.c_str(), &end2);
@@ -3519,6 +3538,11 @@ static void SliderPaint(HWND h)
     EndPaint(h, &ps);
 }
 
+static HWND s_sliderDragHwnd;
+static int s_sliderDragStart;
+static int s_sliderDragOffset;
+static bool s_sliderDragChanged;
+
 static LRESULT CALLBACK SliderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -3536,19 +3560,42 @@ static LRESULT CALLBACK SliderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_PAINT:
         SliderPaint(h);
         return 0;
-    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDOWN: {
+        int mx = (short)LOWORD(lp), x0, x1, max = SliderMax(h), pos = SliderPos(h);
+        SliderTrack(h, &x0, &x1);
+        int thumbX = max > 0 ? x0 + (int)((double)pos / max * (x1 - x0) + 0.5) : x0;
+        int radius = S(8);
+        s_sliderDragHwnd = h;
+        s_sliderDragStart = pos;
+        s_sliderDragChanged = false;
         SetFocus(h);
         SetCapture(h);
-        SliderFromMouse(h, (short)LOWORD(lp));
+        if (mx >= thumbX - radius && mx <= thumbX + radius) {
+            s_sliderDragOffset = mx - thumbX;
+        } else {
+            s_sliderDragOffset = 0;
+            SliderFromMouse(h, mx);
+            if (SliderPos(h) != s_sliderDragStart) s_sliderDragChanged = true;
+        }
         return 0;
+    }
     case WM_MOUSEMOVE:
-        if (GetCapture() == h) SliderFromMouse(h, (short)LOWORD(lp));
+        if (GetCapture() == h) {
+            SliderFromMouse(h, (short)LOWORD(lp) - s_sliderDragOffset);
+            if (SliderPos(h) != s_sliderDragStart) s_sliderDragChanged = true;
+        }
         return 0;
     case WM_LBUTTONUP:
         if (GetCapture() == h) ReleaseCapture();  // ends the drag through WM_CAPTURECHANGED
         return 0;
     case WM_CAPTURECHANGED:  // the drag ended, also when the capture was taken away
-        SendMessageA(GetParent(h), WM_HSCROLL, MAKEWPARAM(TB_ENDTRACK, SliderPos(h)), (LPARAM)h);
+        if (s_sliderDragHwnd == h) {
+            bool changed = s_sliderDragChanged;
+            s_sliderDragHwnd = NULL;
+            s_sliderDragOffset = 0;
+            s_sliderDragChanged = false;
+            if (changed) SendMessageA(GetParent(h), WM_HSCROLL, MAKEWPARAM(TB_ENDTRACK, SliderPos(h)), (LPARAM)h);
+        }
         return 0;
     case WM_KEYDOWN: {
         int pos = SliderPos(h), max = SliderMax(h), page = max / 10 > 1 ? max / 10 : 1;

@@ -28,8 +28,12 @@ struct Config {
     int   frameRate;         // 30 (stock) or 60
     int   streamPoolMB;      // sector streaming pool, 0 = stock (57 MB)
     bool  fixIconSize;       // undo the double resolution scaling of the powerplay icons
-    bool  opponentEngines;   // sound bank slots big enough for the PC's opponent engine banks
+    bool  opponentEngines;   // 256 KB CPUCar bank slots, 2048 EventMgr cap, multi-race slot cleanup and car matching
     bool  consoleReverb;     // the Xbox 360 release's reverb presets instead of the PC's stock ones
+    bool  ducking;           // the mixer's side-chain ducking (volume meters attached to their groups)
+    bool  soundPlacement;    // the game's own 3D placement of voices (VoiceDSP units attached)
+    bool  soundBankFix;      // FMOD finds each sound of a bank at its real (32-byte padded) start
+    int   opponentEngineVolume;  // percent on the levels the mixer sets for the CPUEngine group, 0..200 (100 = as the game)
     float motionBlurStrength; // multiplier on top of the 60 fps compensation
     int   anisotropy;        // forced anisotropic filtering, 0/1 = game default
     float lodDistanceScale;  // environment, particle and powerplay draw distances
@@ -193,9 +197,9 @@ LONG GlassTakeChangedDraws();                            // Log=1: draws changed
 
 // audio_diag.cpp
 void InstallAudioDiagnostics();
-void AudioDiagTick();
-void PauseGameSound(bool pause);  // photo mode: all sound categories the game has used
-void AudioDiagProjectsChanged();  // dlcmusic.cpp swapped FMOD projects: fetch the music category's group again
+void PauseGameSound(bool pause);  // photo mode: request audio-thread pause of all sound categories used
+void AudioDiagProjectsChanged();  // audio thread: FMOD project swap/unload (drop music/CPUEngine groups and probes)
+void AudioDiagResetState();       // audio thread: clear all system-owned diagnostic, volume and category state
 
 // framerate.cpp
 void PatchFrameRate();
@@ -263,6 +267,9 @@ void WriteMemory(void* at, const void* src, size_t len);
 // the vtable's RTTI complete object locator (vt[-1]) is col and names the class name (".?AV...@@");
 // reads unguarded: call it inside __try
 bool ClassIs(void** vt, DWORD col, const char* name);
+bool WriteSlot(void** slot, void* value);  // checked write of one vtable / import slot
+void** FindImport(const char* dll, const char* name);  // audio_diag.cpp: the exe's import slot of dll!name
+int IniPercent(const char* section, const char* key, int def, int lo, int hi);  // main.cpp: a whole percentage from the INI
 
 // Scaleform GFxValue as laid out by this game's GFx build; GFx movie view vtable: +0x2C SetVariable, +0x30 GetVariable, +0x48 Invoke
 struct GFxValue {
@@ -345,7 +352,17 @@ void ApplyQualityCap();    // QualityCap: before the device is made and every fr
 bool KnownBuild();         // the exe is the Steam build all fixed addresses come from
 void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's audio system starts
 void CheckOpponentEngineBanks();
+void OpponentEnginesTick();     // per input frame: wraps audio messages 43 (car match) and/or 51 (unload cleanup)
 void FixReverbPresets();       // at DLL load: the console's reverb presets (Log=1: logged)
+void FixGameDspEffects();      // at DLL load: ducking meters and voice placement units get a real attach
+void HookSoundBanks();         // with the import hooks: System::setFileSystem (lifecycle init + optional bank fix)
+bool AudioSystemInitHooked();  // true once System::setFileSystem was wrapped so sound-system resets are tracked
+void HookVoiceDspCreation();   // after HookSoundBanks: voice units made with a working read callback
+void HookReverbLog();          // Log=1, with the import hooks: every System::setReverbProperties call
+void AudioSystemEnsureCurrent(void* system, const char* why);  // audio thread: reset cached state on FMOD::System* change
+void AudioFixNoteGroupVolume(void* group, float stockVol, float appliedVol);  // audio thread: Log=1 ducking move check
+void AudioFixNoteEventPeak();     // audio thread: Log=1 EventMgr sampled high-water mark
 void PatchPadNames();
+void OpponentEngineVolumeTick();  // audio_diag.cpp, every frame on the game thread
 void OnInputFrame();       // called from the virtual device poll (pads not wrapped: the input update), on the game thread
 void NotePadActivity();
