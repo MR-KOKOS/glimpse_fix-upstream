@@ -247,8 +247,8 @@ with the same code; what differs comes from the data:
 - TrackFiltration: only the PC mode `Nemesis` (Survival; with its SplitScreenName / MultiplayerName also split
   screen and online). The DLC's mode `NemesisRace` is not a track-mode line: `../mode/nemesis_mode.py`.
 - Light rigs: `nem_quarry:A:midday_v02` in the nem_ block at its sorted place.
-- Texts (`--names`, default THE ROCK / DER FELS / LE ROCHER / LA ROCCIA / LA ROCA; replace them with official ones
-  when known): `TEXT_NEM_QUARRY_A`, `_TRACK`, `_SUBTRACK`.
+- Texts (`--names`, default MINEPIT PARK in all five languages; a TU4 text table gives the official ones):
+  `TEXT_NEM_QUARRY_A`, `_TRACK`, `_SUBTRACK`.
 - Quick play picture `TEXT_nem_quarry_A` from the Rock package's own movie and `DLC.TEXTURES` (its
   `FE_QuickPlay_Imgs_SET2` differs from Onslaught's); built on the Quarry build the image is registered as the next
   free name `FE_QuickPlay_Imgs_DLC2` (key moved to 669df7c9, flashtex: unique in the set).

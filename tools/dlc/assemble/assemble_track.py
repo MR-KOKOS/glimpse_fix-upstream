@@ -82,7 +82,9 @@ DEF_NAMES = 'ENGLISH_NTSC=QUARRY,GERMAN=STEINBRUCH,FRENCH_NTSC=CARRIÈRE,ITALIAN
 # default names per track (lower case); the packages have no dictionary, the Xbox dictionaries no text for them
 DEF_NAMES_BY_TRACK = {
     'quarry': DEF_NAMES,
-    'nem_quarry': 'ENGLISH_NTSC=THE ROCK,GERMAN=DER FELS,FRENCH_NTSC=LE ROCHER,ITALIAN=LA ROCCIA,SPANISH_NTSC=LA ROCA',
+    # the track's name Minepit Park (as in the docs), the same in every language
+    'nem_quarry': 'ENGLISH_NTSC=MINEPIT PARK,GERMAN=MINEPIT PARK,FRENCH_NTSC=MINEPIT PARK,ITALIAN=MINEPIT PARK,'
+                  'SPANISH_NTSC=MINEPIT PARK',
 }
 # the package folder per track when --dlc is not given
 DEF_DLC_BY_TRACK = {'quarry': DEF_DLC, 'nem_quarry': _scr('dlc', 'x_rock')}
