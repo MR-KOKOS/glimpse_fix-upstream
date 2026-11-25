@@ -41,6 +41,9 @@ that adds what the port never had, with a settings program instead of hand-editi
 | **Full power play bar** | LS + RS (keyboard: left Ctrl) fills it. |
 | **Everything unlocked** | All tracks, events, modes and cars, plus the PC's bonus content; your profile is not changed. |
 | **Achievements and decals** | All, or only those nobody can earn any more (ranked online, Pure). |
+| **Pick the laps** | 1 to 10 laps on Quick Play Race's track select; a race with a changed count keeps no personal best. |
+| **Quicker finish card** | Continue shows as soon as the single-player finish card accepts it. |
+| **Save backups** | At every game start a copy of your saves, up to 5 kept, outside the save folder. |
 | **Camera** | Field of view, zoom, less shake, a HUD key and a **photo mode** with depth of field. |
 | **Potato presets** | For very weak PCs, at 60 fps. |
 | **Online over Steam** *(experimental)* | The game's LAN mode over the internet with a Steam lobby. [Details](docs/ONLINE.md) |
@@ -66,7 +69,7 @@ Uninstall: delete the three files and rename `SplitSecond.exe.orig` back.
 `glimpse_config.exe` edits `SplitSecondPad.ini` next to it: one page per topic, a help line for the
 option under the mouse, every change saved at once. The *Presets* page has *Recommended*, *Original
 game*, *Potato*, *Peeled potato* and *Chaos*, and *Back to your settings*. Presets switch *Pick laps on the track select* off;
-only *Original game* also resets the lap count picked in the game. Every key:
+only *Original game* also resets the lap count picked in the game. Presets leave *Save backups* as it is. Every key:
 [INI reference](docs/INI.md).
 
 ## Your own Xbox DLC (experimental)

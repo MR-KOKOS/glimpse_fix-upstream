@@ -73,6 +73,7 @@ struct Config {
     bool  bonusContent;      // the PC cheat code extras: Expressway track, branded cars, liveries
     float wreckTime;         // seconds from a wreck to the respot, 0 = the game's
     int   unlockDecals;      // achievement decals: 0 off, 1 all, 2 only the online ones and the Pure decal (saved)
+    int   saveBackups;       // copies of the save folder kept, made at every start (0 = none, 1-5)
     bool  boost;             // X held: extra acceleration for player 1
     int   boostKey;          // virtual key that works like X for the boost, 0 = none
     WORD  boostButton;       // pad button (XINPUT_GAMEPAD_*) held for the boost, 0 = none
@@ -138,7 +139,7 @@ extern Config g_cfg;
 void Log(const char* fmt, ...);
 
 // envlog.cpp (Log=1)
-#define GLIMPSE_VERSION "2.3.0-beta.3"  // keep in step with config/glimpse_config.rc
+#define GLIMPSE_VERSION "2.3.0-beta.4"  // keep in step with config/glimpse_config.rc
 void LogEnvironment();                     // system, executable, files and modules, at start
 void LogForeignModules(const char* when);  // modules loaded from outside the Windows folder
 void ModulePath(char* out, const char* file);  // file next to the DLL (game folder)
@@ -252,6 +253,7 @@ bool OnlineSession();      // SteamLAN: Quazal's LAN mode is in use (online.cpp)
 
 // savediag.cpp
 void WatchSaveFiles();  // Log=1: log every change of the profile files
+void StartSaveBackup();  // SaveBackups: copies the save folder at the start (a thread of its own)
 
 // builds.cpp - the fixed addresses in this source are those of the Steam build the fix was made on
 // (German depot 297864, built 4BE13C66). G() returns where the same code or

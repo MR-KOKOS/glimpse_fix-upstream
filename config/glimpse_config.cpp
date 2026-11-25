@@ -132,6 +132,7 @@ static Option kOptions[] = {
     { "Gameplay", "RaceEndTiming", BOOL_OPT, "Post-race Continue timing", "Show Continue when the single-player finish card accepts it. Shortens the offline Quick Play entrance and keeps the Season animation; split screen and online stay stock. Steam build only (not the Russian depot), requires the stock finish card.", "0" },
     { "Gameplay", "BonusContent", BOOL_OPT, "Bonus content", "The PC version's cheat code extras: Expressway track, Cobretti SlipStream, branded cars, Euro livery.", "0" },
     { "Gameplay", "UnlockDecals", CHOICE, "Achievements and decals", "Unlocked in the next single player race and saved with the profile (backed up to glimpse_backup first). Unobtainable = the six ranked online ones and the Pure decal.", "0", "0|As the game;2|Unobtainable only;1|All" },
+    { "Gameplay", "SaveBackups", CHOICE, "Save backups at every start", "At every game start the save folder (Documents\\Disney Interactive Studios\\Split Second) is copied to %LOCALAPPDATA%\\glimpse_fix\\save_backups; this many copies are kept, the oldest goes first. Unchanged saves make no new copy. The saves are not checked for damage. To go back: quit the game, copy a backup's files into the save folder (Steam Cloud off).", "0", "0|Off;1|1 copy;2|2 copies;3|3 copies;4|4 copies;5|5 copies" },
     { "Gameplay", "CutsceneSkip", BOOL_OPT, "Skippable cutscenes", "The season's cutscenes (Coming up, Next time, the end sequence), the demo movies and the boot movies: the first press of A, B, X, Y, Start, Enter or Space shows \"Press again to skip\", a second press within 3 seconds skips the movie.", "1" },
     { "Gameplay", "SkipIntro", CHOICE, "Boot movies", "Skip the movies at every start. The files stay untouched.", "0", "0|Play both;1|Skip the logo;2|Skip logo and intro" },
     { "Gameplay", "WreckTime", CHOICE, "Time until the respot (experimental)", "!Highly experimental: can softlock the game, especially together with the photo mode. How long after a wreck of yours (crashes, takedowns, power plays) the game puts your car back on the track.", "0", "0|As the game;5|5 s;8|8 s;10|10 s;15|15 s;20|20 s;30|30 s;60|60 s" },
@@ -175,13 +176,13 @@ static Option kOptions[] = {
     { "DLC", "DumpFolder", PATH, "Xbox DLC folder", "Your own Split/Second DLC from an Xbox 360 or Xenia: the folder 425607E7, its subfolder 00000002, or a folder with the package files. It is only read. Set up DLC looks for it by itself (Xenia, Desktop, Downloads, Xbox USB drives); \"...\" lists what it finds. No DLC is downloaded: without your own DLC there is nothing to convert.", "" },
     { "DLC", "Overlays", BOOL_OPT, "Converted DLC (experimental)", "EXPERIMENTAL: the converted archives in glimpse_dlc in the game folder are laid over the game's data: the DLC cars (11) and the Deadline mode, and the tracks below. Off = the game as it is, whatever glimpse_dlc holds.", "0" },
     { "DLC", "Cars", BOOL_OPT, "DLC cars in the car select without Unlock all", "The converted DLC cars in the car select of quick play and free play, also without \"Everything unlocked\". Not in the career unless the option below is on, not online.", "1" },
-    { "DLC", "CarsCareer", BOOL_OPT, "  DLC cars also in the career car select (experimental)", "EXPERIMENTAL: the DLC cars can also be picked for career events started from the episode screen that have no fixed car. The in-game car select between events still offers only the season's cars.", "0" },
-    { "DLC", "Tracks", BOOL_OPT, "DLC tracks Quarry and Minepit Park (experimental)", "EXPERIMENTAL: the converted DLC tracks get their own track numbers so quick play can load them: Quarry, and Minepit Park (nem_quarry, the Survival track of Survival At The Rock). With Minepit Park also the DLC game mode Survival Race (two players, five laps among the trucks), which the game lists in split screen itself, not online. Needs the DLC overlays ([DLC] Overlays=1), the track overlay glimpse_dlc\\track_*.ark and the converted track files in glimpse_dlc\\quarry\\data and glimpse_dlc\\nem_quarry\\data (or below data). Off by itself with Online over Steam unless the option below is on; not for the game's own LAN mode with players who lack the track.", "0" },
+    { "DLC", "CarsCareer", BOOL_OPT, "  DLC cars in the career (experimental)", "EXPERIMENTAL: the DLC cars can also be picked for career events started from the episode screen that have no fixed car. The in-game car select between events still offers only the season's cars.", "0" },
+    { "DLC", "Tracks", BOOL_OPT, "DLC tracks Quarry and Minepit Park (experimental)", "EXPERIMENTAL: Quarry and Minepit Park (Survival At The Rock's Survival track) get track numbers, so quick play loads them; Minepit Park brings the split screen mode Survival Race. Needs Overlays=1 and the converted tracks in glimpse_dlc. Off with Online over Steam unless the option below is on; not for the game's own LAN mode with players who lack the tracks.", "0" },
     { "DLC", "Music", BOOL_OPT, "  DLC race music on Quarry", "In races on Quarry the DLC package's own race music plays, as on the Xbox 360; Minepit Park keeps the game's music. Off = the game's own race music on Quarry too. Needs the DLC overlays and the DLC tracks (both above) built with the track's music (\"Set up DLC\" does that).", "1" },
     { "DLC", "TracksOnline", BOOL_OPT, "DLC track also online", "The DLC tracks also with Online over Steam. The game sends only the track's number, so you then see and join only the LAN games of players with the same DLC tracks (same track pack and fix version), and they yours; the in-game banner says when a game is not shown. Players without DLC tracks play with each other as before.", "0" },
     // page "Deadline mode" (PageOf): the DLC game mode
     { "DLC", "Modes", BOOL_OPT, "Deadline game mode (experimental)", "EXPERIMENTAL: opens the entry of the DLC game mode Deadline (a countdown time trial) in quick play; nothing else is unlocked. Single player. Also shows Survival Race's own quick play movie (the mode itself comes with the DLC tracks). Needs the converted DLC (page DLC), built with the mode (\"Set up DLC\" does that).", "0" },
-    { "DLC", "Pickups", BOOL_OPT, "  Deadline pickups (experimental)", "EXPERIMENTAL: the time pickups of the game mode Deadline: the Xbox 360's hexagonal tokens (their model comes from your own DLC; plain cubes if it is missing), and the Xbox's HUD: the timer turns cyan while the clock stands, \"+0.5s\" / \"+2.0s\" at the top centre and the Xbox's pickup sounds when you collect one. The texts are glimpse_fix's own wording: the Xbox's official ones are in its title update, not in the DLC packages, and need a TU4 text table that the release cannot produce (made with a local development tool that is not part of glimpse_fix).", "0" },
+    { "DLC", "Pickups", BOOL_OPT, "  Deadline pickups (experimental)", "EXPERIMENTAL: Deadline's time pickups as on the Xbox 360: its hexagonal tokens (from your own DLC; plain cubes without it) and its HUD: the timer turns cyan while the clock stands, \"+0.5s\" / \"+2.0s\" at the top and the pickup sounds. The texts are glimpse_fix's own wording; the official ones are in the Xbox title update, not in the DLC.", "0" },
     { "DLC", "PickupVignette", BOOL_OPT, "  Frozen Time look while the clock is stopped", "While a pickup holds the Deadline clock, the screen gets the Xbox's Frozen Time look (cyan edges, the colour grade off). Off = no such look; the clock stops all the same.", "1" },
     { "DLC", "DeadlineBonus", RANGE, "  Deadline extra start time (without pickups)", "The converted Deadline mode starts with the Xbox times, which count on the pickups for more time. Without pickups these seconds are added to the start time so the races can be finished. With the pickups on, the Xbox rules apply and nothing is added.", "50", 0, 0, 300, 5, 0 },
 };
@@ -200,11 +201,12 @@ static const int kDlcExtraRows = 5;
 
 // options the presets do not touch
 // Debug, Online and DLC are the user's own; so is Laps, which the game's lap choice keeps up to date
-// itself (a preset that names Laps, "Original game", still sets it: see InPreset)
+// itself (a preset that names Laps, "Original game", still sets it: see InPreset); and SaveBackups, which is no
+// setting of the game (a preset must not switch the backups off)
 static bool OutsidePresets(const Option& o)
 {
     return !strcmp(o.section, "Debug") || !strcmp(o.section, "Online") || !strcmp(o.section, "DLC") ||
-           !strcmp(o.key, "Laps");
+           !strcmp(o.key, "Laps") || !strcmp(o.key, "SaveBackups");
 }
 
 // the page an option is shown on: its INI section; [Graphics] is split into the display and the effects,
@@ -3058,7 +3060,7 @@ static void DlcSetup(HWND wnd)
 }
 
 static const char* const kPageText[kPageCount] = {
-    "Ready-made settings for every page but Online, DLC, Deadline mode and Debug. The one that matches is outlined.",
+    "Settings for all pages but Online, DLC, Deadline mode and Debug. The matching one is outlined.",
     "Pads, triggers, button prompts and the D-pad repeat in menus.",
     "Frame rate, quality limit, texture detail and filtering, SMAA, HDR output and the icon size.",
     "Motion blur, bloom, flares and the screen overlays. * applies while the game runs.",
@@ -3067,7 +3069,7 @@ static const char* const kPageText[kPageCount] = {
     "Unlocks, cutscenes and boot movies, respot time and the power play bar.",
     "Boost and handbrake for your car, with their buttons and keys.",
     "Boost for the AI cars (experimental).",
-    "The opponents' engines and their volume, ducking, sound placement, sound start offsets and the console's reverb.",
+    "Opponent engines and their volume, ducking, sound placement, start offsets and the console reverb.",
     "Online play over Steam (experimental). Presets leave this page alone.",
     "Your own Xbox 360 DLC, converted on this PC (experimental). Presets leave this page alone.",
     "The DLC game mode Deadline, from your converted DLC (experimental). Presets leave this page alone.",
@@ -3116,7 +3118,7 @@ struct Preset {
 };
 static const Preset kPresets[kPresetCount] = {
     { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off (Pick laps too; the lap count you picked is kept for when you switch it on again).", "" },
-    { "Original game", "The game as it was released: 30 fps, no SMAA, linear filtering, the stock streaming pool, draw and shadow distances, pop-in and opponent car detail, all effects on, the stock icon size, the PC's car glass, shared triggers, no ultrawide fix and no cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as released: 30 fps, no SMAA, linear filtering, the stock streaming pool, distances, pop-in, car detail, icon size and audio, all effects on, the PC's car glass, shared triggers, no ultrawide fix or cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
       "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",

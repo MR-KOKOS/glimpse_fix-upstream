@@ -256,6 +256,9 @@ static void LoadConfig()
     g_cfg.unlockDecals = IniInt("Gameplay", "UnlockDecals", 0);
     g_cfg.wreckTime = IniFloat("Gameplay", "WreckTime", 0.0f, 0.0f, 120.0f);
     if (g_cfg.unlockDecals < 0 || g_cfg.unlockDecals > 2) g_cfg.unlockDecals = 0;
+    g_cfg.saveBackups = IniInt("Gameplay", "SaveBackups", 0);
+    if (g_cfg.saveBackups < 0) g_cfg.saveBackups = 0;
+    if (g_cfg.saveBackups > 5) g_cfg.saveBackups = 5;
     g_cfg.skipIntro = IniInt("Gameplay", "SkipIntro", 0);
     g_cfg.cutsceneSkip = IniBool("Gameplay", "CutsceneSkip", true);
     g_cfg.smaa = IniBool("Graphics", "SMAA", true);
@@ -402,6 +405,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         DisableThreadLibraryCalls(inst);
         InitializeCriticalSection(&s_logLock);
         LoadConfig();
+        StartSaveBackup();  // a thread: runs once the loader is done, long before the title screen loads a profile
         DlcInstall();  // before the game's first read of resident.ark
         FixOpponentEngineBanks();  // plain data in the exe file, read when the audio system starts
         FixReverbPresets();        // fmod_event.dll is mapped already (an import of the exe)
