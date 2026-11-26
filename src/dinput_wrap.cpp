@@ -345,7 +345,8 @@ public:
         if (blocked) memset(&pad, 0, sizeof(pad));
         // the D-pad as the player holds it, before RacePad moves D-pad down to Y (MenuPov)
         WORD held = pad.wButtons;
-        if (!blocked && (g_cfg.boost || g_cfg.handbrake)) RacePad(m_slot, &pad);
+        // (the power bar fill too: the split screen steering probe that finds each pad's car goes through RacePad)
+        if (!blocked && (g_cfg.boost || g_cfg.handbrake || g_cfg.powerFill)) RacePad(m_slot, &pad);
         BuildState(pad, held, &js);
         memcpy(data, &js, size);
         return DI_OK;

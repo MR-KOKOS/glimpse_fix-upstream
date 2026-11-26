@@ -301,9 +301,104 @@ static struct {
     BYTE* veh[2];
     int padOf[2];
     int score[XUSER_MAX_COUNT][2];
+    int probePad, probeFrame, probeTries;  // the steering probe (ProbePads): its pad (-1 none), frame, tries
+    DWORD probeNext;                       // GetTickCount before which no new probe starts
 } s_learn;
 
+// The steering probe: a pad no car is assigned to yet whose stick is centred (its player does not steer, e.g.
+// waiting at the start) gets a short steer to the left through the pad state the game reads (RacePad): about 40 %
+// for kProbeFrames frames. The car that steers left while the other one does not is that pad's. Tried again
+// after 0.5 s when neither or both players' steering input moved, at most kProbeTries times a race.
+static volatile LONG s_probeSlot = -1;  // XInput slot RacePad steers to the left now, -1 = none
+static const int kProbeFrames = 8, kProbeWatch = 20, kProbeTries = 10;
+static const SHORT kProbeX = -13000;
+
 static int Clamp100(int v) { return v > 100 ? 100 : v < -100 ? -100 : v; }
+
+// The steering a local car's player gives, also while the game holds the cars at the start: the input update
+// (0x4B06F0) hands its local players (cInGameResources +0x130: +4 count, +8 the player inputs, each +0x14 its car)
+// and their read inputs (+0x138: from +8, 0x10C a player) to 0xAB87A0 -> 0xAB8BD0, which copies the input's +0xC
+// to the car's steering (vehicle +0x500) only while the player's lock (+0x134: from +0x14, 0x20 a player, +0x13) is
+// off; during the countdown it is on and the car's steering stays 0. Read only. Steam build (Seats); the code that
+// reads these fields is checked once.
+static bool InputSteer(int car, float* out)
+{
+    static int known = -1;
+    if (known < 0)
+        known = BytesMatch((void*)0x004B0770, "8B983001000085DB0F8415010000") &&
+                BytesMatch((void*)0x004B0782, "8BB8340100008BA838010000") &&
+                BytesMatch((void*)0x00AB87B8, "83C3148D710883C708") && BytesMatch((void*)0x00AB87DC, "81C70C01000083C320") &&
+                BytesMatch((void*)0x00AB8C09, "F30F10420C8B570C8B748204");
+    if (!known) return false;
+    __try {
+        BYTE* res = (BYTE*)*kInGameResources;
+        BYTE* list = Field(res, 0x130);
+        BYTE* vals = Field(res, 0x138);
+        if (!list || !vals) return false;
+        const int n = *(const int*)(list + 4);
+        for (int j = 0; j < n && j < 4; j++) {
+            const BYTE* pi = *(BYTE* const*)(list + 8 + j * 4);
+            if (pi && *(const int*)(pi + 0x14) == car) {
+                *out = *(const float*)(vals + 8 + j * 0x10C + 0xC);
+                return true;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+static void EndProbe(bool retry)
+{
+    InterlockedExchange(&s_probeSlot, -1);
+    s_learn.probePad = -1;
+    s_learn.probeNext = retry ? GetTickCount() + 500 : 0;
+}
+
+static void ProbePads(BYTE* const v[2], const bool* conn, const int* stickX, const Seat* seats)
+{
+    auto& L = s_learn;
+    if (L.probePad >= 0) {
+        if (++L.probeFrame == kProbeFrames) InterlockedExchange(&s_probeSlot, -1);  // the stick back to the player
+        float s0 = 0, s1 = 0;
+        if (!InputSteer(seats[0].car, &s0) || !InputSteer(seats[1].car, &s1)) {
+            s0 = *(const float*)(v[0] + 0x500);  // the cars' steering instead (moves only once the race runs)
+            s1 = *(const float*)(v[1] + 0x500);
+        }
+        int k = s0 < -0.05f && fabsf(s1) < 0.02f ? 0 : s1 < -0.05f && fabsf(s0) < 0.02f ? 1 : -1;
+        if (L.probeFrame >= 2 && k >= 0 && L.padOf[k] < 0 && L.padOf[1 - k] != L.probePad) {
+            L.padOf[k] = L.probePad;
+            Log("split screen: pad %d steers player %d's car (car %d, found by a short steer to the left)", L.probePad,
+                k + 1, seats[k].car);
+            EndProbe(false);
+        } else if (L.probeFrame >= kProbeWatch) {
+            if (g_cfg.log)
+                Log("split screen: steering probe of pad %d: no single car followed (steer %.2f / %.2f), try %d of %d",
+                    L.probePad, s0, s1, L.probeTries, kProbeTries);
+            EndProbe(true);
+        }
+        return;
+    }
+    if (L.probeTries >= kProbeTries || (L.probeNext && (int)(GetTickCount() - L.probeNext) < 0)) return;
+    if (L.padOf[0] >= 0 && L.padOf[1] >= 0) return;
+    if (!RaceRunning()) return;  // RacePad passes the probe's steer on only then (not in the fly-in before the start)
+    // neither player steering: one who steers already (the other player) could otherwise be taken for the pad's
+    float i0 = 0, i1 = 0;
+    if (!InputSteer(seats[0].car, &i0) || !InputSteer(seats[1].car, &i1)) {
+        i0 = *(const float*)(v[0] + 0x500);
+        i1 = *(const float*)(v[1] + 0x500);
+    }
+    if (fabsf(i0) >= 0.02f || fabsf(i1) >= 0.02f) return;
+    for (int i = 0; i < XUSER_MAX_COUNT; i++) {
+        if (!conn[i] || i == L.padOf[0] || i == L.padOf[1] || stickX[i] > 3277 || stickX[i] < -3277) continue;
+        L.probePad = i;
+        L.probeFrame = 0;
+        L.probeTries++;
+        InterlockedExchange(&s_probeSlot, i);
+        if (g_cfg.log) Log("split screen: pad %d not assigned yet, a short steer to the left on it (try %d)", i, L.probeTries);
+        return;
+    }
+}
 
 static void LearnPads(BYTE* logic, Seat* seats)
 {
@@ -315,16 +410,20 @@ static void LearnPads(BYTE* logic, Seat* seats)
         s_learn.veh[0] = v[0];
         s_learn.veh[1] = v[1];
         s_learn.padOf[0] = s_learn.padOf[1] = -1;
+        s_learn.probePad = -1;
+        InterlockedExchange(&s_probeSlot, -1);
     }
     int pushed = -1, connected = 0;
     float lx = 0;
     bool conn[XUSER_MAX_COUNT] = {};
+    int stickX[XUSER_MAX_COUNT] = {};
     XINPUT_STATE st;
     for (int i = 0; i < XUSER_MAX_COUNT && PadsWrapped(); i++) {
         if (!PadSlotConnected(i) || pXInputGetState(i, &st) != ERROR_SUCCESS) continue;
         conn[i] = true;
         connected++;
         int x = st.Gamepad.sThumbLX;
+        stickX[i] = x;
         if (x > 9830 || x < -9830) {  // 0.3
             pushed = pushed == -1 ? i : -2;  // -2: more than one pad steers
             lx = x / 32767.0f;
@@ -369,6 +468,7 @@ static void LearnPads(BYTE* logic, Seat* seats)
                 Log("split screen: so pad %d is player %d's (car %d)", i, 2 - k, seats[1 - k].car);
             }
     }
+    ProbePads(v, conn, stickX, seats);
     seats[0].pad = s_learn.padOf[0];
     seats[1].pad = s_learn.padOf[1];
 }
@@ -413,7 +513,9 @@ static int KeysSeat(const Seat* seats, int n)
 //    game's idle value -1 when it is let go (unless a blast set more meanwhile).
 //  2 (HandbrakeMode=2): the pad the button is on reports the brake trigger fully pressed. The game then
 //    brakes the rear more the more the car is steered and adds its brake turning torque. Only above
-//    8 m/s forward, so the car never starts to reverse.
+//    8 m/s forward, so the car never starts to reverse. It needs a pad of ours to press the trigger on:
+//    the key presses it on the player's pad (single screen: the first connected). A player without one (on the
+//    keyboard in split screen, no pad at all, or VirtualPads=0) gets mode 1 for the key instead.
 // Player 1's car only; the AI cars are not affected.
 static BYTE s_brakeSlots;   // mode 2: pads that report the brake (bit per slot)
 static int s_yawAxis = -1;  // mode 1: which rotation column of the chassis is up (0: +0xE0, 1: +0xF0), -1 = not known
@@ -441,6 +543,8 @@ static void YawLearn(BYTE* vehicle, BYTE* body)
         s_yawSign = sgn;
     }
 }
+static void DriftHandbrake(BYTE* vehicle, BYTE* body, bool held, float forward, bool& driftSet, float dt);
+
 // One local player's car, with the pad it is driven with (Seat::pad) and its own drift flag (mode 1: the timer
 // is ours). Mode 2: returns the XInput slots whose brake is to be pressed (bit per slot).
 static BYTE Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, int pad, bool& driftSet, float dt)
@@ -455,13 +559,35 @@ static BYTE Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, int pad, bool& dr
                 if ((pad == kAllPads || pad == (int)i) && PadSlotConnected(i) &&
                     pXInputGetState(i, &st) == ERROR_SUCCESS && (st.Gamepad.wButtons & g_cfg.handbrakeButton))
                     slots |= 1 << i;
-        // the keyboard: the first pad, in split screen player 1's (none when player 1 drives without a pad)
-        if (forward > 8.0f && (buttons & KEY_HANDBRAKE)) slots |= pad == kAllPads ? 1 : pad >= 0 ? 1 << pad : 0;
+        // the key: on the player's pad (single screen the first connected); without one the drift handbrake (mode 1)
+        const bool key = (buttons & KEY_HANDBRAKE) != 0;
+        int keySlot = pad;
+        if (pad == kAllPads)  // single screen: the first pad that is there
+            for (keySlot = 0; keySlot < XUSER_MAX_COUNT && !PadSlotConnected(keySlot); keySlot++) {
+            }
+        const bool keyPad = keySlot >= 0 && keySlot < XUSER_MAX_COUNT && PadsWrapped() && PadSlotConnected(keySlot);
+        if (key && keyPad) {
+            if (forward > 8.0f) slots |= 1 << keySlot;
+        } else if (key || driftSet) {
+            static bool told;
+            if (key && !told) {
+                told = true;
+                Log("handbrake: HandbrakeMode=2 brakes through a pad's trigger; this player has none, so the key "
+                    "gives the drift handbrake (mode 1)");
+            }
+            DriftHandbrake(vehicle, body, key, forward, driftSet, dt);
+        }
         return slots;
     }
-    if (!vehicle || IsBadWritePtr(vehicle + 0x64C, 4)) return 0;
+    DriftHandbrake(vehicle, body, (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE)) != 0, forward, driftSet, dt);
+    return 0;
+}
+
+// Mode 1 for one car while held (and its release): see above
+static void DriftHandbrake(BYTE* vehicle, BYTE* body, bool held, float forward, bool& driftSet, float dt)
+{
+    if (!vehicle || IsBadWritePtr(vehicle + 0x64C, 4)) return;
     float* timer = (float*)(vehicle + 0x64C);
-    bool held = (buttons & (g_cfg.handbrakeButton | KEY_HANDBRAKE)) != 0;
     if (!held && body && forward > 10.0f) YawLearn(vehicle, body);
     if (held && forward > 5.0f) {
         if (*timer < 0.1f) *timer = 0.1f;
@@ -517,7 +643,6 @@ static BYTE Handbrake(BYTE* vehicle, BYTE* body, WORD buttons, int pad, bool& dr
         if (*timer <= 0.1f) *timer = -1.0f;
         driftSet = false;
     }
-    return 0;
 }
 
 // The pad as the game sees it in a race (dinput_wrap.cpp, every poll): the buttons the boost and the
@@ -529,6 +654,7 @@ void RacePad(int slot, XINPUT_GAMEPAD* pad)
         s_brakeSlots = 0;
         return;
     }
+    if (slot >= 0 && slot == s_probeSlot) pad->sThumbLX = kProbeX;  // the steering probe (ProbePads)
     WORD used = (g_cfg.boost ? g_cfg.boostButton : 0) | (g_cfg.handbrake ? g_cfg.handbrakeButton : 0);
     WORD keep = pad->wButtons;
     pad->wButtons &= ~used;

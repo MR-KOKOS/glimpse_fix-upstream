@@ -456,7 +456,8 @@ static void HookRumble()
 //
 // CutsceneSkip=1 does the same for the season's cutscenes on request: the first press of A, B, X, Y,
 // Start, Enter or Space shows "Press again to skip" for 3 seconds, a second press within them marks the
-// movie as at its last frame, and the game's movie loop ends it as if it had played to the end.
+// movie as at its last frame, and the game's movie loop ends it as if it had played to the end. The boot
+// movies, which a press ends in the game anyway, end on the first press, without the prompt (#24).
 static void** const kIatBinkOpen = (void**)G(0x00B9B39C);
 static void** const kIatBinkWait = (void**)G(0x00B9B3B0);
 static void** const kIatBinkDoFrame = (void**)G(0x00B9B380);
@@ -468,6 +469,7 @@ static BinkOpen_t s_binkOpen;
 static BinkWait_t s_binkWait;
 static void* s_skipped;  // the boot movie being skipped
 static void* volatile s_cutscene;       // the cutscene playing that may be skipped
+static volatile bool s_cutsceneBoot;    // it is a boot movie: the first press skips it
 static volatile DWORD s_promptUntil;    // GetTickCount until which the skip prompt shows
 static WORD s_skipHeld;                 // buttons and keys held at the last check (edges only count)
 static volatile DWORD s_cutsceneFrame;  // GetTickCount of the cutscene's last BinkDoFrame
@@ -508,8 +510,8 @@ static int __stdcall Hook_BinkDoFrame(void* bink)
         s_skipHeld = held;
         if (pressed) {
             DWORD now = GetTickCount();
-            if (s_promptUntil && (int)(s_promptUntil - now) > 0) {
-                Log("cutscene skipped at frame %u of %u", h[3], h[2]);
+            if (s_cutsceneBoot || (s_promptUntil && (int)(s_promptUntil - now) > 0)) {
+                Log("%s skipped at frame %u of %u", s_cutsceneBoot ? "boot movie" : "cutscene", h[3], h[2]);
                 s_cutscene = NULL;
                 s_promptUntil = 0;
                 h[3] = h[4] = h[2];
@@ -573,8 +575,9 @@ static void* __stdcall Hook_BinkOpen(const char* name, unsigned flags)
     } else if (bink && name && g_cfg.cutsceneSkip && IsCutscene(name)) {
         s_skipHeld = SkipInput();  // a button still held from the menu does not count
         s_promptUntil = 0;
+        s_cutsceneBoot = Contains(name, "bootup");
         s_cutscene = bink;
-        Log("cutscene: %s (%u frames), skipped on a second press", name, ((unsigned*)bink)[2]);
+        Log("cutscene: %s (%u frames), skipped on a %s press", name, ((unsigned*)bink)[2], s_cutsceneBoot ? "first" : "second");
     }
     return bink;
 }

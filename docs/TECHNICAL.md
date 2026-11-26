@@ -783,10 +783,17 @@ problems without it before reporting them.
 * The photo mode and the HUD key work for player 1 only, the photo mode only on a single screen. In
   split screen the boost, the power bar fill and the handbrake work for both players, each with their
   own pad (Steam build only). Which pad drives which car is learnt from the first steering in each race
-  (the car that steers with a pad's stick while the other one does not); until then that pad's extras
-  stay off. The keys go to the player without a learnt pad, else to player 1. The boost's motion blur
-  stays off there, as one blur covers the whole screen. Tested with two pads (`HandbrakeMode=1`); not
-  yet tested: one player on the keyboard with a single pad, and `HandbrakeMode=2` in split screen.
+  (the car that steers with a pad's stick while the other one does not). A pad whose stick stays centred
+  gets a short steer to the left from the fix (about 40 % for 8 frames, only while neither player
+  steers, tried again every half second, at most ten times a race). The fix reads each player's steering input as the game reads it
+  (`cInGameResources` +0x138, before the start lock that keeps the cars' steering at 0 during the
+  countdown), so the pad whose player's input turns left is found before the start; so a player who does
+  not steer at the start is found too, and the keys reach the keyboard player. Until then that pad's
+  extras stay off. The keys go to the player without a learnt pad, else to player 1. The boost's motion blur
+  stays off there, as one blur covers the whole screen. Tested with two pads (`HandbrakeMode=1`) and
+  with one player on the keyboard and one on a pad (#16). `HandbrakeMode=2` presses the brake trigger of
+  the player's own pad; a player without one (on the keyboard, or no pad, or `VirtualPads=0`) gets the
+  drift handbrake (mode 1) with the key instead (#16: the key did nothing before).
 * With `VirtualPads=0` the boost, the handbrake, the power bar fill and the photo mode work with
   their keys only (see `VirtualPads` in [INI settings](INI.md)).
 * `UltrawideFix=2` is experimental. Checked: single player menus, season screens, races, pre-race

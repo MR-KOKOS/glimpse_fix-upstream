@@ -36,7 +36,7 @@ that adds what the port never had, with a settings program instead of hand-editi
 
 | | |
 |---|---|
-| **Boost** / **Handbrake** | Hold X / Y (keyboard: left Shift / X): surge up to 324 km/h, or brake into a slide. |
+| **Boost** / **Handbrake** | Hold X / Y (keyboard: left Shift / Space): surge up to 324 km/h, or brake into a slide. |
 | **AI boost** *(experimental)* | The AI boosts too, up to a *chaos mode* with a full power play bar. |
 | **Full power play bar** | LS + RS (keyboard: left Ctrl) fills it. |
 | **Everything unlocked** | All tracks, events, modes and cars, plus the PC's bonus content; your profile is not changed. |
@@ -110,8 +110,9 @@ redistributes the paid Xbox DLC without a license. Please reproduce problems wit
   something looks off.
 * Photo mode and HUD key are for player 1 only, the photo mode only on a single screen; once your car
   is wrecked the crash sequence decides the view. In split screen boost, handbrake and power bar fill
-  work for both players (Steam build, not the Russian depot); tested with two pads, not yet with one
-  player on the keyboard.
+  work for both players (Steam build, not the Russian depot); tested with two pads and with one player on
+  the keyboard. With `HandbrakeMode=2` a player on the keyboard gets the drift handbrake, as the brake
+  goes through a pad's trigger.
 * Full ultrawide mode, Online over Steam and the DLC are experimental.
 * HDR runs in a borderless window; the Steam overlay may not show.
 * With a wheel or other DirectInput device, the controls screen names inputs generically.

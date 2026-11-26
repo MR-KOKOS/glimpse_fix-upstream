@@ -282,7 +282,7 @@ static void LoadConfig()
     g_cfg.handbrake = IniBool("Gameplay", "Handbrake", false);
     g_cfg.handbrakeButton = IniButton("Gameplay", "HandbrakeButton", XINPUT_GAMEPAD_Y);
     g_cfg.handbrakeButtonIni = g_cfg.handbrakeButton;  // before the clash check: SteamLAN rules decide again
-    g_cfg.handbrakeKey = IniInt("Gameplay", "HandbrakeKey", 'X');
+    g_cfg.handbrakeKey = IniInt("Gameplay", "HandbrakeKey", VK_SPACE);  // in neither of the game's keyboard layouts
     g_cfg.handbrakeMode = IniInt("Gameplay", "HandbrakeMode", 1) == 2 ? 2 : 1;
     g_cfg.handbrakeStrength = IniFloat("Gameplay", "HandbrakeStrength", 15.0f, 0.0f, 40.0f);
     g_cfg.handbrakeDrift = IniFloat("Gameplay", "HandbrakeDrift", 2.5f, 0.0f, 5.0f);
