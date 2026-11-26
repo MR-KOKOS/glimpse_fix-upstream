@@ -193,6 +193,7 @@ static void LoadConfig()
     g_cfg.opponentEngines = IniBool("Audio", "OpponentEngines", true);
     g_cfg.consoleReverb = IniBool("Audio", "ConsoleReverb", true);
     g_cfg.ducking = IniBool("Audio", "Ducking", true);
+    g_cfg.powerPlayFlanger = IniBool("Audio", "PowerPlayFlanger", true);
     g_cfg.soundPlacement = IniBool("Audio", "SoundPlacement", true);
     g_cfg.soundBankFix = IniBool("Audio", "SoundBankFix", true);
     g_cfg.opponentEngineVolume = IniPercent("Audio", "OpponentEngineVolume", 100, 0, 200);

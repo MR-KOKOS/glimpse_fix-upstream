@@ -730,8 +730,8 @@ void FixReverbPresets()
 // The game's audio code wraps every DSP effect in an object whose virtual "attach" (vtable slot 9) is called
 // with the channel group the effect belongs on. FMOD's own effects do the attaching there with
 // ChannelGroup::addDSP (cFModDSPInstance, 0x864CE0). In the PC build the game's plugin effects only return
-// their DSP, so none of them ever hears a sample. Two of them are given a real attach, through their vtable
-// entry in .rdata (the game's code is untouched); the others stay as they are. Steam build only: the vtables
+// their DSP, so none of them ever hears a sample. Restore the used mixer effects and VoiceDSP through
+// their vtable entries in .rdata (the game's code is untouched). Steam build only: the vtables
 // are checked against their RTTI class name and the stub's bytes. The missing connection was described by
 // the Back on Air project; this is a separate implementation.
 //
@@ -775,6 +775,9 @@ struct PluginEffect {
 static const PluginEffect kVolumeMeter = {
     "ducking", (void**)0x00C1E028, "VolumeMeterState@VolumeMeter@DSP@Audio", 0x007F7E90, 0xB4
 };
+static const PluginEffect kPowerPlayFlanger = {
+    "power play flanger", (void**)0x00C1DE54, "stFlangerState@Flanger@DSP@Audio", 0x007F6A80, 0x25CC
+};
 static const PluginEffect kVoiceDsp = {
     "sound placement", (void**)0x00C32824, "VoiceDSPState@VoiceDSP@Voice@Audio", 0x008A5B40, 0x138
 };
@@ -805,15 +808,28 @@ static bool PatchAttach(const PluginEffect& fx, void* attach)
     return true;
 }
 
-static bool ResolveFmod()
+static void ResolveFmod()
 {
     HMODULE ex = GetModuleHandleA("fmodex.dll");
-    if (!ex) return false;
+    if (!ex) return;
     s_groupAddDsp = (FmodGroupAddDsp_t)GetProcAddress(ex, "_FMOD_ChannelGroup_AddDSP@12");
     s_groupGetSystem = (FmodGroupGetSystem_t)GetProcAddress(ex, "_FMOD_ChannelGroup_GetSystemObject@8");
     s_dspRemove = (FmodDsp_t)GetProcAddress(ex, "_FMOD_DSP_Remove@4");
     s_dspSetActive = (FmodDspActive_t)GetProcAddress(ex, "_FMOD_DSP_SetActive@8");
-    return s_groupAddDsp && s_dspRemove && s_dspSetActive;
+}
+
+static void* __fastcall AttachPowerPlayFlanger(BYTE* self, void*, void* group)
+{
+    void* dsp = *(void**)(self + kPowerPlayFlanger.dspOffset);
+    if (!dsp || !group) {
+        Log("power play flanger: missing DSP or channel group, left unattached");
+        return dsp;
+    }
+    // The group builder creates one DSP for this slot. The mixer controls its wet mix and frees it.
+    int result = s_groupAddDsp(group, dsp, NULL);
+    if (g_cfg.log || result != 0)
+        Log("power play flanger: instance %p add to channel group %p -> %d", self, group, result);
+    return dsp;
 }
 
 // ---- ducking (audio thread only)
@@ -1064,15 +1080,25 @@ static void OnSoundSystemInit(void* system)
     ResetAllAudioState(system, "System::setFileSystem");
 }
 
-// at DLL load: the attach of both effects (read when the game builds its audio groups and voices)
+// At DLL load, before the game builds its audio groups and voices.
 void FixGameDspEffects()
 {
+    const bool flanger = g_cfg.powerPlayFlanger && (g_cfg.patchMask & PATCH_POWERPLAY_FLANGER);
+    if (flanger || g_cfg.ducking || g_cfg.soundPlacement) ResolveFmod();
+    if (flanger) {
+        if (CurrentBuild() != BUILD_STEAM)
+            Log("power play flanger: only on the Steam build");
+        else if (!s_groupAddDsp)
+            Log("power play flanger: FMOD ChannelGroup::addDSP not found, left alone");
+        else if (PatchAttach(kPowerPlayFlanger, (void*)AttachPowerPlayFlanger))
+            Log("power play flanger: attach hook installed");
+    }
     if (!g_cfg.ducking && !g_cfg.soundPlacement) return;
     if (CurrentBuild() != BUILD_STEAM) {
         Log("ducking, sound placement: only on the Steam build");
         return;
     }
-    if (!ResolveFmod()) {
+    if (!s_groupAddDsp || !s_dspRemove || !s_dspSetActive) {
         Log("ducking, sound placement: fmodex.dll functions not found, left alone");
         return;
     }
