@@ -161,6 +161,9 @@ static Option kOptions[] = {
       "Car matching, reload and event capacity fixes are Steam build only (not the Russian depot).", "1" },
     { "Audio", "OpponentEngineVolume", RANGE, "  Opponents' engine volume (%)", "Volume of the opponents' engines in percent; your own car stays as it is. 70 is about 3 dB quieter, 140 about 3 dB louder. 100 = as the game. Read while the game runs; applies when the next sound starts or the mixer updates the group.", "100", 0, 0, 200, 5, 0 },
     { "Audio", "Ducking", BOOL_OPT, "Ducking", "Mixer side-chain ducking as designed (DynamicMixer.xml): collisions duck music and engines; power plays duck opponents' engines, surfaces, player engine and collisions; HUD ducks music; speech mutes music/swooshes/particles and ducks engines, collisions, power plays, surfaces, HUD and ambience. Steam build only.", "1" },
+    { "Audio", "PowerPlayFlanger", BOOL_OPT, "Power Play flanger",
+      "Restore the Xbox 360's sweeping effect on Power Play sounds when the game's mix calls for it. "
+      "Steam build only (not the Russian depot).", "1" },
     { "Audio", "SoundPlacement", BOOL_OPT, "Sound placement", "The opponents' engines and other positional sounds get louder and quieter with distance and come from their direction, as the game was made. The PC release plays them at one level on every speaker. Steam build only.", "1" },
     { "Audio", "SoundBankFix", BOOL_OPT, "Fix sound start offsets", "FMOD on PC starts many sounds a few frames early, inside the sound before: the result screen music opens with a scrap of another track. Each sound starts where its data is.", "1" },
     { "Audio", "ConsoleReverb", BOOL_OPT, "Console reverb", "The reverb presets of the Xbox 360 release (halls, tunnels, under bridges, the menu). The PC release has one stock preset for almost all of them.", "1" },
@@ -3069,7 +3072,7 @@ static const char* const kPageText[kPageCount] = {
     "Unlocks, cutscenes and boot movies, respot time and the power play bar.",
     "Boost and handbrake for your car, with their buttons and keys.",
     "Boost for the AI cars (experimental).",
-    "Opponent engines and their volume, ducking, sound placement, start offsets and the console reverb.",
+    "Opponent engines, ducking, sound placement, Power Play flanger, bank offsets and console reverb.",
     "Online play over Steam (experimental). Presets leave this page alone.",
     "Your own Xbox 360 DLC, converted on this PC (experimental). Presets leave this page alone.",
     "The DLC game mode Deadline, from your converted DLC (experimental). Presets leave this page alone.",
@@ -3118,7 +3121,7 @@ struct Preset {
 };
 static const Preset kPresets[kPresetCount] = {
     { "Recommended", "Every option at its default: 60 fps, SMAA and the fixes on, the extras off (Pick laps too; the lap count you picked is kept for when you switch it on again).", "" },
-    { "Original game", "The game as released: 30 fps, no SMAA, linear filtering, the stock streaming pool, distances, pop-in, car detail, icon size and audio, all effects on, the PC's car glass, shared triggers, no ultrawide fix or cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
+    { "Original game", "The game as released: 30 fps, no SMAA, linear filtering, the stock streaming pool, distances, pop-in, car detail, icon size and audio, all effects on, the PC's car glass, shared triggers, no ultrawide fix or cutscene skip. The controller support stays.", "FrameRate=30;Anisotropy=0;SMAA=0;GlassFix=0;ShadowResolution=1;MotionBlurStrength=1.0;Vignette=1;Bloom=1;BloomStrength=1.0;BloomTone=1.0;BloomCurve=1.0;Exposure=1.0;LensFlare=1;ParticleFlare=1;FixPowerplayIconSize=0;HDR=0;OpponentEngines=0;OpponentEngineVolume=100;Ducking=0;PowerPlayFlanger=0;SoundPlacement=0;SoundBankFix=0;LapSelect=0;Laps=0;ConsoleReverb=0;StreamPoolMB=0;LodDistanceScale=1.0;ShadowDistance=1.0;PopInFix=0;CarDetail=0;CutsceneSkip=0;SeparateTriggers=0;UltrawideFix=0" },
     { "Potato", "For very weak systems, at 60 fps: graphics quality Low (the level in the game's menu is kept), no shadows, no effects, no SMAA, plain filtering, the shortest draw distances and the stock streaming pool.",
       "FrameRate=60;QualityCap=0;SMAA=0;Anisotropy=0;MotionBlurStrength=0.0;Vignette=0;Gradient=0;Bloom=0;LensFlare=0;ParticleFlare=0;StreamPoolMB=0;LodDistanceScale=0.5;ShadowDistance=1.0;ShadowResolution=1;Shadows=0;CarDetail=0;PopInFix=0" },
     { "Peeled potato", "Potato, and the textures at an eighth of their size as well.",

@@ -31,6 +31,7 @@ struct Config {
     bool  opponentEngines;   // 256 KB CPUCar bank slots, 2048 EventMgr cap, multi-race slot cleanup and car matching
     bool  consoleReverb;     // the Xbox 360 release's reverb presets instead of the PC's stock ones
     bool  ducking;           // the mixer's side-chain ducking (volume meters attached to their groups)
+    bool  powerPlayFlanger;  // restore the game's Powerplays mixer effect
     bool  soundPlacement;    // the game's own 3D placement of voices (VoiceDSP units attached)
     bool  soundBankFix;      // FMOD finds each sound of a bank at its real (32-byte padded) start
     int   opponentEngineVolume;  // percent on the levels the mixer sets for the CPUEngine group, 0..200 (100 = as the game)
@@ -119,6 +120,7 @@ enum PatchBits {
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
     PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000, PATCH_LAPS = 0x1000000,
+    PATCH_POWERPLAY_FLANGER = 0x2000000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -360,7 +362,7 @@ void FixOpponentEngineBanks();  // audio_fix.cpp, at DLL load: before the game's
 void CheckOpponentEngineBanks();
 void OpponentEnginesTick();     // per input frame: wraps audio messages 43 (car match) and/or 51 (unload cleanup)
 void FixReverbPresets();       // at DLL load: the console's reverb presets (Log=1: logged)
-void FixGameDspEffects();      // at DLL load: ducking meters and voice placement units get a real attach
+void FixGameDspEffects();      // at DLL load: restore the game's DSP attachments
 void HookSoundBanks();         // with the import hooks: System::setFileSystem (lifecycle init + optional bank fix)
 bool AudioSystemInitHooked();  // true once System::setFileSystem was wrapped so sound-system resets are tracked
 void HookVoiceDspCreation();   // after HookSoundBanks: voice units made with a working read callback

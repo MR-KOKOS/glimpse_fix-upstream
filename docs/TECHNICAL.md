@@ -308,10 +308,10 @@ car select already does it right (alpha ZERO / blend factor, factor 0).
   read on the game thread, which only stores the value; FMOD is called where the game calls it (the
   wrapper, and the next `Event::start`, which applies a change and finds the group again if the sound
   system was made anew).
-* **The game's own DSP effects (`Ducking`, `SoundPlacement`):** the audio code wraps every effect in an
+* **The game's own DSP effects (`Ducking`, `PowerPlayFlanger`, `SoundPlacement`):** the audio code wraps every effect in an
   object whose virtual attach (vtable slot 9) is called with the channel group the effect belongs on.
   FMOD's own effects call `ChannelGroup::addDSP` there (0x864CE0); in the PC build the game's plugin
-  effects only return their DSP (`mov eax,[ecx+off]; ret 4`), so none of them hears a sample. Two get a
+  effects only return their DSP (`mov eax,[ecx+off]; ret 4`), so none of them hears a sample. These effects get a
   real attach through their vtable entry (`.rdata`, checked against the RTTI class name and the stub's
   bytes, set at DLL load; Steam build only), the game's code is untouched. The missing connection was
   described by Back on Air; this is a separate implementation.
@@ -323,6 +323,16 @@ car select already does it right (alpha ZERO / blend factor, factor 0).
     0xC1E028), attached when the game builds the group (0x86C4C3). With `Log=1` each attach and volume
     moves of 1 dB or more (including silence crossings) of a meter's group are logged (at most every
     250 ms per group, up to 3000 lines).
+  * `PowerPlayFlanger`: the Xbox 360 base game and Title Update 4 attach the Flanger to slot 2 of
+    the `Powerplays` group. The Steam game builds the same mixer slot at 0x86C4C3 and sets its
+    parameters, but the attach stub (0x7F6A80) only returns the DSP at instance offset 0x25CC.
+    With `PowerPlayFlanger=1` and `PATCH_POWERPLAY_FLANGER` (0x2000000), slot 9 of the Flanger
+    vtable (0xC1DE54) calls FMOD's `ChannelGroup::addDSP` for the existing DSP. The game keeps
+    ownership of the instance and controls its parameters. The stock read callback (0x7F2050)
+    processes the block in parts of up to 256 frames (0x7EF950), using up to six effect channels
+    and leaving LFE unprocessed. The mixer's `Game` stack sets WetMix to 0, `Voice_3D_PP_Flanger`
+    targets 0.6, ordinary Crash Cam targets 1.0, and bridge impact sets it to 0. With `Log=1` the
+    hook logs the attach and its FMOD result.
   * `SoundPlacement`: positional sounds, the opponents' engines among them, get a `VoiceDSP` unit (vtable
     0xC32824) that writes the event's stereo signal to the six 5.1 speakers with levels the game computes
     every update from the listener. Unattached, all seven opponent engines play at one level everywhere.
@@ -641,6 +651,7 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   `LapSelect=1` or the DLC modes, Quick Play input (`0xBAFD60`), lap reset (`0xBA8DF0`)
   and race results update (`0xC1F848`) with `LapSelect=1`,
   `VolumeMeter` slot 9 at `0xC1E028` with `Ducking=1`,
+  `Flanger` slot 9 at `0xC1DE54` with `PowerPlayFlanger=1`,
   and `VoiceDSP` slot 9 at `0xC32824` with `SoundPlacement=1`),
   import table entries (`XInputSetState`, Bink's `BinkOpen`/`BinkWait`/`BinkDoFrame`, FMOD's
   `Event::start` with `OpponentEngines=1` (default), `PhotoMode=1` or `Log=1`, `ChannelGroup::setVolume`
@@ -653,7 +664,8 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   Scaleform `Invoke`/`SetVariable` for the prompt bar, `SetVisible` for the photo mode's overlays,
   the depth of field blur setup) from the input poll and hooked passes. LapSelect uses the file,
   difficulty, track and leaderboard functions listed under Laps. Audio calls include the
-  `VoiceDSP` read callback `0x8A5470` from FMOD's mixer thread with `SoundPlacement=1`; the game's
+  `VoiceDSP` read callback `0x8A5470` from FMOD's mixer thread with `SoundPlacement=1`; the stock
+  Flanger read callback `0x7F2050` from that thread with `PowerPlayFlanger=1`; the game's
   file callbacks from FMOD's threads with `SoundBankFix=1`; and on the audio thread the stock message
   43/51 handlers `0x835340`/`0x835620` (51 also with `SoundPlacement=1`), `FileExists` `0x402300`,
   bank load `0x7F2FA0`, racer engine assignment `0x8359A0`, `"LLAudio2"` heap scope `0xAF4D00`/`0xAF48F0`
