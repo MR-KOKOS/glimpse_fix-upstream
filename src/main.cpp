@@ -1,6 +1,7 @@
 // Split/Second controller fix - dinput8.dll proxy entry points, config and logging
 #include "common.h"
 #include "ini_percent.h"
+#include "hud_resolution.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <share.h>
@@ -71,6 +72,16 @@ int IniPercent(const char* section, const char* key, int def, int lo, int hi)
     char buf[256];
     IniString(section, key, "", buf, sizeof(buf));
     return ParsePercentValue(buf, def, lo, hi);
+}
+
+static int IniHudResolution()
+{
+    char value[256];
+    IniString("Graphics", "HudResolution", "", value, sizeof(value));
+    bool recognized = true;
+    int size = ParseHudResolution(value, &recognized);
+    if (!recognized) Log("HudResolution=%s not recognised, using auto", value);
+    return size;
 }
 
 static bool IniBool(const char* section, const char* key, bool def)
@@ -185,6 +196,7 @@ static void LoadConfig()
     g_cfg.hdrPaperWhite = IniInt("Graphics", "HDRPaperWhite", 200);
     g_cfg.hdrPaperWhite = g_cfg.hdrPaperWhite < 80 ? 80 : g_cfg.hdrPaperWhite > 500 ? 500 : g_cfg.hdrPaperWhite;
     g_cfg.fixIconSize = IniBool("Graphics", "FixPowerplayIconSize", true);
+    g_cfg.hudResolution = IniHudResolution();
     g_cfg.qualityCap = IniInt("Graphics", "QualityCap", 3);
     if (g_cfg.qualityCap < 0 || g_cfg.qualityCap > 3) g_cfg.qualityCap = 3;
     g_cfg.textureDetail = IniInt("Graphics", "TextureDetail", 0);
@@ -414,7 +426,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         FixGameDspEffects();       // .rdata, read when the game builds its audio groups and voices
         if ((g_cfg.log || g_cfg.anisotropy > 1 || g_cfg.frameRate == 60 || g_cfg.hdr || g_cfg.ultrawideFix == 2 ||
              g_cfg.dumpTextures || g_cfg.cutsceneSkip || g_cfg.smaa || g_cfg.textureDetail > 0 || g_cfg.qualityCap < 3 ||
-             g_cfg.shadowResolution > 1 || g_cfg.glassFix || PickupsWanted()) &&
+             g_cfg.shadowResolution > 1 || (g_cfg.hudResolution >= 0 && (g_cfg.patchMask & PATCH_HUD)) ||
+             g_cfg.glassFix || PickupsWanted()) &&
             (g_cfg.patchMask & PATCH_D3D))
             InstallD3DHooks();
     } else if (reason == DLL_PROCESS_DETACH) {

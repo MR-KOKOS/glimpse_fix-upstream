@@ -155,6 +155,24 @@ shadows` (0xD716EC), which every pass that draws into the shadow maps checks.
   own width scaling (1.5x too big at 1080p, 3x at 4K); the loaded scales are divided back.
   The route change markers (red and blue arrows) get their size as width x 2.25/1280, a constant
   only that code reads; it is set to 2.25 / width.
+* **3D HUD resolution (`HudResolution`):** the game draws lap, position, timers and scores
+  (`DialsInfo.gfx`) and the power bar (`DialsPower.gfx`) into its `512x288` HUD texture in
+  single-player. Split screen draws the text into the scene directly and uses a `256x128`
+  HUD texture for the power bar. The option scales only the offscreen target and its depth
+  surface together. Auto selects 2x up to 1080p effective 16:9 height and 4x above that or
+  in split screen. The device texture limit can reduce the factor. Both surfaces are staged
+  before either is handed to the game. The color surface carries a private-data tag. The
+  device hooks and Scaleform `SetViewport` scale its matching drawing rectangles without
+  changing `cRenderTarget` dimensions or the HUD quad UVs.
+  The stock race glyph cache uses up to 28 px per slot. Large text can fall back to a
+  vector path with different colors, including the split-screen lap slash at 1x. On the
+  render thread, `SetViewport` (vtable `0xC41CF4` slot 20) checks the live font cache,
+  invalidates its glyph batches, raises the slot limit to 128 and raises DialsInfo's
+  raster scale to 4.0. This keeps the text and glow together in the bitmap atlas for
+  both modes, including at 1x. The atlas uses up to about 8 MiB. In single-player the
+  larger color and depth surfaces add about 3 MiB at 2x or 17 MiB at 4x. `HudResolution=-1`
+  or clearing `PATCH_HUD` (`0x4000000`) leaves both paths as the game configured them.
+  Steam build 385319 only (not the Russian depot).
 * **Motion blur:** it blurs along one frame of camera motion, which at 60 fps is half as much;
   the amount is doubled. `MotionBlurStrength` scales it further. During the blur pass the textures
   are clamped to the edge (through the Direct3D device's sampler states), so samples that reach past
@@ -663,7 +681,9 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
 * values in the game's data: tweakables and their records (frame pacing, streaming pool, LOD and
   streaming distances, debug, unlock and lens flare switches, the achievements' debug unlock, the
   slow motion and HUD render switches of the photo mode, the race cameras' FOV, near plane and smoothed
-  rotation, the explosion shake switch, AI skill limits), loaded HUD parameters, the full screen passes'
+  rotation, the explosion shake switch, AI skill limits,
+  the rear-bumper HUD's raster-scale tweakable `0xD1CCC4`), loaded HUD parameters, Scaleform
+  `GFxFontCacheManager` texture-config and raster-scale fields, the full screen passes'
   quad template positions, powerplay distance records, the main loop's accumulator, the power bar, the
   AI skill, the cars' chassis velocity, the opponent engine bank slot size (`0xD3DBC0`), the `EventMgr`
   event table (`[0xD91C50]`), event-object pool (`0xD4390C`, allocator flags at `0xD4391C`),
@@ -674,7 +694,7 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   player update, chase and bumper camera update, with the photo mode the other camera classes'
   update, the respot logic's update with the photo mode or `WreckTime`, the Scaleform movie's
   `Display` with `HDR=1`, `SMAA=1` (on by default) and `UltrawideFix=2`, its `SetViewport` with
-  `UltrawideFix=2`, its `Invoke` with `SteamLAN=1`, its `Invoke` and `SetVariable` with
+  `UltrawideFix=2` or an active `HudResolution`, its `Invoke` with `SteamLAN=1`, its `Invoke` and `SetVariable` with
   `LapSelect=1` or `UiLog=1`, the Quick Play mode list's item update (`0xBB2364`) with
   `LapSelect=1` or the DLC modes, Quick Play input (`0xBAFD60`), lap reset (`0xBA8DF0`)
   and race results update (`0xC1F848`) with `LapSelect=1`,
@@ -691,7 +711,10 @@ How the fix avoids it: **no game code is changed at all.** Everything works thro
   read-only strings and constants (prompt bar icon paths, route marker size),
 * the Direct3D device's vtable, and calls into the game's own functions (dictionary lookup,
   Scaleform `Invoke`/`SetVariable` for the prompt bar, `SetVisible` for the photo mode's overlays,
-  the depth of field blur setup) from the input poll and hooked passes. LapSelect uses the file,
+  Scaleform font cache reconfiguration `0x413840`/`0x8EDE80`/`0x8EBD60` and the font cache's
+  validated release function (`0x8E9B50`, `0x8E9990` or `0x7D8120`) for `HudResolution`,
+  the depth of field blur setup) from the input poll, the hooked passes, and Scaleform's
+  `SetViewport`. LapSelect uses the file,
   difficulty, track and leaderboard functions listed under Laps. Audio calls include the
   `VoiceDSP` read callback `0x8A5470` from FMOD's mixer thread with `SoundPlacement=1`; the stock
   Flanger read callback `0x7F2050` from that thread with `PowerPlayFlanger=1`; the game's

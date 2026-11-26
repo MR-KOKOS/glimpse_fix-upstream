@@ -322,8 +322,8 @@ static void __fastcall Hook_SetViewport(void* self, void*, const GViewport* vp)
     s_origSetViewport(self, &v);
 }
 
-// Split screen boost and position bars: DialsPower.gfx / DialsInfo.gfx are drawn into a screen-sized texture
-// that the game puts on a 3D quad, which comes out too wide on wider halves (2x at 32:9). The quad's corners:
+// Split screen's power bar uses its own HUD texture. Its quad comes out too wide on wider halves
+// (2x at 32:9). The quad's corners:
 // player HUD [[0xD714D0]+0xCC+4i] -> +0x12C power bar (vtable 0xBD0FD4) or +0x128 info bar (0xBD06E8) -> +8 dial
 // (0xBD1C04) -> +0x78 wrapper, 4 x vec3 at +0x2C/+0x3C/+0x4C/+0x5C. Its long axis is scaled by 16:9 / aspect.
 static void NarrowDials(int kind, float f)
@@ -735,6 +735,22 @@ bool SwapSlot(void** slot, void* hook, void** orig)
     *slot = hook;
     VirtualProtect(slot, 4, old, &old);
     return true;
+}
+
+bool SwapSlotChecked(void** slot, void* expected, void* hook, void** orig)
+{
+    DWORD old;
+    if (!VirtualProtect(slot, 4, PAGE_READWRITE, &old)) return false;
+    *orig = expected;
+    bool done = InterlockedCompareExchangePointer(slot, hook, expected) == expected;
+    if (!done) *orig = NULL;
+    VirtualProtect(slot, 4, old, &old);
+    return done;
+}
+
+const void* UltrawideSetViewportHook()
+{
+    return s_origSetViewport ? (const void*)Hook_SetViewport : NULL;
 }
 
 static void InstallUiHooks()
