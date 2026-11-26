@@ -171,7 +171,7 @@ shadows` (0xD716EC), which every pass that draws into the shadow maps checks.
   raster scale to 4.0. This keeps the text and glow together in the bitmap atlas for
   both modes, including at 1x. The atlas uses up to about 8 MiB. In single-player the
   larger color and depth surfaces add about 3 MiB at 2x or 17 MiB at 4x. `HudResolution=-1`
-  or clearing `PATCH_HUD` (`0x2000000`) leaves both paths as the game configured them.
+  or clearing `PATCH_HUD` (`0x4000000`) leaves both paths as the game configured them.
   Steam build 385319 only (not the Russian depot).
 * **Motion blur:** it blurs along one frame of camera motion, which at 60 fps is half as much;
   the amount is doubled. `MotionBlurStrength` scales it further. During the blur pass the textures
