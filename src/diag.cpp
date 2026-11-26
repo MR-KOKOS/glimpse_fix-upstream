@@ -20,11 +20,13 @@ static BYTE s_create9Prologue[5];
 // ---------------------------------------------------------------- single-mip DDS load fix (TextureLoadFix=1)
 
 // The game loads every texture through d3dx9_42.dll!D3DXCreateTextureFromFileInMemory, which passes
-// MipLevels=D3DX_DEFAULT and MipFilter=D3DX_DEFAULT. Whenever a 2D UI/HUD/post-race DDS ships with no
-// mip levels, D3DX decompresses, filters and recompresses a full mipmap chain on the CPU, stalling
-// transitions by hundreds of milliseconds. Single-level 2D DDS textures are redirected to
-// D3DXCreateTextureFromFileInMemoryEx with MipLevels=1 and D3DX_FILTER_NONE; pre-mipped 3D textures
-// and all other formats pass through untouched.
+// MipLevels=D3DX_DEFAULT and MipFilter=D3DX_DEFAULT. Whenever a 2D DDS ships with no mip levels
+// (UI/HUD/post-race sprite sheets, plus level skies, lens flares, colour-grading LUTs and a few
+// single-level effects, all authored single-level as on Xbox 360), D3DX decompresses, filters and
+// recompresses a full mipmap chain on the CPU, stalling transitions by hundreds of milliseconds.
+// Single-level 2D DDS textures are redirected to D3DXCreateTextureFromFileInMemoryEx with
+// MipLevels=1 and D3DX_FILTER_NONE; pre-mipped world textures and all other formats pass through
+// untouched.
 typedef HRESULT(WINAPI* D3DXCreateTextureFromFileInMemory_t)(
     IDirect3DDevice9*, LPCVOID, UINT, IDirect3DTexture9**);
 typedef HRESULT(WINAPI* D3DXCreateTextureFromFileInMemoryEx_t)(
