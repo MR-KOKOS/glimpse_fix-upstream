@@ -66,6 +66,7 @@ struct Config {
     bool  dlcCarsCareer;     // experimental, with dlcCars: also in the career's front-end car select
     int   textureDetail;     // 0 = full; 1-3 skip that many of the textures' top mip levels
     bool  glassFix;          // car glass: no sun specular from the glass's opacity (G-buffer alpha as on the Xbox, glass.cpp)
+    bool  textureLoadFix;    // skip D3DX CPU mipmap generation for 2D DDS textures authored without mip levels (diag.cpp)
     bool  raceEndTiming;     // show Continue when the finish card can accept it
     bool  unlockAll;         // all tracks, events, episodes, game modes and vehicles selectable
     int   laps;              // laps per race, 0 = as the game
@@ -120,7 +121,7 @@ enum PatchBits {
     PATCH_AUDIODIAG = 0x1000, PATCH_VIGNETTE = 0x2000,
     PATCH_UNLOCK = 0x4000, PATCH_SAVEDIAG = 0x8000, PATCH_ROUTEMARKER = 0x10000, PATCH_BOOST = 0x20000, PATCH_AIBOOST = 0x40000, PATCH_FLARES = 0x80000, PATCH_INTRO = 0x100000, PATCH_CAMERA = 0x200000,
     PATCH_ONLINE = 0x400000, PATCH_RACEEND = 0x800000, PATCH_LAPS = 0x1000000,
-    PATCH_POWERPLAY_FLANGER = 0x2000000,
+    PATCH_POWERPLAY_FLANGER = 0x2000000, PATCH_TEXLOAD = 0x8000000,
     PATCH_ALL = 0xFFFFFFFF
 };
 
@@ -162,6 +163,7 @@ void RefreshPadSlots();
 // diag.cpp
 void InstallD3DHooks();
 void CheckD3DHooks();     // puts our Present/Reset in front of hooks other modules set later (Steam overlay)  // device log/capture (Log=1), anisotropic filtering
+void InstallTextureLoadFix();  // TextureLoadFix=1: skip D3DX CPU mipmap synthesis for single-level 2D DDS textures
 // hdr.cpp - HDR=1
 struct IDirect3D9;
 struct IDirect3DDevice9;
