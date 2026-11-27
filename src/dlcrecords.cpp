@@ -45,6 +45,7 @@ static const DWORD kCollectionVt = 0x00BA9810, kTimeVt = 0x00BA66F0, kIntVt = 0x
 static const DWORD kLapsVt = 0x00BA8DE8;
 static bool s_installed;
 static bool s_originalPickups[_countof(kBoards)];
+static bool s_trackBests;
 
 typedef void(__thiscall* ResultsUpdate_t)(void* self, float dt);
 static ResultsUpdate_t s_origResultsUpdate;
@@ -66,29 +67,31 @@ static DWORD Hash(const char* key)
     return value & 0x7fffffffu;
 }
 
-// Every caller reads the actual committed setup, never a menu label or the selected lap setting.
-static const Board* FindBoard(const BYTE* setup)
+static const Board* FindBoardByTrack(const char* track, const char* sub, const char* mode)
 {
-    if (!s_installed || !setup || *(const int*)(setup + 0x9C) != 1 || setup[0x9B2]) return NULL;
-    const BYTE* career = *(const BYTE* const*)0x00D64E40;
-    if (!career || career[8]) return NULL;
-    const char* track = (const char*)(setup + 0xE0);
-    const char* sub = (const char*)Ptr(setup, 0x1E0);
-    const char* mode = (const char*)Ptr(setup, 0x988);
-    if (!sub || !mode) return NULL;
+    if (!track || !sub || !mode) return NULL;
     const size_t len = strnlen_s(mode, 40);
     if (len <= 7 || len == 40 || _stricmp(mode + len - 7, ".params")) return NULL;
     char key[96];
     if (_snprintf_s(key, _TRUNCATE, "%s_%s_%.*s", track, sub, (int)len - 7, mode) < 0) return NULL;
     for (const Board& board : kBoards)
-        if (!_stricmp(key, board.key)) {
-            const int type = *(const int*)setup;
-            const bool networkSetup = type == 6 || type == 7;
-            if (!networkSetup && OnlineSession()) return NULL;
-            if (board.type == ScoreType::QuarryRace) return &board;  // one board for offline and multiplayer
-            return (board.type == ScoreType::MultiplayerPoints) == networkSetup ? &board : NULL;
-        }
+        if (!_stricmp(key, board.key)) return &board;
     return NULL;
+}
+
+static const Board* FindBoard(const BYTE* setup)
+{
+    if (!s_installed || !setup || *(const int*)(setup + 0x9C) != 1 || setup[0x9B2]) return NULL;
+    const BYTE* career = *(const BYTE* const*)0x00D64E40;
+    if (!career || career[8]) return NULL;
+    const Board* board = FindBoardByTrack((const char*)(setup + 0xE0), (const char*)Ptr(setup, 0x1E0),
+        (const char*)Ptr(setup, 0x988));
+    if (!board) return NULL;
+    const int type = *(const int*)setup;
+    const bool networkSetup = type == 6 || type == 7;
+    if (!networkSetup && OnlineSession()) return NULL;
+    if (board->type == ScoreType::QuarryRace) return board;  // one board for offline and multiplayer
+    return (board->type == ScoreType::MultiplayerPoints) == networkSetup ? board : NULL;
 }
 
 static const BYTE* ViewportPlayer(const BYTE* setup)
@@ -295,6 +298,148 @@ void DlcRecordsDeadlineHud(const BYTE* resources, float start)
     }
 }
 
+struct TrackBest {
+    const void* movie;
+    const Board* board;
+    char text[24];
+};
+
+// The stock item update invokes the movie synchronously through 0x536AC0.
+static thread_local const TrackBest* s_trackBest;
+static thread_local bool s_trackBestLogged[_countof(kBoards)];
+
+static bool FormatTrackBest(const Board& board, uint64_t score, char (&text)[24])
+{
+    if (IsPoints(board)) {
+        if (!score || score > INT_MAX) return false;
+        const unsigned points = (unsigned)score;
+        if (points >= 1000000)
+            sprintf_s(text, "%u,%03u,%03u", points / 1000000, (points / 1000) % 1000, points % 1000);
+        else if (points >= 1000)
+            sprintf_s(text, "%u,%03u", points / 1000, points % 1000);
+        else
+            sprintf_s(text, "%u", points);
+        return true;
+    }
+    if (!score || score >= kTimeBase) return false;
+    unsigned time = (unsigned)(kTimeBase - score);
+    if (board.type == ScoreType::Deadline) {
+        const unsigned countdown = board.countdown * 100;
+        if (time >= countdown) return false;
+        time = countdown - time;
+    }
+    sprintf_s(text, "%02u:%02u.%02u", time / 6000, (time / 100) % 60, time % 100);
+    return true;
+}
+
+static void PrepareTrackBest(TrackBest& best, const BYTE* self, DWORD index, DWORD widget)
+{
+    __try {
+        const char* name = (const char*)Ptr((const BYTE*)widget, 4);
+        if (!name || strcmp(name, "default")) return;  // the track card, at 0x485C7A
+        const BYTE* list = Ptr(self, 4);
+        const BYTE* screen = Ptr(list, 0x18);
+        if (!screen || *(const DWORD*)(screen + 0x240) != 1) return;
+        const BYTE* setup = (const BYTE*)0x00D6EE78;  // frontend setup returned by 0x453300
+        const int type = *(const int*)setup;
+        if (type == 6 || type == 7 || *(const int*)(setup + 0x9C) != 1) return;
+
+        // Match the selected row used by the native board key builder (0x485A70).
+        if (index >= *(const DWORD*)(list + 8)) return;
+        const BYTE* menu = Ptr(list, 0);
+        if (!menu) return;
+        const DWORD count = *(const DWORD*)(menu + 0x60);
+        const DWORD current = count ? ((const DWORD*)Ptr(menu, 0x64))[count - 1] : *(const DWORD*)(menu + 0x58);
+        if (index != current) return;
+        const BYTE* rows = Ptr(list, 0xC);
+        if (!rows) return;
+        const BYTE* item = rows + index * 8;
+        const BYTE* track = Ptr(item, 0);
+        const char* trackName = (const char*)Ptr(track, 0);
+        const char* subtrack = (const char*)Ptr(track, 0x48);
+        const Board* board = FindBoardByTrack(trackName, subtrack, (const char*)Ptr(setup, 0x988));
+        if (!board || board->type == ScoreType::MultiplayerPoints ||
+            (board->type == ScoreType::Deadline && !s_originalPickups[board - kBoards])) return;
+        const BYTE* row = Record(*board);
+        if (!row) return;
+
+        // Use the same track/mode locks and NEW badge check as the stock card.
+        using Locked_t = bool(__thiscall*)(const BYTE*);
+        if (((Locked_t)0x004851C0)(item) || ((Locked_t)0x00479670)(screen)) return;
+        const BYTE* career = *(const BYTE* const*)0x00D64E40;
+        char newTrackKey[64];
+        if (!career || _snprintf_s(newTrackKey, _TRUNCATE, "%s%s", trackName, subtrack) < 0) return;
+        const char* key = newTrackKey;  // 0x772CB0 reads the string pointer at offset 0 of the game's string
+        using IsNew_t = bool(__thiscall*)(const BYTE*, const char* const*);
+        if (((IsNew_t)0x00772CB0)(career, &key)) return;
+        if (!FormatTrackBest(*board, *(const uint64_t*)(row + 0x30), best.text)) return;
+        best.board = board;
+        best.movie = Ptr(Ptr((const BYTE*)widget, 0xC), 4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("DLC records: Quick Play track card layout could not be read");
+    }
+}
+
+void DlcRecordsUpdateTrack(QpItemUpdate_t original, void* self, DWORD index, DWORD selected, DWORD widget)
+{
+    if (!s_trackBests) {
+        original(self, index, selected, widget);
+        return;
+    }
+    TrackBest best = {};
+    if ((BYTE)selected) PrepareTrackBest(best, (const BYTE*)self, index, widget);
+    const TrackBest* previous = s_trackBest;
+    s_trackBest = best.movie ? &best : NULL;
+    __try {
+        original(self, index, selected, widget);
+    } __finally {
+        s_trackBest = previous;
+    }
+}
+
+bool DlcTrackBestArgs(void* movie, const char* path, const GFxValue* args, unsigned count, GFxValue* out)
+{
+    const TrackBest* best = s_trackBest;
+    if (!best || best->movie != movie || count != 2 || path != (const char*)0x00BB22D8 ||  // PlaySelectedAnim
+        !args || args[0].type != GFX_STRING || args[1].type != GFX_BOOL || args[1].boolean ||
+        !args[0].str || *args[0].str) return false;
+    out[0] = args[0];
+    out[0].str = best->text;
+    out[1] = args[1];
+    out[1].boolean = 1;
+    const size_t index = best->board - kBoards;
+    if (!s_trackBestLogged[index]) {
+        s_trackBestLogged[index] = true;
+        Log("DLC records: Quick Play card %s = %s", best->board->key, best->text);
+    }
+    return true;
+}
+
+static void InstallTrackBests()
+{
+    __try {
+        if (!BytesMatch((void*)0x00485C55, "8B45048B40183BC35657") ||
+            !BytesMatch((void*)0x00485C73, "228424A402000068F42FBA00") ||
+            !BytesMatch((void*)0x00486206, "8B4E0C578D9424940000005268D822BB00") ||
+            !BytesMatch((void*)0x00453300, "B878EED600C3") ||
+            !BytesMatch((void*)0x004851C0, "53558BE98B550085D25657") ||
+            !BytesMatch((void*)0x00479670, "81C1B0010000E9C5D80000") ||
+            !BytesMatch((void*)0x00486F40, "8B0183786000740C") ||
+            !BytesMatch((void*)0x00772CB0, "535556578BE933FF397D70") ||
+            !BytesMatch((void*)0x00536AC0, "83EC108B54241C8B49048B018B4048")) {
+            Log("DLC records: Quick Play track card signature mismatch");
+            return;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("DLC records: Quick Play track card signature check failed");
+        return;
+    }
+    const bool steamLan = g_cfg.steamLan && (g_cfg.patchMask & PATCH_ONLINE);
+    if (!steamLan) InstallMenuHook(false, true);
+    s_trackBests = (steamLan ? OnlineMenuHookInstalled() : MenuHookInstalled()) && DlcInstallTrackListHook();
+    Log("DLC records: Quick Play track card %s", s_trackBests ? "enabled" : "hooks unavailable");
+}
+
 void DlcInstallRecords()
 {
     if (!g_cfg.dlcPersonalBests) return;
@@ -340,4 +485,5 @@ void DlcInstallRecords()
     s_origResultsUpdate = (ResultsUpdate_t)vt[3];
     s_installed = WriteSlot(&vt[3], (void*)Hook_ResultsUpdate);
     Log("DLC records: %s (cRaceResults slot 3)", s_installed ? "local personal bests enabled" : "results hook failed");
+    if (s_installed) InstallTrackBests();
 }

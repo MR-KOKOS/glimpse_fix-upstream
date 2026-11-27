@@ -294,9 +294,10 @@ struct GFxValue {
     union {
         const char* str;
         double num;
+        BYTE boolean;
     };
 };
-enum { GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
+enum { GFX_BOOL = 2, GFX_NUMBER = 3, GFX_STRING = 4, GFX_RESULT_STRING = 0x14 };
 
 typedef bool(__thiscall* GFxInvoke_t)(void* movie, const char* path, GFxValue* result, const GFxValue* args, unsigned count);
 typedef bool(__thiscall* GFxSetVariable_t)(void* movie, const char* path, const GFxValue* value, int setType);
@@ -346,6 +347,10 @@ void DlcInstallModes();    // [DLC] Modes: right after ApplyGamePatches (dlcmode
 struct IDirect3DSurface9;
 // dlcpickups.cpp - [DLC] Pickups=1: Deadline's green pickup boxes (stop the countdown)
 void DlcInstallRecords();
+using QpItemUpdate_t = void(__thiscall*)(void* self, DWORD index, DWORD selected, DWORD widget);
+bool DlcInstallTrackListHook();
+void DlcRecordsUpdateTrack(QpItemUpdate_t original, void* self, DWORD index, DWORD selected, DWORD widget);
+bool DlcTrackBestArgs(void* movie, const char* path, const GFxValue* args, unsigned count, GFxValue* out);
 void DlcRecordsRaceEnd(BYTE* card);
 void DlcRecordsDeadlineHud(const BYTE* resources, float start);
 bool InstallDlcRaceEnd();  // shared by Deadline's result presentation and DLC personal bests
@@ -381,7 +386,8 @@ void HookSoundBanks();         // with the import hooks: System::setFileSystem (
 bool AudioSystemInitHooked();  // true once System::setFileSystem was wrapped so sound-system resets are tracked
 void HookVoiceDspCreation();   // after HookSoundBanks: voice units made with a working read callback
 bool MenuHookReady();
-void InstallMenuHook(bool forLaps = false);
+void InstallMenuHook(bool forLaps = false, bool forTrackBests = false);
+bool OnlineMenuHookInstalled();
 void RemoveLapMenuHook();         // the game's Scaleform Invoke / SetVariable calls (lap choice; UiLog=1: logged)
 bool MenuHookInstalled();       // the Scaleform slots are ours
 bool UiSetText(void* movie, const char* path, const char* text);  // SetVariable past the hook

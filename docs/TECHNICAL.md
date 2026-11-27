@@ -947,7 +947,10 @@ continues to exclude the Xbox network leaderboard XML.
 `100000000 - clockUsedCentiseconds` at 0x882E6768–0x882E6778. The writer at
 0x8848CF38 keeps the unsigned maximum of the old and new score. HUD code at
 0x8825BE38 decodes clock used and displays the difference from the initial
-countdown. See [TU4 Deadline rules](../tools/dlc/mode/TU4_RULES.md).
+countdown. The Quick Play track-card updater at 0x882948E0 reads a saved record
+using the selected track, subtrack and game mode (0x8827C578). It formats elapsed
+time, grouped points or Deadline time remaining before the card's selected
+animation (0x88294FBC). See [TU4 Deadline rules](../tools/dlc/mode/TU4_RULES.md).
 
 **Steam implementation.** cRaceResults vtable 0xC1F83C slot 3 wraps 0x802AF0.
 The hook checks the same pending and populated flags as 0x802B69–0x802B9D,
@@ -974,3 +977,15 @@ uses the game's `TEXT_BEST` text and time element through the existing DialsInfo
 setters 0x560600 and 0x560570. The INI switch and PatchMask bit 0x10000000 gate
 the feature. The integration checks the Steam signatures before enabling
 writes.
+
+The solo Quick Play track card reads that same table. The existing DLC track
+list wrapper (vtable 0xBB224C slot 1, 0x485C30) matches the selected item to the
+game's board key builder 0x485A70 and handles the selected byte on the
+`default` card widget. It uses the native track and mode lock readers 0x4851C0
+and 0x479670 (tail call 0x486F40) and the NEW badge check 0x772CB0, whose
+comparison uses 0x530970, 0x530640 and 0x5312F0. Within that item update, the
+existing GFxMovieRoot Invoke hook (vtable 0xC41CF4 slot 18, also used
+by SteamLAN) supplies the text and visibility arguments for the same movie's
+`PlaySelectedAnim` at 0x486225. The update is synchronous through 0x536AC0.
+Deadline uses the original countdown and requires the original pickup data.
+The menu issues no record writes and uses the game's personal-best label.

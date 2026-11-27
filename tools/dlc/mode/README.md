@@ -192,7 +192,8 @@ The PC (`src/dlcrivals.cpp`, `src/dlcpickups.cpp`; data writes, calls of the gam
   (0x882E8E60) when the time left is 0. The championship gate applies only with the career flag `[0xD64E40]+8`. The rows' order comes from their position records and stays.
 - The standings and the persistent best use different game data. 0x7D5C40 updates race info in memory.
   `[DLC] PersonalBests=1` saves the local player's best for the original countdown and pickup layout
-  using the native profile record table. The HUD decodes that score to time remaining. See
+  using the native profile record table. The Quick Play track card and the race HUD show that
+  best as time remaining. See
   [Original DLC personal bests](../../../docs/TECHNICAL.md#original-dlc-personal-bests-steam-build-385319).
 
 ### Mode slot and quick-play movie
