@@ -936,9 +936,12 @@ implementation of the TU4 pickup logic. Each eligible Deadline track must have
 the original pickup bytes and start countdown. An increased start or
 pickups-disabled run can still finish under its own rules. SteamLAN with
 `TracksOnline=1` and matching DLC supports multiplayer Quarry Race and Minepit
-Park Survival. The local viewport's car ID comes from setup +0xD0. These boards
-exclude Elimination, King of the Air, Survival Race and split screen. The
-converter has no Xbox leaderboard upload assets.
+Park Survival. Original LAN uses the same committed multiplayer mode key. The
+local viewport's car ID comes from setup +0xD0. The Xbox DLC catalogues contain
+no Elimination, King of the Air or Survival Race boards. The PC conversion
+exposes Survival Race in split screen. The single-viewport board eligibility
+keeps split-screen results out of the native record table. DLC conversion
+continues to exclude the Xbox network leaderboard XML.
 
 **Confirmed from the Xbox TU4 image.** Its results handler writes
 `100000000 - clockUsedCentiseconds` at 0x882E6768–0x882E6778. The writer at
