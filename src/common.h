@@ -351,6 +351,7 @@ using QpItemUpdate_t = void(__thiscall*)(void* self, DWORD index, DWORD selected
 bool DlcInstallTrackListHook();
 void DlcRecordsUpdateTrack(QpItemUpdate_t original, void* self, DWORD index, DWORD selected, DWORD widget);
 bool DlcTrackBestArgs(void* movie, const char* path, const GFxValue* args, unsigned count, GFxValue* out);
+void DlcRecordsRaceStart();
 void DlcRecordsRaceEnd(BYTE* card);
 void DlcRecordsDeadlineHud(const BYTE* resources, float start);
 bool InstallDlcRaceEnd();  // shared by Deadline's result presentation and DLC personal bests

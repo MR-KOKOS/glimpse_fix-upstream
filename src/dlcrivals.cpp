@@ -409,6 +409,7 @@ void RivalsRaceStart()
 {
     s_rowsDone = false;
     memset(s_convertedTime, 0, sizeof(s_convertedTime));
+    DlcRecordsRaceStart();
 }
 
 bool DeadlineRowShowsTimeLeft(const BYTE* time)

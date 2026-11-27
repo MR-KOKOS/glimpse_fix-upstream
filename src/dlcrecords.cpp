@@ -46,6 +46,8 @@ static const DWORD kLapsVt = 0x00BA8DE8;
 static bool s_installed;
 static bool s_originalPickups[_countof(kBoards)];
 static bool s_trackBests;
+static const BYTE* s_resultHandled;
+static const BYTE* s_resultFault;
 
 typedef void(__thiscall* ResultsUpdate_t)(void* self, float dt);
 static ResultsUpdate_t s_origResultsUpdate;
@@ -175,11 +177,22 @@ static bool ScoreIsBest(const Board& board, uint64_t score, BYTE** destination)
     return !current || score > *(const uint64_t*)(current + 0x30);
 }
 
+void DlcRecordsRaceStart()
+{
+    s_resultHandled = NULL;
+    s_resultFault = NULL;
+}
+
 static void StoreResult(BYTE* screen)
 {
     __try {
         BYTE* list = Ptr(screen, 0x4A0);
-        if (!list || !list[0x30]) return;  // native result pending
+        if (!list || !list[0x30]) {
+            s_resultHandled = NULL;
+            s_resultFault = NULL;
+            return;  // native result pending
+        }
+        if (list == s_resultHandled) return;
         const BYTE* setup = Ptr(list, 0);
         const Board* board = FindBoard(setup);
         if (!board) return;
@@ -193,6 +206,7 @@ static void StoreResult(BYTE* screen)
             if (*(const DWORD*)entry == local) row = entry;
         }
         if (!row || !row[0x2C]) return;
+        s_resultHandled = list;
         const BYTE* collection = Ptr(row, 0x34);
         // 0x79A265 takes the collection from this car's logic outputs before passing it to 0x803400.
         // SteamLAN's remote cars can also set the result's selected bit. Use the local viewport and its output.
@@ -244,7 +258,10 @@ static void StoreResult(BYTE* screen)
         *(float*)(dest + 0x1658) = 0.0f;
         Log("DLC records: %s new best %llu (native score %llu)", board->key, value, score);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("DLC records: result layout could not be read");
+        if (s_resultFault != screen) {
+            s_resultFault = screen;
+            Log("DLC records: result layout could not be read");
+        }
     }
 }
 
@@ -257,6 +274,7 @@ static void __fastcall Hook_ResultsUpdate(BYTE* self, void*, float dt)
 
 void DlcRecordsRaceEnd(BYTE* card)
 {
+    DlcRecordsRaceStart();
     __try {
         const BYTE* setup = Ptr(card, 0x390);
         if (!setup || *(const int*)setup == 6 || *(const int*)setup == 7) return;  // the stock card has no current time
